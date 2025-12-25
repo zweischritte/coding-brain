@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import socket
+import re
 
 from app.database import SessionLocal
 from app.models import Config as ConfigModel
@@ -39,6 +40,59 @@ from mem0 import Memory
 
 _memory_client = None
 _config_hash = None
+
+
+def _patch_mem0_relationship_sanitizer() -> None:
+    """
+    Patch Mem0's relationship sanitizer to avoid invalid Cypher relationship type names.
+
+    Mem0 uses relationship types directly in Cypher (without backticks). Some LLM outputs
+    may contain characters like '-' which cause Neo4j syntax errors.
+    """
+    try:
+        import mem0.memory.utils as mem0_utils
+    except Exception:
+        return
+
+    original = getattr(mem0_utils, "sanitize_relationship_for_cypher", None)
+    if original is None:
+        return
+    if getattr(original, "__openmemory_patched__", False):
+        return
+
+    def patched(relationship: str) -> str:
+        try:
+            sanitized = original(relationship)
+        except Exception:
+            sanitized = relationship or ""
+
+        # Ensure relationship type is a valid Cypher identifier (no '-' etc.).
+        sanitized = re.sub(r"[^\w]", "_", sanitized, flags=re.UNICODE)
+        sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+
+        # Cypher relationship types cannot start with a digit without quoting.
+        if sanitized and sanitized[0].isdigit():
+            sanitized = f"rel_{sanitized}"
+
+        return sanitized
+
+    patched.__openmemory_patched__ = True  # type: ignore[attr-defined]
+
+    # Patch the canonical function…
+    mem0_utils.sanitize_relationship_for_cypher = patched  # type: ignore[assignment]
+    # …and the references imported into graph backends.
+    try:
+        import mem0.memory.graph_memory as graph_memory  # noqa: WPS433
+
+        graph_memory.sanitize_relationship_for_cypher = patched  # type: ignore[assignment]
+    except Exception:
+        pass
+    try:
+        import mem0.memory.memgraph_memory as memgraph_memory  # noqa: WPS433
+
+        memgraph_memory.sanitize_relationship_for_cypher = patched  # type: ignore[assignment]
+    except Exception:
+        pass
 
 
 def _get_config_hash(config_dict):
@@ -302,6 +356,8 @@ def get_memory_client(custom_instructions: str = None):
     global _memory_client, _config_hash
 
     try:
+        _patch_mem0_relationship_sanitizer()
+
         # Start with default configuration
         config = get_default_memory_config()
         
@@ -342,6 +398,11 @@ def get_memory_client(custom_instructions: str = None):
 
                     if "vector_store" in mem0_config and mem0_config["vector_store"] is not None:
                         config["vector_store"] = mem0_config["vector_store"]
+
+                    # Update Graph Store configuration if available
+                    if "graph_store" in mem0_config and mem0_config["graph_store"] is not None:
+                        config["graph_store"] = mem0_config["graph_store"]
+                        print("Graph store configuration found, enabling Mem0 Graph Memory")
             else:
                 print("No configuration found in database, using defaults")
                     

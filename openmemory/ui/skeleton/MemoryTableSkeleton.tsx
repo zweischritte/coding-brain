@@ -1,9 +1,5 @@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { HiMiniRectangleStack } from "react-icons/hi2"
-import { PiSwatches } from "react-icons/pi"
-import { GoPackage } from "react-icons/go"
-import { CiCalendar } from "react-icons/ci"
-import { MoreHorizontal } from "lucide-react"
+import { MoreHorizontal, Layers, Calendar } from "lucide-react"
 
 export function MemoryTableSkeleton() {
   // Create an array of 5 items for the loading state
@@ -18,26 +14,29 @@ export function MemoryTableSkeleton() {
               <div className="h-4 w-4 rounded bg-zinc-700/50 animate-pulse" />
             </TableHead>
             <TableHead className="border-zinc-700">
-              <div className="flex items-center min-w-[600px]">
-                <HiMiniRectangleStack className="mr-1" />
+              <div className="flex items-center min-w-[400px]">
+                <Layers className="mr-1 h-4 w-4" />
                 Memory
               </div>
             </TableHead>
-            <TableHead className="border-zinc-700">
-              <div className="flex items-center">
-                <PiSwatches className="mr-1" size={15} />
-                Categories
-              </div>
+            <TableHead className="w-[110px] border-zinc-700 text-center">
+              Vault
             </TableHead>
-            <TableHead className="w-[140px] border-zinc-700">
-              <div className="flex items-center">
-                <GoPackage className="mr-1" />
-                Source App
-              </div>
+            <TableHead className="w-[100px] border-zinc-700 text-center">
+              Layer
+            </TableHead>
+            <TableHead className="w-[120px] border-zinc-700 text-center">
+              Entity
+            </TableHead>
+            <TableHead className="w-[80px] border-zinc-700 text-center">
+              Vector
+            </TableHead>
+            <TableHead className="w-[80px] border-zinc-700 text-center">
+              Circuit
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center w-full justify-center">
-                <CiCalendar className="mr-1" size={16} />
+                <Calendar className="mr-1 h-4 w-4" />
                 Created On
               </div>
             </TableHead>
@@ -57,14 +56,20 @@ export function MemoryTableSkeleton() {
               <TableCell>
                 <div className="h-4 w-3/4 bg-zinc-800 rounded" />
               </TableCell>
-              <TableCell>
-                <div className="flex gap-1">
-                  <div className="h-5 w-16 bg-zinc-800 rounded-full" />
-                  <div className="h-5 w-16 bg-zinc-800 rounded-full" />
-                </div>
+              <TableCell className="w-[110px]">
+                <div className="h-5 w-12 mx-auto bg-zinc-800 rounded-full" />
               </TableCell>
-              <TableCell className="w-[140px]">
-                <div className="h-6 w-24 mx-auto bg-zinc-800 rounded" />
+              <TableCell className="w-[100px]">
+                <div className="h-5 w-16 mx-auto bg-zinc-800 rounded-full" />
+              </TableCell>
+              <TableCell className="w-[120px]">
+                <div className="h-5 w-16 mx-auto bg-zinc-800 rounded-full" />
+              </TableCell>
+              <TableCell className="w-[80px]">
+                <div className="h-5 w-10 mx-auto bg-zinc-800 rounded-full" />
+              </TableCell>
+              <TableCell className="w-[80px]">
+                <div className="h-5 w-8 mx-auto bg-zinc-800 rounded-full" />
               </TableCell>
               <TableCell className="w-[140px]">
                 <div className="h-4 w-20 mx-auto bg-zinc-800 rounded" />
@@ -78,4 +83,4 @@ export function MemoryTableSkeleton() {
       </Table>
     </div>
   )
-} 
+}

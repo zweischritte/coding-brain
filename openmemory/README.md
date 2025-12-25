@@ -1,6 +1,13 @@
-# OpenMemory
+# Coding Brain (OpenMemory Fork)
 
-OpenMemory is your personal memory layer for LLMs - private, portable, and open-source. Your memories live locally, giving you complete control over your data. Build AI applications with personalized memories while keeping your data secure.
+A customized fork of OpenMemory with AXIS integration, Neo4j graph support, and enhanced memory features. This system runs on different ports to avoid conflicts with the upstream OpenMemory installation.
+
+**Port Configuration:**
+- UI: http://localhost:3433
+- API/MCP: http://localhost:8865
+- Qdrant: localhost:6433
+- Neo4j Browser: http://localhost:7574
+- Neo4j Bolt: localhost:7787
 
 ![OpenMemory](https://github.com/user-attachments/assets/3c701757-ad82-4afa-bfbe-e049c2b4320b)
 
@@ -10,10 +17,10 @@ OpenMemory is your personal memory layer for LLMs - private, portable, and open-
 - Docker
 - OpenAI API Key
 
-You can quickly run OpenMemory by running the following command:
+You can quickly run Coding Brain by running the following command:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/mem0ai/mem0/main/openmemory/run.sh | bash
+curl -sL https://raw.githubusercontent.com/zweischritte/coding-brain/main/openmemory/run.sh | bash
 ```
 
 You should set the `OPENAI_API_KEY` as a global environment variable:
@@ -71,7 +78,7 @@ USER=<user-id> # The User Id you want to associate the memories with
 - #### Example `/ui/.env`
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8765
+NEXT_PUBLIC_API_URL=http://localhost:8865
 NEXT_PUBLIC_USER_ID=<user-id> # Same as the user id for environment variable in api
 ```
 
@@ -83,8 +90,9 @@ make up  # runs openmemory mcp server and ui
 ```
 
 After running these commands, you will have:
-- OpenMemory MCP server running at: http://localhost:8765 (API documentation available at http://localhost:8765/docs)
-- OpenMemory UI running at: http://localhost:3000
+- Coding Brain MCP server running at: http://localhost:8865 (API documentation available at http://localhost:8865/docs)
+- Coding Brain UI running at: http://localhost:3433
+- Neo4j Browser at: http://localhost:7574 (user: neo4j, password: codingbrain123)
 
 #### UI not working on `localhost:3000`?
 
@@ -101,7 +109,7 @@ pnpm dev
 Use the following one step command to configure OpenMemory Local MCP to a client. The general command format is as follows:
 
 ```bash
-npx @openmemory/install local http://localhost:8765/mcp/<client-name>/sse/<user-id> --client <client-name>
+npx @openmemory/install local http://localhost:8865/mcp/<client-name>/sse/<user-id> --client <client-name>
 ```
 
 Replace `<client-name>` with the desired client name and `<user-id>` with the value specified in your environment variables.

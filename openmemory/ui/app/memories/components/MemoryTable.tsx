@@ -33,14 +33,10 @@ import {
   selectAllMemories,
   clearSelection,
 } from "@/store/memoriesSlice";
-import SourceApp from "@/components/shared/source-app";
-import { HiMiniRectangleStack } from "react-icons/hi2";
-import { PiSwatches } from "react-icons/pi";
-import { GoPackage } from "react-icons/go";
-import { CiCalendar } from "react-icons/ci";
+import { Layers, Calendar } from "lucide-react";
 import { useRouter } from "next/navigation";
-import Categories from "@/components/shared/categories";
 import { useUI } from "@/hooks/useUI";
+import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
   TooltipContent,
@@ -126,26 +122,29 @@ export function MemoryTable() {
               />
             </TableHead>
             <TableHead className="border-zinc-700">
-              <div className="flex items-center min-w-[600px]">
-                <HiMiniRectangleStack className="mr-1" />
+              <div className="flex items-center min-w-[400px]">
+                <Layers className="mr-1 h-4 w-4" />
                 Memory
               </div>
             </TableHead>
-            <TableHead className="border-zinc-700">
-              <div className="flex items-center">
-                <PiSwatches className="mr-1" size={15} />
-                Categories
-              </div>
+            <TableHead className="w-[110px] border-zinc-700 text-center">
+              Vault
             </TableHead>
-            <TableHead className="w-[140px] border-zinc-700">
-              <div className="flex items-center">
-                <GoPackage className="mr-1" />
-                Source App
-              </div>
+            <TableHead className="w-[100px] border-zinc-700 text-center">
+              Layer
+            </TableHead>
+            <TableHead className="w-[120px] border-zinc-700 text-center">
+              Entity
+            </TableHead>
+            <TableHead className="w-[80px] border-zinc-700 text-center">
+              Vector
+            </TableHead>
+            <TableHead className="w-[80px] border-zinc-700 text-center">
+              Circuit
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center w-full justify-center">
-                <CiCalendar className="mr-1" size={16} />
+                <Calendar className="mr-1 h-4 w-4" />
                 Created On
               </div>
             </TableHead>
@@ -212,19 +211,61 @@ export function MemoryTable() {
                   </div>
                 )}
               </TableCell>
-              <TableCell className="">
-                <div className="flex flex-wrap gap-1">
-                  <Categories
-                    categories={memory.categories}
-                    isPaused={
-                      memory.state === "paused" || memory.state === "archived"
-                    }
-                    concat={true}
-                  />
-                </div>
+              <TableCell className="w-[110px] text-center">
+                <Badge
+                  variant="secondary"
+                  className="bg-zinc-800 text-zinc-200 border border-zinc-700"
+                >
+                  {memory.metadata?.vault ?? "—"}
+                </Badge>
               </TableCell>
-              <TableCell className="w-[140px] text-center">
-                <SourceApp source={memory.app_name} />
+              <TableCell className="w-[100px] text-center">
+                <Badge
+                  variant="secondary"
+                  className="bg-zinc-800 text-zinc-200 border border-zinc-700"
+                >
+                  {memory.metadata?.layer ?? "—"}
+                </Badge>
+              </TableCell>
+              <TableCell className="w-[120px] text-center">
+                {memory.metadata?.re ? (
+                  <Badge
+                    variant="secondary"
+                    className="bg-primary/20 text-primary border border-primary/50 cursor-pointer hover:bg-primary/30"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/entity/${encodeURIComponent(memory.metadata?.re || "")}`);
+                    }}
+                  >
+                    {memory.metadata.re}
+                  </Badge>
+                ) : (
+                  <span className="text-zinc-500">—</span>
+                )}
+              </TableCell>
+              <TableCell className="w-[80px] text-center">
+                {memory.metadata?.vector ? (
+                  <Badge
+                    variant="secondary"
+                    className="bg-amber-900/30 text-amber-300 border border-amber-700"
+                  >
+                    {memory.metadata.vector}
+                  </Badge>
+                ) : (
+                  <span className="text-zinc-500">—</span>
+                )}
+              </TableCell>
+              <TableCell className="w-[80px] text-center">
+                {memory.metadata?.circuit ? (
+                  <Badge
+                    variant="secondary"
+                    className="bg-green-900/30 text-green-300 border border-green-700"
+                  >
+                    C{memory.metadata.circuit}
+                  </Badge>
+                ) : (
+                  <span className="text-zinc-500">—</span>
+                )}
               </TableCell>
               <TableCell className="w-[140px] text-center">
                 {formatDate(memory.created_at)}
@@ -277,7 +318,10 @@ export function MemoryTable() {
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       className="cursor-pointer"
-                      onClick={() => handleEditMemory(memory.id, memory.memory)}
+                      onSelect={() => {
+                        // Use setTimeout to allow dropdown to close first
+                        setTimeout(() => handleEditMemory(memory.id, memory.memory), 0);
+                      }}
                     >
                       <Edit className="mr-2 h-4 w-4" />
                       Edit

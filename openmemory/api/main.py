@@ -4,8 +4,9 @@ from uuid import uuid4
 from app.config import DEFAULT_APP_ID, USER_ID
 from app.database import Base, SessionLocal, engine
 from app.mcp_server import setup_mcp_server
+from app.axis_guidance_server import setup_axis_guidance_server
 from app.models import App, User
-from app.routers import apps_router, backup_router, config_router, memories_router, stats_router
+from app.routers import apps_router, backup_router, config_router, entities_router, graph_router, memories_router, stats_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
@@ -75,8 +76,9 @@ def create_default_app():
 create_default_user()
 create_default_app()
 
-# Setup MCP server
+# Setup MCP servers
 setup_mcp_server(app)
+setup_axis_guidance_server(app)
 
 # Include routers
 app.include_router(memories_router)
@@ -84,6 +86,8 @@ app.include_router(apps_router)
 app.include_router(stats_router)
 app.include_router(config_router)
 app.include_router(backup_router)
+app.include_router(entities_router)
+app.include_router(graph_router)
 
 # Add pagination support
 add_pagination(app)

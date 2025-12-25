@@ -91,6 +91,12 @@ class Memory(Base):
     vector = Column(String)
     metadata_ = Column('metadata', JSON, default=dict)
     state = Column(Enum(MemoryState), default=MemoryState.active, index=True)
+
+    # === AXIS 3.4 INDEXED FIELDS ===
+    # These are extracted from metadata for faster filtering
+    vault = Column(String(50), nullable=True, index=True)
+    layer = Column(String(20), nullable=True, index=True)
+    axis_vector = Column(String(10), nullable=True, index=True)  # say/want/do (renamed to avoid conflict)
     created_at = Column(DateTime, default=get_current_utc_time, index=True)
     updated_at = Column(DateTime,
                         default=get_current_utc_time,

@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { MemoriesSection } from "@/app/memories/components/MemoriesSection";
 import { MemoryFilters } from "@/app/memories/components/MemoryFilters";
 import { useRouter, useSearchParams } from "next/navigation";
 import "@/styles/animation.css";
-import UpdateMemory from "@/components/shared/update-memory";
+import { EditMemoryDialog } from "@/app/memories/components/EditMemoryDialog";
 import { useUI } from "@/hooks/useUI";
+import { useMemoriesApi } from "@/hooks/useMemoriesApi";
+import { useSelector } from "react-redux";
+import { RootState } from "@/store/store";
 
 export default function MemoriesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { updateMemoryDialog, handleCloseUpdateMemoryDialog } = useUI();
+  const { fetchMemories } = useMemoriesApi();
+
+  // Get the selected memory's metadata from Redux store
+  const memories = useSelector((state: RootState) => state.memories.memories);
+  const selectedMemory = memories.find(m => m.id === updateMemoryDialog.memoryId);
+
   useEffect(() => {
     // Set default pagination values if not present in URL
     if (!searchParams.has("page") || !searchParams.has("size")) {
@@ -22,13 +31,19 @@ export default function MemoriesPage() {
     }
   }, []);
 
+  const handleEditSuccess = useCallback(() => {
+    fetchMemories();
+  }, [fetchMemories]);
+
   return (
     <div className="">
-      <UpdateMemory
+      <EditMemoryDialog
         memoryId={updateMemoryDialog.memoryId || ""}
-        memoryContent={updateMemoryDialog.memoryContent || ""}
+        initialContent={updateMemoryDialog.memoryContent || ""}
+        initialMetadata={selectedMemory?.metadata}
         open={updateMemoryDialog.isOpen}
         onOpenChange={handleCloseUpdateMemoryDialog}
+        onSuccess={handleEditSuccess}
       />
       <main className="flex-1 py-6">
         <div className="container">

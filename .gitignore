@@ -186,3 +186,12 @@ eval/
 qdrant_storage/
 .crossnote
 testing.ipynb
+
+# OpenMemory - IDE/Assistant specific rules
+.cursor/rules/openmemory.mdc
+
+# Local history backups
+.history/
+
+# Neo4j local installation
+# neo4j/

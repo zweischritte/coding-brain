@@ -1,6 +1,18 @@
 import { useState, useCallback } from 'react';
 import axios from 'axios';
-import { Memory, Client, Category } from '@/components/types';
+import {
+  Memory,
+  MemoryMetadata,
+  Client,
+  Category,
+  MemoryUpdateRequest,
+  SimilarMemory,
+  MemorySubgraph,
+  Vault,
+  Layer,
+  Circuit,
+  Vector,
+} from '@/components/types';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
 import { setAccessLogs, setMemoriesSuccess, setSelectedMemory, setRelatedMemories } from '@/store/memoriesSlice';
@@ -13,6 +25,14 @@ export interface SimpleMemory {
   state: string;
   categories: string[];
   app_name: string;
+  metadata?: {
+    vault?: string;
+    layer?: string;
+    circuit?: number;
+    vector?: string;
+    re?: string;
+    tags?: Record<string, any>;
+  };
 }
 
 // Define the shape of the API response item
@@ -68,6 +88,17 @@ interface RelatedMemoriesResponse {
   pages: number;
 }
 
+interface SimilarMemoriesResponse {
+  memory_id: string;
+  similar_memories: SimilarMemory[];
+}
+
+interface MemoryGraphContextResponse {
+  memory_id: string;
+  similar_memories: SimilarMemory[];
+  subgraph: MemorySubgraph;
+}
+
 interface UseMemoriesApiReturn {
   fetchMemories: (
     query?: string,
@@ -79,6 +110,11 @@ interface UseMemoriesApiReturn {
       sortColumn?: string;
       sortDirection?: 'asc' | 'desc';
       showArchived?: boolean;
+      vaults?: string[];
+      layers?: string[];
+      vectors?: string[];
+      circuits?: number[];
+      entities?: string[];
     }
   ) => Promise<{ memories: Memory[]; total: number; pages: number }>;
   fetchMemoryById: (memoryId: string) => Promise<void>;
@@ -87,7 +123,21 @@ interface UseMemoriesApiReturn {
   createMemory: (text: string) => Promise<void>;
   deleteMemories: (memoryIds: string[]) => Promise<void>;
   updateMemory: (memoryId: string, content: string) => Promise<void>;
+  updateMemoryWithMetadata: (
+    memoryId: string,
+    updates: {
+      content?: string;
+      vault?: Vault;
+      layer?: Layer;
+      circuit?: Circuit;
+      vector?: Vector;
+      entity?: string;
+      tags?: Record<string, any>;
+    }
+  ) => Promise<void>;
   updateMemoryState: (memoryIds: string[], state: string) => Promise<void>;
+  fetchSimilarMemories: (memoryId: string, minScore?: number, limit?: number) => Promise<SimilarMemory[]>;
+  fetchMemoryGraphContext: (memoryId: string) => Promise<MemoryGraphContextResponse | null>;
   isLoading: boolean;
   error: string | null;
   hasUpdates: number;
@@ -116,6 +166,11 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       sortColumn?: string;
       sortDirection?: 'asc' | 'desc';
       showArchived?: boolean;
+      vaults?: string[];
+      layers?: string[];
+      vectors?: string[];
+      circuits?: number[];
+      entities?: string[];
     }
   ): Promise<{ memories: Memory[], total: number, pages: number }> => {
     setIsLoading(true);
@@ -132,7 +187,12 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
           category_ids: filters?.categories,
           sort_column: filters?.sortColumn?.toLowerCase(),
           sort_direction: filters?.sortDirection,
-          show_archived: filters?.showArchived
+          show_archived: filters?.showArchived,
+          vaults: filters?.vaults,
+          layers: filters?.layers,
+          vectors: filters?.vectors,
+          circuits: filters?.circuits,
+          entities: filters?.entities
         }
       );
 
@@ -141,9 +201,9 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         memory: item.content,
         created_at: new Date(item.created_at).getTime(),
         state: item.state as "active" | "paused" | "archived" | "deleted",
-        metadata: item.metadata_,
+        metadata: (item.metadata_ || {}) as MemoryMetadata,
         categories: item.categories as Category[],
-        client: 'api',
+        client: 'api' as const,
         app_name: item.app_name
       }));
       setIsLoading(false);
@@ -286,6 +346,92 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     }
   };
 
+  const updateMemoryWithMetadata = async (
+    memoryId: string,
+    updates: {
+      content?: string;
+      vault?: Vault;
+      layer?: Layer;
+      circuit?: Circuit;
+      vector?: Vector;
+      entity?: string;
+      tags?: Record<string, any>;
+    }
+  ): Promise<void> => {
+    if (memoryId === "") {
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const payload: MemoryUpdateRequest = {
+        user_id: user_id,
+      };
+      if (updates.content !== undefined) payload.memory_content = updates.content;
+      if (updates.vault !== undefined) payload.vault = updates.vault;
+      if (updates.layer !== undefined) payload.layer = updates.layer;
+      if (updates.circuit !== undefined) payload.circuit = updates.circuit;
+      if (updates.vector !== undefined) payload.vector = updates.vector;
+      if (updates.entity !== undefined) payload.entity = updates.entity;
+      if (updates.tags !== undefined) payload.tags = updates.tags;
+
+      await axios.put(`${URL}/api/v1/memories/${memoryId}`, payload);
+      setIsLoading(false);
+      setHasUpdates(hasUpdates + 1);
+    } catch (err: any) {
+      const errorMessage = err.message || 'Failed to update memory';
+      setError(errorMessage);
+      setIsLoading(false);
+      throw new Error(errorMessage);
+    }
+  };
+
+  const fetchSimilarMemories = async (
+    memoryId: string,
+    minScore: number = 0.5,
+    limit: number = 10
+  ): Promise<SimilarMemory[]> => {
+    if (memoryId === "") {
+      return [];
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await axios.get<SimilarMemoriesResponse>(
+        `${URL}/api/v1/memories/${memoryId}/similar?user_id=${user_id}&min_score=${minScore}&limit=${limit}`
+      );
+      setIsLoading(false);
+      return response.data.similar_memories || [];
+    } catch (err: any) {
+      const errorMessage = err.message || 'Failed to fetch similar memories';
+      setError(errorMessage);
+      setIsLoading(false);
+      return [];
+    }
+  };
+
+  const fetchMemoryGraphContext = async (
+    memoryId: string
+  ): Promise<MemoryGraphContextResponse | null> => {
+    if (memoryId === "") {
+      return null;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await axios.get<MemoryGraphContextResponse>(
+        `${URL}/api/v1/memories/${memoryId}/graph?user_id=${user_id}`
+      );
+      setIsLoading(false);
+      return response.data;
+    } catch (err: any) {
+      const errorMessage = err.message || 'Failed to fetch memory graph context';
+      setError(errorMessage);
+      setIsLoading(false);
+      return null;
+    }
+  };
+
   const updateMemoryState = async (memoryIds: string[], state: string): Promise<void> => {
     if (memoryIds.length === 0) {
       return;
@@ -334,7 +480,10 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     createMemory,
     deleteMemories,
     updateMemory,
+    updateMemoryWithMetadata,
     updateMemoryState,
+    fetchSimilarMemories,
+    fetchMemoryGraphContext,
     isLoading,
     error,
     hasUpdates,

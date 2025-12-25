@@ -7,7 +7,7 @@ echo "🚀 Starting OpenMemory installation..."
 # Set environment variables
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 USER="${USER:-$(whoami)}"
-NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:8765}"
+NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-http://localhost:8865}"
 
 if [ -z "$OPENAI_API_KEY" ]; then
   echo "❌ OPENAI_API_KEY not set. Please run with: curl -sL https://raw.githubusercontent.com/mem0ai/mem0/main/openmemory/run.sh | OPENAI_API_KEY=your_api_key bash"
@@ -27,10 +27,10 @@ if ! docker compose version &> /dev/null; then
   exit 1
 fi
 
-# Check if the container "mem0_ui" already exists and remove it if necessary
-if [ $(docker ps -aq -f name=mem0_ui) ]; then
-  echo "⚠️ Found existing container 'mem0_ui'. Removing it..."
-  docker rm -f mem0_ui
+# Check if the container "codingbrain_ui" already exists and remove it if necessary
+if [ $(docker ps -aq -f name=codingbrain_ui) ]; then
+  echo "⚠️ Found existing container 'codingbrain_ui'. Removing it..."
+  docker rm -f codingbrain_ui
 fi
 
 # Find an available port starting from 3000
@@ -104,8 +104,8 @@ create_compose_file() {
   
   # Add the openmemory-mcp service
   cat >> docker-compose.yml <<EOF
-  openmemory-mcp:
-    image: mem0/openmemory-mcp:latest
+  codingbrain-mcp:
+    image: codingbrain/mcp:latest
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - USER=${USER}
@@ -135,7 +135,7 @@ EOF
       ;;
     qdrant)
       cat >> docker-compose.yml <<EOF
-      - QDRANT_HOST=mem0_store
+      - QDRANT_HOST=codingbrain_store
       - QDRANT_PORT=6333
 EOF
       ;;
@@ -167,7 +167,7 @@ EOF
     *)
       echo "⚠️ Unknown vector store: $vector_store. Using default Qdrant configuration."
       cat >> docker-compose.yml <<EOF
-      - QDRANT_HOST=mem0_store
+      - QDRANT_HOST=codingbrain_store
       - QDRANT_PORT=6333
 EOF
       ;;
@@ -178,7 +178,7 @@ EOF
     # FAISS doesn't need a separate service, just volume mounts
     cat >> docker-compose.yml <<EOF
     ports:
-      - "8765:8765"
+      - "8865:8765"
     volumes:
       - openmemory_db:/usr/src/openmemory
       - ${volume_name}:/tmp/faiss
@@ -190,9 +190,9 @@ EOF
   else
     cat >> docker-compose.yml <<EOF
     depends_on:
-      - mem0_store
+      - codingbrain_store
     ports:
-      - "8765:8765"
+      - "8865:8765"
     volumes:
       - openmemory_db:/usr/src/openmemory
 
@@ -220,32 +220,32 @@ install_vector_store_packages() {
   
   case "$vector_store" in
     qdrant)
-      docker exec openmemory-openmemory-mcp-1 pip install "qdrant-client>=1.9.1" || echo "⚠️ Failed to install qdrant packages"
+      docker exec codingbrain-mcp pip install "qdrant-client>=1.9.1" || echo "⚠️ Failed to install qdrant packages"
       ;;
     chroma)
-      docker exec openmemory-openmemory-mcp-1 pip install "chromadb>=0.4.24" || echo "⚠️ Failed to install chroma packages"
+      docker exec codingbrain-mcp pip install "chromadb>=0.4.24" || echo "⚠️ Failed to install chroma packages"
       ;;
     weaviate)
-      docker exec openmemory-openmemory-mcp-1 pip install "weaviate-client>=4.4.0,<4.15.0" || echo "⚠️ Failed to install weaviate packages"
+      docker exec codingbrain-mcp pip install "weaviate-client>=4.4.0,<4.15.0" || echo "⚠️ Failed to install weaviate packages"
       ;;
     faiss)
-      docker exec openmemory-openmemory-mcp-1 pip install "faiss-cpu>=1.7.4" || echo "⚠️ Failed to install faiss packages"
+      docker exec codingbrain-mcp pip install "faiss-cpu>=1.7.4" || echo "⚠️ Failed to install faiss packages"
       ;;
     pgvector)
-      docker exec openmemory-openmemory-mcp-1 pip install "vecs>=0.4.0" "psycopg>=3.2.8" || echo "⚠️ Failed to install pgvector packages"
+      docker exec codingbrain-mcp pip install "vecs>=0.4.0" "psycopg>=3.2.8" || echo "⚠️ Failed to install pgvector packages"
       ;;
     redis)
-      docker exec openmemory-openmemory-mcp-1 pip install "redis>=5.0.0,<6.0.0" "redisvl>=0.1.0,<1.0.0" || echo "⚠️ Failed to install redis packages"
+      docker exec codingbrain-mcp pip install "redis>=5.0.0,<6.0.0" "redisvl>=0.1.0,<1.0.0" || echo "⚠️ Failed to install redis packages"
       ;;
     elasticsearch)
-      docker exec openmemory-openmemory-mcp-1 pip install "elasticsearch>=8.0.0,<9.0.0" || echo "⚠️ Failed to install elasticsearch packages"
+      docker exec codingbrain-mcp pip install "elasticsearch>=8.0.0,<9.0.0" || echo "⚠️ Failed to install elasticsearch packages"
       ;;
     milvus)
-      docker exec openmemory-openmemory-mcp-1 pip install "pymilvus>=2.4.0,<2.6.0" || echo "⚠️ Failed to install milvus packages"
+      docker exec codingbrain-mcp pip install "pymilvus>=2.4.0,<2.6.0" || echo "⚠️ Failed to install milvus packages"
       ;;
     *)
       echo "⚠️ Unknown vector store: $vector_store. Installing default qdrant packages."
-      docker exec openmemory-openmemory-mcp-1 pip install "qdrant-client>=1.9.1" || echo "⚠️ Failed to install qdrant packages"
+      docker exec codingbrain-mcp pip install "qdrant-client>=1.9.1" || echo "⚠️ Failed to install qdrant packages"
       ;;
   esac
 }
@@ -257,7 +257,7 @@ docker compose up -d
 # Wait for container to be ready before installing packages
 echo "⏳ Waiting for container to be ready..."
 for i in {1..30}; do
-  if docker exec openmemory-openmemory-mcp-1 python -c "import sys; print('ready')" >/dev/null 2>&1; then
+  if docker exec codingbrain-mcp python -c "import sys; print('ready')" >/dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -376,13 +376,13 @@ fi
 # Start the frontend
 echo "🚀 Starting frontend on port $FRONTEND_PORT..."
 docker run -d \
-  --name mem0_ui \
+  --name codingbrain_ui \
   -p ${FRONTEND_PORT}:3000 \
   -e NEXT_PUBLIC_API_URL="$NEXT_PUBLIC_API_URL" \
   -e NEXT_PUBLIC_USER_ID="$USER" \
-  mem0/openmemory-ui:latest
+  codingbrain/ui:latest
 
-echo "✅ Backend:  http://localhost:8765"
+echo "✅ Backend:  http://localhost:8865"
 echo "✅ Frontend: http://localhost:$FRONTEND_PORT"
 
 # Open the frontend URL in the default web browser

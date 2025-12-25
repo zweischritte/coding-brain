@@ -1,7 +1,7 @@
 "use client";
 
-import { Install } from "@/components/dashboard/Install";
 import Stats from "@/components/dashboard/Stats";
+import { GraphStats } from "@/components/dashboard/GraphStats";
 import { MemoryFilters } from "@/app/memories/components/MemoryFilters";
 import { MemoriesSection } from "@/app/memories/components/MemoriesSection";
 import "@/styles/animation.css";
@@ -12,14 +12,14 @@ export default function DashboardPage() {
       <div className="container">
         <div className="w-full mx-auto space-y-6">
           <div className="grid grid-cols-3 gap-6">
-            {/* Memory Category Breakdown */}
+            {/* Memory Stats */}
             <div className="col-span-2 animate-fade-slide-down">
-              <Install />
+              <Stats />
             </div>
 
-            {/* Memories Stats */}
+            {/* Graph Stats */}
             <div className="col-span-1 animate-fade-slide-down delay-1">
-              <Stats />
+              <GraphStats />
             </div>
           </div>
 

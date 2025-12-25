@@ -1,7 +1,7 @@
 "use client";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { MemoryActions } from "./MemoryActions";
-import { ArrowLeft, Copy, Check } from "lucide-react";
+import { ArrowLeft, Copy, Check, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { AccessLog } from "./AccessLog";
@@ -12,6 +12,9 @@ import { useSelector } from "react-redux";
 import { RootState } from "@/store/store";
 import { constants } from "@/components/shared/source-app";
 import { RelatedMemories } from "./RelatedMemories";
+import { SimilarMemories } from "@/app/memories/components/SimilarMemories";
+import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 
 interface MemoryDetailsProps {
   memory_id: string;
@@ -91,6 +94,43 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                 </p>
               </div>
 
+              {/* AXIS Metadata Section */}
+              {(memory?.metadata?.vault || memory?.metadata?.layer || memory?.metadata?.circuit || memory?.metadata?.vector || memory?.metadata?.re) && (
+                <div className="mt-4 pt-4 border-t border-zinc-800">
+                  <h3 className="text-sm font-semibold text-zinc-400 mb-3">AXIS Metadata</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {memory?.metadata?.vault && (
+                      <Badge variant="secondary" className="bg-purple-900/30 text-purple-300 border border-purple-700">
+                        Vault: {memory.metadata.vault}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.layer && (
+                      <Badge variant="secondary" className="bg-blue-900/30 text-blue-300 border border-blue-700">
+                        Layer: {memory.metadata.layer}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.circuit && (
+                      <Badge variant="secondary" className="bg-green-900/30 text-green-300 border border-green-700">
+                        Circuit: {memory.metadata.circuit}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.vector && (
+                      <Badge variant="secondary" className="bg-amber-900/30 text-amber-300 border border-amber-700">
+                        Vector: {memory.metadata.vector}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.re && (
+                      <Link href={`/entity/${encodeURIComponent(memory.metadata.re)}`}>
+                        <Badge variant="secondary" className="bg-primary/20 text-primary border border-primary/50 cursor-pointer hover:bg-primary/30">
+                          <User className="h-3 w-3 mr-1" />
+                          {memory.metadata.re}
+                        </Badge>
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="mt-6 pt-4 border-t border-zinc-800">
                 <div className="flex justify-between items-center">
                   <div className="">
@@ -131,17 +171,12 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                     </div>
                   </div>
                 </div>
-
-                {/* <div className="flex justify-end gap-2 w-full mt-2">
-                <p className="text-sm font-semibold text-primary my-auto">
-                    {new Date(memory.created_at).toLocaleString()}
-                  </p>
-                </div> */}
               </div>
             </div>
           </div>
         </div>
         <div className="w-1/3 flex flex-col gap-4">
+          <SimilarMemories memoryId={memory?.id || ""} />
           <AccessLog memoryId={memory?.id || ""} />
           <RelatedMemories memoryId={memory?.id || ""} />
         </div>

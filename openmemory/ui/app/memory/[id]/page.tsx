@@ -1,12 +1,12 @@
 "use client";
 
 import "@/styles/animation.css";
-import { useEffect } from "react";
+import { useEffect, useCallback } from "react";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
 import { use } from "react";
 import { MemorySkeleton } from "@/skeleton/MemorySkeleton";
 import { MemoryDetails } from "./components/MemoryDetails";
-import UpdateMemory from "@/components/shared/update-memory";
+import { EditMemoryDialog } from "@/app/memories/components/EditMemoryDialog";
 import { useUI } from "@/hooks/useUI";
 import { RootState } from "@/store/store";
 import { useSelector } from "react-redux";
@@ -51,14 +51,26 @@ export default function MemoryPage({
 }) {
   const resolvedParams = use(params);
   const { updateMemoryDialog, handleCloseUpdateMemoryDialog } = useUI();
+  const { fetchMemoryById } = useMemoriesApi();
+  const memory = useSelector(
+    (state: RootState) => state.memories.selectedMemory
+  );
+
+  const handleEditSuccess = useCallback(() => {
+    // Refresh the memory after edit
+    fetchMemoryById(resolvedParams.id);
+  }, [fetchMemoryById, resolvedParams.id]);
+
   return (
     <div>
       <div className="animate-fade-slide-down delay-1">
-        <UpdateMemory
+        <EditMemoryDialog
           memoryId={updateMemoryDialog.memoryId || ""}
-          memoryContent={updateMemoryDialog.memoryContent || ""}
+          initialContent={updateMemoryDialog.memoryContent || ""}
+          initialMetadata={memory?.metadata}
           open={updateMemoryDialog.isOpen}
           onOpenChange={handleCloseUpdateMemoryDialog}
+          onSuccess={handleEditSuccess}
         />
       </div>
       <div className="animate-fade-slide-down delay-2">

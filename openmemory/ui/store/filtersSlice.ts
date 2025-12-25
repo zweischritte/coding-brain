@@ -12,6 +12,11 @@ export interface FiltersState {
   apps: {
     selectedApps: string[];
     selectedCategories: string[];
+    vaults: string[];
+    layers: string[];
+    vectors: string[];
+    circuits: number[];
+    entities: string[];
     sortColumn: string;
     sortDirection: 'asc' | 'desc';
     showArchived: boolean;
@@ -28,6 +33,11 @@ const initialState: FiltersState = {
   apps: {
     selectedApps: [],
     selectedCategories: [],
+    vaults: [],
+    layers: [],
+    vectors: [],
+    circuits: [],
+    entities: [],
     sortColumn: 'created_at',
     sortDirection: 'desc',
     showArchived: false,
@@ -64,12 +74,32 @@ const filtersSlice = createSlice({
     setSelectedCategories: (state, action: PayloadAction<string[]>) => {
       state.apps.selectedCategories = action.payload;
     },
+    setVaults: (state, action: PayloadAction<string[]>) => {
+      state.apps.vaults = action.payload;
+    },
+    setLayers: (state, action: PayloadAction<string[]>) => {
+      state.apps.layers = action.payload;
+    },
+    setVectors: (state, action: PayloadAction<string[]>) => {
+      state.apps.vectors = action.payload;
+    },
+    setCircuits: (state, action: PayloadAction<number[]>) => {
+      state.apps.circuits = action.payload;
+    },
+    setEntities: (state, action: PayloadAction<string[]>) => {
+      state.apps.entities = action.payload;
+    },
     setShowArchived: (state, action: PayloadAction<boolean>) => {
       state.apps.showArchived = action.payload;
     },
     clearFilters: (state) => {
       state.apps.selectedApps = [];
       state.apps.selectedCategories = [];
+      state.apps.vaults = [];
+      state.apps.layers = [];
+      state.apps.vectors = [];
+      state.apps.circuits = [];
+      state.apps.entities = [];
       state.apps.showArchived = false;
     },
     setSortingState: (state, action: PayloadAction<{ column: string; direction: 'asc' | 'desc' }>) => {
@@ -85,6 +115,11 @@ export const {
   setCategoriesError,
   setSelectedApps,
   setSelectedCategories,
+  setVaults,
+  setLayers,
+  setVectors,
+  setCircuits,
+  setEntities,
   setShowArchived,
   clearFilters,
   setSortingState

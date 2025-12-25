@@ -1,4 +1,5 @@
 import logging
+import hashlib
 from datetime import UTC, datetime
 from typing import List, Optional, Set
 from uuid import UUID
@@ -15,13 +16,14 @@ from app.models import (
     User,
 )
 from app.schemas import MemoryResponse
+from app.utils.axis_tags import process_memory_input
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, String, cast, text
 from sqlalchemy.orm import Session, joinedload
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
@@ -242,6 +244,8 @@ async def create_memory(
     # Log what we're about to do
     logging.info(f"Creating memory for user_id: {request.user_id} with app: {request.app}")
     
+    clean_text, axis_metadata = process_memory_input(request.text)
+
     # Try to get memory client safely
     try:
         memory_client = get_memory_client()
@@ -256,13 +260,16 @@ async def create_memory(
 
     # Try to save to Qdrant via memory_client
     try:
+        combined_metadata = {
+            "source_app": "openmemory",
+            "mcp_client": request.app,
+            **request.metadata,
+            **axis_metadata,
+        }
         qdrant_response = memory_client.add(
-            request.text,
+            clean_text,
             user_id=request.user_id,  # Use string user_id to match search
-            metadata={
-                "source_app": "openmemory",
-                "mcp_client": request.app,
-            },
+            metadata=combined_metadata,
             infer=request.infer
         )
         
@@ -285,6 +292,7 @@ async def create_memory(
                         # Update existing memory
                         existing_memory.state = MemoryState.active
                         existing_memory.content = result['memory']
+                        existing_memory.metadata_ = combined_metadata
                         memory = existing_memory
                     else:
                         # Create memory with the EXACT SAME ID from Qdrant
@@ -293,7 +301,7 @@ async def create_memory(
                             user_id=user.id,
                             app_id=app_obj.id,
                             content=result['memory'],
-                            metadata_=request.metadata,
+                            metadata_=combined_metadata,
                             state=MemoryState.active
                         )
                         db.add(memory)
@@ -335,6 +343,21 @@ async def get_memory(
     db: Session = Depends(get_db)
 ):
     memory = get_memory_or_404(db, memory_id)
+
+    # Extract AXIS metadata from metadata_ dict for frontend
+    metadata = {}
+    if memory.metadata_:
+        metadata = {
+            "vault": memory.metadata_.get("vault"),
+            "layer": memory.metadata_.get("layer"),
+            "circuit": memory.metadata_.get("circuit"),
+            "vector": memory.metadata_.get("vector"),
+            "re": memory.metadata_.get("re"),
+            "tags": memory.metadata_.get("tags"),
+        }
+        # Remove None values
+        metadata = {k: v for k, v in metadata.items() if v is not None}
+
     return {
         "id": memory.id,
         "text": memory.content,
@@ -343,7 +366,8 @@ async def get_memory(
         "app_id": memory.app_id,
         "app_name": memory.app.name if memory.app else None,
         "categories": [category.name for category in memory.categories],
-        "metadata_": memory.metadata_
+        "metadata_": memory.metadata_,
+        "metadata": metadata if metadata else None
     }
 
 
@@ -510,8 +534,46 @@ async def get_memory_access_log(
 
 
 class UpdateMemoryRequest(BaseModel):
-    memory_content: str
     user_id: str
+    memory_content: Optional[str] = None
+    vault: Optional[str] = None
+    layer: Optional[str] = None
+    circuit: Optional[int] = None
+    vector: Optional[str] = None
+    entity: Optional[str] = None
+    tags: Optional[dict] = None
+
+    @classmethod
+    def validate_vault(cls, v):
+        if v is not None:
+            valid_vaults = ["SOV", "WLT", "SIG", "FRC", "DIR", "FGP", "Q"]
+            if v not in valid_vaults:
+                raise ValueError(f"vault must be one of {valid_vaults}")
+        return v
+
+    @classmethod
+    def validate_layer(cls, v):
+        if v is not None:
+            valid_layers = ["somatic", "emotional", "narrative", "cognitive",
+                          "values", "identity", "relational", "goals",
+                          "resources", "context", "temporal", "meta"]
+            if v not in valid_layers:
+                raise ValueError(f"layer must be one of {valid_layers}")
+        return v
+
+    @classmethod
+    def validate_circuit(cls, v):
+        if v is not None and (v < 1 or v > 8):
+            raise ValueError("circuit must be between 1 and 8")
+        return v
+
+    @classmethod
+    def validate_vector(cls, v):
+        if v is not None:
+            valid_vectors = ["say", "want", "do"]
+            if v not in valid_vectors:
+                raise ValueError(f"vector must be one of {valid_vectors}")
+        return v
 
 # Update a memory
 @router.put("/{memory_id}")
@@ -520,14 +582,213 @@ async def update_memory(
     request: UpdateMemoryRequest,
     db: Session = Depends(get_db)
 ):
+    """Update memory content and/or metadata with best-effort sync to vector + graph stores."""
+    from app.graph.graph_ops import (
+        project_memory_to_graph,
+        is_graph_enabled,
+        is_mem0_graph_enabled,
+        update_tag_edges_on_memory_add,
+        delete_similarity_edges_for_memory,
+        project_similarity_edges_for_memory,
+        get_entities_for_memory_from_graph,
+        refresh_co_mention_edges_for_entities,
+    )
+    from app.graph.entity_bridge import bridge_entities_to_om_graph
+    from app.utils.structured_memory import validate_update_fields, apply_metadata_updates
+
     user = db.query(User).filter(User.user_id == request.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     memory = get_memory_or_404(db, memory_id)
-    memory.content = request.memory_content
+
+    sync_warnings: List[str] = []
+    content_updated = request.memory_content is not None
+
+    # --- Graph: collect old entities for precise co-mention refresh (best-effort) ---
+    old_entities: List[str] = []
+    if is_graph_enabled():
+        try:
+            old_entities = get_entities_for_memory_from_graph(
+                memory_id=str(memory_id),
+                user_id=request.user_id,
+            )
+        except Exception as e:
+            sync_warnings.append(f"graph_old_entities_failed:{e}")
+
+    # --- SQL: apply validated metadata updates ---
+    current_metadata = memory.metadata_ or {}
+    try:
+        validated_fields = validate_update_fields(
+            vault=request.vault,
+            layer=request.layer,
+            circuit=request.circuit,
+            vector=request.vector,
+            entity=request.entity,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    updated_metadata = apply_metadata_updates(
+        current_metadata=current_metadata,
+        validated_fields=validated_fields,
+        add_tags=request.tags,
+        remove_tags=None,
+    )
+
+    new_content = request.memory_content if request.memory_content is not None else memory.content
+
+    # Update indexed fields if provided (keeps SQL filters fast + consistent)
+    if "vault_full" in validated_fields:
+        memory.vault = validated_fields["vault_full"]
+    if "layer" in validated_fields:
+        memory.layer = validated_fields["layer"]
+    if "vector" in validated_fields:
+        memory.axis_vector = validated_fields["vector"]
+
+    memory.content = new_content
+    memory.metadata_ = updated_metadata
+    memory.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(memory)
-    return memory
+
+    # --- Vector store: update embedding + payload (best-effort) ---
+    vector_store_updated = False
+    try:
+        memory_client = get_memory_client()
+        if memory_client:
+            existing_payload = {}
+            try:
+                existing = memory_client.vector_store.get(vector_id=str(memory_id))
+                if existing and getattr(existing, "payload", None):
+                    existing_payload = dict(existing.payload)
+            except Exception as e:
+                sync_warnings.append(f"vector_store_get_failed:{e}")
+
+            # Merge payload safely (preserve session ids + mem0 core keys)
+            payload = dict(existing_payload)
+            payload["user_id"] = request.user_id
+            payload["data"] = new_content
+            payload["hash"] = hashlib.md5(new_content.encode()).hexdigest()
+            payload["created_at"] = (
+                existing_payload.get("created_at")
+                or (memory.created_at.isoformat() if memory.created_at else None)
+                or payload.get("created_at")
+            )
+            payload["updated_at"] = memory.updated_at.isoformat() if memory.updated_at else datetime.now(UTC).isoformat()
+
+            reserved = {"user_id", "data", "hash", "created_at", "updated_at"}
+            for k, v in (updated_metadata or {}).items():
+                if k in reserved:
+                    continue
+                payload[k] = v
+
+            if content_updated:
+                embeddings = memory_client.embedding_model.embed(new_content, "update")
+                memory_client.vector_store.update(
+                    vector_id=str(memory_id),
+                    vector=embeddings,
+                    payload=payload,
+                )
+                vector_store_updated = True
+            else:
+                # Metadata-only update (Qdrant): update payload without touching vectors.
+                # Other vector stores may not support payload-only updates here.
+                vs = getattr(memory_client, "vector_store", None)
+                if vs and hasattr(vs, "client") and hasattr(vs, "collection_name"):
+                    vs.client.set_payload(
+                        collection_name=vs.collection_name,
+                        payload=payload,
+                        points=[str(memory_id)],
+                    )
+                    vector_store_updated = True
+                else:
+                    sync_warnings.append("vector_store_payload_only_update_not_supported")
+        else:
+            sync_warnings.append("memory_client_unavailable")
+    except Exception as e:
+        sync_warnings.append(f"vector_store_update_failed:{e}")
+
+    # --- Neo4j (OM_*): re-project + refresh derived edges (best-effort) ---
+    graph_projected = False
+    entity_bridge_ran = False
+    co_mentions_refreshed = False
+    similarity_refreshed = False
+    tag_edges_updated = False
+
+    if is_graph_enabled():
+        try:
+            project_memory_to_graph(
+                memory_id=str(memory_id),
+                user_id=request.user_id,
+                content=new_content,
+                metadata=updated_metadata,
+                created_at=memory.created_at.isoformat() if memory.created_at else None,
+                updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
+                state=memory.state.value if memory.state else "active",
+            )
+            graph_projected = True
+        except Exception as e:
+            sync_warnings.append(f"neo4j_projection_failed:{e}")
+
+        # Bridge multi-entity extraction (uses Mem0 Graph extraction; does not require vector-store changes)
+        if is_mem0_graph_enabled():
+            try:
+                bridge_entities_to_om_graph(
+                    memory_id=str(memory_id),
+                    user_id=request.user_id,
+                    content=new_content,
+                    existing_entity=updated_metadata.get("re"),
+                )
+                entity_bridge_ran = True
+            except Exception as e:
+                sync_warnings.append(f"entity_bridge_failed:{e}")
+
+        # Update tag co-occurrence edges only if tags were part of the request
+        if request.tags is not None:
+            try:
+                update_tag_edges_on_memory_add(str(memory_id), request.user_id)
+                tag_edges_updated = True
+            except Exception as e:
+                sync_warnings.append(f"tag_edges_update_failed:{e}")
+
+        # Similarity edges depend on embeddings; only refresh when content changed.
+        if content_updated:
+            try:
+                delete_similarity_edges_for_memory(str(memory_id), request.user_id)
+                project_similarity_edges_for_memory(str(memory_id), request.user_id)
+                similarity_refreshed = True
+            except Exception as e:
+                sync_warnings.append(f"similarity_refresh_failed:{e}")
+
+        # Co-mention refresh: recompute counts for affected entity pairs (old ∪ new)
+        try:
+            new_entities = get_entities_for_memory_from_graph(
+                memory_id=str(memory_id),
+                user_id=request.user_id,
+            )
+            affected_entities = sorted({*(old_entities or []), *(new_entities or [])})
+            if affected_entities:
+                refresh_co_mention_edges_for_entities(
+                    user_id=request.user_id,
+                    entity_names=affected_entities,
+                )
+                co_mentions_refreshed = True
+        except Exception as e:
+            sync_warnings.append(f"co_mentions_refresh_failed:{e}")
+
+    return {
+        "message": "Memory updated successfully",
+        "id": str(memory_id),
+        "sync": {
+            "vector_store_updated": vector_store_updated,
+            "graph_projected": graph_projected,
+            "entity_bridge_ran": entity_bridge_ran,
+            "tag_edges_updated": tag_edges_updated,
+            "similarity_refreshed": similarity_refreshed,
+            "co_mentions_refreshed": co_mentions_refreshed,
+        },
+        "warnings": sync_warnings,
+    }
 
 class FilterMemoriesRequest(BaseModel):
     user_id: str
@@ -541,6 +802,8 @@ class FilterMemoriesRequest(BaseModel):
     from_date: Optional[int] = None
     to_date: Optional[int] = None
     show_archived: Optional[bool] = False
+    vaults: Optional[List[str]] = None
+    layers: Optional[List[str]] = None
 
 @router.post("/filter", response_model=Page[MemoryResponse])
 async def filter_memories(
@@ -568,6 +831,16 @@ async def filter_memories(
     # Apply app filter
     if request.app_ids:
         query = query.filter(Memory.app_id.in_(request.app_ids))
+
+    # Apply vault/layer filters from metadata (SQLite uses json_extract)
+    if request.vaults:
+        query = query.filter(
+            func.json_extract(Memory.metadata_, '$.vault').in_(request.vaults)
+        )
+    if request.layers:
+        query = query.filter(
+            func.json_extract(Memory.metadata_, '$.layer').in_(request.layers)
+        )
 
     # Add joins for app and categories
     query = query.outerjoin(App, Memory.app_id == App.id)
@@ -692,3 +965,88 @@ async def get_related_memories(
             for memory in items
         ]
     )
+
+
+# =============================================================================
+# Graph-based Memory Endpoints
+# =============================================================================
+
+@router.get("/{memory_id}/graph")
+async def get_memory_graph_context(
+    memory_id: UUID,
+    user_id: str,
+    db: Session = Depends(get_db),
+):
+    """Get graph context for a memory: similar memories, subgraph, etc."""
+    from app.graph.graph_ops import (
+        get_similar_memories_from_graph,
+        get_memory_subgraph_from_graph,
+    )
+
+    # Verify memory exists and belongs to user
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    memory = db.query(Memory).filter(
+        Memory.id == memory_id,
+        Memory.user_id == user.id
+    ).first()
+
+    if not memory:
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    # Get similar memories via OM_SIMILAR edges
+    similar = get_similar_memories_from_graph(
+        memory_id=str(memory_id),
+        user_id=user_id,
+        min_score=0.5,
+        limit=10
+    )
+
+    # Get subgraph (entities, dimensions, related memories)
+    subgraph = get_memory_subgraph_from_graph(
+        memory_id=str(memory_id),
+        user_id=user_id,
+        depth=2,
+        related_limit=20
+    )
+
+    return {
+        "memory_id": str(memory_id),
+        "similar_memories": similar,
+        "subgraph": subgraph,
+    }
+
+
+@router.get("/{memory_id}/similar")
+async def get_similar_memories(
+    memory_id: UUID,
+    user_id: str,
+    min_score: float = Query(default=0.5, ge=0.0, le=1.0),
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """Get semantically similar memories via pre-computed OM_SIMILAR edges."""
+    from app.graph.graph_ops import get_similar_memories_from_graph
+
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    memory = db.query(Memory).filter(
+        Memory.id == memory_id,
+        Memory.user_id == user.id
+    ).first()
+
+    if not memory:
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    similar = get_similar_memories_from_graph(
+        memory_id=str(memory_id),
+        user_id=user_id,
+        min_score=min_score,
+        limit=limit
+    )
+
+    return {"memory_id": str(memory_id), "similar_memories": similar}

@@ -9,7 +9,9 @@ import {
   setCategoriesError,
   setSortingState,
   setSelectedApps,
-  setSelectedCategories
+  setSelectedCategories,
+  setVaults,
+  setLayers
 } from '@/store/filtersSlice';
 
 interface CategoriesResponse {
@@ -23,6 +25,8 @@ export interface UseFiltersApiReturn {
   error: string | null;
   updateApps: (apps: string[]) => void;
   updateCategories: (categories: string[]) => void;
+  updateVaults: (vaults: string[]) => void;
+  updateLayers: (layers: string[]) => void;
   updateSort: (column: string, direction: 'asc' | 'desc') => void;
 }
 
@@ -64,6 +68,14 @@ export const useFiltersApi = (): UseFiltersApiReturn => {
     dispatch(setSelectedCategories(categories));
   }, [dispatch]);
 
+  const updateVaults = useCallback((vaults: string[]) => {
+    dispatch(setVaults(vaults));
+  }, [dispatch]);
+
+  const updateLayers = useCallback((layers: string[]) => {
+    dispatch(setLayers(layers));
+  }, [dispatch]);
+
   const updateSort = useCallback((column: string, direction: 'asc' | 'desc') => {
     dispatch(setSortingState({ column, direction }));
   }, [dispatch]);
@@ -74,6 +86,8 @@ export const useFiltersApi = (): UseFiltersApiReturn => {
     error,
     updateApps,
     updateCategories,
+    updateVaults,
+    updateLayers,
     updateSort
   };
-}; 
+};

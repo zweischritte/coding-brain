@@ -1,4 +1,5 @@
 from typing import Any, Dict, Optional
+import copy
 
 from app.database import get_db
 from app.models import Config as ConfigModel
@@ -34,6 +35,24 @@ class VectorStoreProvider(BaseModel):
     # Below config can vary widely based on the vector store used. Refer https://docs.mem0.ai/components/vectordbs/config
     config: Dict[str, Any] = Field(..., description="Vector store-specific configuration")
 
+
+class GraphStoreConfig(BaseModel):
+    url: str = Field(..., description="Neo4j connection URL (e.g., bolt://localhost:7687) or 'env:NEO4J_URL'")
+    username: str = Field(..., description="Neo4j username or 'env:NEO4J_USERNAME'")
+    password: str = Field(..., description="Neo4j password or 'env:NEO4J_PASSWORD'")
+    database: Optional[str] = Field(None, description="Neo4j database name or 'env:NEO4J_DATABASE'")
+    base_label: Optional[bool] = Field(
+        None,
+        description="If true, use base label :__Entity__ for all entities (recommended for querying/indexing).",
+    )
+
+
+class GraphStoreProvider(BaseModel):
+    provider: str = Field("neo4j", description="Graph store provider name (currently only 'neo4j' supported)")
+    config: GraphStoreConfig = Field(..., description="Neo4j connection configuration")
+    custom_prompt: Optional[str] = Field(None, description="Custom prompt for entity/relation extraction")
+    threshold: Optional[float] = Field(None, description="Similarity threshold for graph matching (0.0-1.0)")
+
 class OpenMemoryConfig(BaseModel):
     custom_instructions: Optional[str] = Field(None, description="Custom instructions for memory management and fact extraction")
 
@@ -41,6 +60,7 @@ class Mem0Config(BaseModel):
     llm: Optional[LLMProvider] = None
     embedder: Optional[EmbedderProvider] = None
     vector_store: Optional[VectorStoreProvider] = None
+    graph_store: Optional[GraphStoreProvider] = None
 
 class ConfigSchema(BaseModel):
     openmemory: Optional[OpenMemoryConfig] = None
@@ -69,7 +89,8 @@ def get_default_configuration():
                     "api_key": "env:OPENAI_API_KEY"
                 }
             },
-            "vector_store": None
+            "vector_store": None,
+            "graph_store": None
         }
     }
 
@@ -87,7 +108,9 @@ def get_config_from_db(db: Session, key: str = "main"):
         return default_config
     
     # Ensure the config has all required sections with defaults
-    config_value = config.value
+    # IMPORTANT: work on a deep copy to avoid mutating SQLAlchemy's JSON dict in-place
+    # (in-place JSON changes are not tracked unless using MutableDict).
+    config_value = copy.deepcopy(config.value)
     default_config = get_default_configuration()
     
     # Merge with defaults to ensure all required fields exist
@@ -109,6 +132,10 @@ def get_config_from_db(db: Session, key: str = "main"):
         if "vector_store" not in config_value["mem0"]:
             config_value["mem0"]["vector_store"] = default_config["mem0"]["vector_store"]
 
+        # Ensure graph_store config exists with defaults (None)
+        if "graph_store" not in config_value["mem0"]:
+            config_value["mem0"]["graph_store"] = default_config["mem0"]["graph_store"]
+
     # Save the updated config back to database if it was modified
     if config_value != config.value:
         config.value = config_value
@@ -120,12 +147,14 @@ def get_config_from_db(db: Session, key: str = "main"):
 def save_config_to_db(db: Session, config: Dict[str, Any], key: str = "main"):
     """Save configuration to database."""
     db_config = db.query(ConfigModel).filter(ConfigModel.key == key).first()
+    # IMPORTANT: deep-copy so SQLAlchemy sees a new object for JSON column updates.
+    config_copy = copy.deepcopy(config)
     
     if db_config:
-        db_config.value = config
+        db_config.value = config_copy
         db_config.updated_at = None  # Will trigger the onupdate to set current time
     else:
-        db_config = ConfigModel(key=key, value=config)
+        db_config = ConfigModel(key=key, value=config_copy)
         db.add(db_config)
         
     db.commit()
@@ -142,19 +171,20 @@ async def get_configuration(db: Session = Depends(get_db)):
 async def update_configuration(config: ConfigSchema, db: Session = Depends(get_db)):
     """Update the configuration."""
     current_config = get_config_from_db(db)
-    
-    # Convert to dict for processing
-    updated_config = current_config.copy()
-    
-    # Update openmemory settings if provided
-    if config.openmemory is not None:
-        if "openmemory" not in updated_config:
-            updated_config["openmemory"] = {}
-        updated_config["openmemory"].update(config.openmemory.dict(exclude_none=True))
-    
-    # Update mem0 settings
-    updated_config["mem0"] = config.mem0.dict(exclude_none=True)
-    
+    update_data = config.dict(exclude_unset=True, exclude_none=True)
+
+    def deep_update(source, overrides):
+        for key, value in overrides.items():
+            if isinstance(value, dict) and key in source and isinstance(source[key], dict):
+                source[key] = deep_update(source[key], value)
+            else:
+                source[key] = value
+        return source
+
+    updated_config = deep_update(copy.deepcopy(current_config), update_data)
+    save_config_to_db(db, updated_config)
+    reset_memory_client()
+    return updated_config
 
 @router.patch("/", response_model=ConfigSchema)
 async def patch_configuration(config_update: ConfigSchema, db: Session = Depends(get_db)):
@@ -277,15 +307,55 @@ async def get_openmemory_configuration(db: Session = Depends(get_db)):
 async def update_openmemory_configuration(openmemory_config: OpenMemoryConfig, db: Session = Depends(get_db)):
     """Update only the OpenMemory configuration."""
     current_config = get_config_from_db(db)
-    
+
     # Ensure openmemory key exists
     if "openmemory" not in current_config:
         current_config["openmemory"] = {}
-    
+
     # Update the OpenMemory configuration
     current_config["openmemory"].update(openmemory_config.dict(exclude_none=True))
-    
+
     # Save the configuration to database
     save_config_to_db(db, current_config)
     reset_memory_client()
     return current_config["openmemory"]
+
+
+@router.get("/mem0/graph_store", response_model=Optional[GraphStoreProvider])
+async def get_graph_store_configuration(db: Session = Depends(get_db)):
+    """Get only the Graph Store configuration."""
+    config = get_config_from_db(db)
+    graph_store_config = config.get("mem0", {}).get("graph_store", None)
+    return graph_store_config
+
+
+@router.put("/mem0/graph_store", response_model=GraphStoreProvider)
+async def update_graph_store_configuration(graph_store_config: GraphStoreProvider, db: Session = Depends(get_db)):
+    """Update only the Graph Store configuration."""
+    current_config = get_config_from_db(db)
+
+    # Ensure mem0 key exists
+    if "mem0" not in current_config:
+        current_config["mem0"] = {}
+
+    # Update the Graph Store configuration
+    current_config["mem0"]["graph_store"] = graph_store_config.dict(exclude_none=True)
+
+    # Save the configuration to database
+    save_config_to_db(db, current_config)
+    reset_memory_client()
+    return current_config["mem0"]["graph_store"]
+
+
+@router.delete("/mem0/graph_store")
+async def delete_graph_store_configuration(db: Session = Depends(get_db)):
+    """Remove the Graph Store configuration (disables graph memory)."""
+    current_config = get_config_from_db(db)
+
+    if "mem0" in current_config:
+        current_config["mem0"]["graph_store"] = None
+
+    # Save the configuration to database
+    save_config_to_db(db, current_config)
+    reset_memory_client()
+    return {"status": "deleted", "message": "Graph store configuration removed"}

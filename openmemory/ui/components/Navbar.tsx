@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { HiHome, HiMiniRectangleStack } from "react-icons/hi2";
 import { RiApps2AddFill } from "react-icons/ri";
 import { FiRefreshCcw } from "react-icons/fi";
+import { HiUsers } from "react-icons/hi2";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CreateMemoryDialog } from "@/app/memories/components/CreateMemoryDialog";
@@ -13,6 +14,7 @@ import { useStats } from "@/hooks/useStats";
 import { useAppsApi } from "@/hooks/useAppsApi";
 import { Settings } from "lucide-react";
 import { useConfig } from "@/hooks/useConfig";
+import { useEntitiesApi } from "@/hooks/useEntitiesApi";
 
 export function Navbar() {
   const pathname = usePathname();
@@ -21,6 +23,7 @@ export function Navbar() {
   const appsApi = useAppsApi();
   const statsApi = useStats();
   const configApi = useConfig();
+  const entitiesApi = useEntitiesApi();
 
   // Define route matchers with typed parameter extraction
   const routeBasedFetchMapping: {
@@ -44,12 +47,23 @@ export function Navbar() {
       ],
     },
     {
+      match: /^\/entity\/([^/]+)$/,
+      getFetchers: ({ entity_name }) => [
+        () => entitiesApi.getEntity(entity_name),
+        () => entitiesApi.getEntityMemories(entity_name),
+      ],
+    },
+    {
       match: /^\/memories$/,
       getFetchers: () => [memoriesApi.fetchMemories],
     },
     {
       match: /^\/apps$/,
       getFetchers: () => [appsApi.fetchApps],
+    },
+    {
+      match: /^\/entities$/,
+      getFetchers: () => [entitiesApi.listEntities],
     },
     {
       match: /^\/$/,
@@ -132,6 +146,18 @@ export function Navbar() {
             >
               <RiApps2AddFill />
               Apps
+            </Button>
+          </Link>
+          <Link href="/entities">
+            <Button
+              variant="outline"
+              size="sm"
+              className={`flex items-center gap-2 border-none ${
+                isActive("/entities") || isActive("/entity") ? activeClass : inactiveClass
+              }`}
+            >
+              <HiUsers />
+              Entities
             </Button>
           </Link>
           <Link href="/settings">
