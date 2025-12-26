@@ -39,11 +39,11 @@
 - [x] Implement Qwen3, Nomic, Gemini adapters with factory
 - [x] Write CodeSearchNet dataset loader tests (37 tests)
 - [x] Implement CodeSearchNet dataset loader
-- [ ] Implement lexical backend interface
+- [x] Implement lexical backend interface (66 tests)
 - [ ] Create benchmark runner and reporter
 - [ ] Run benchmarks and collect baselines
 
-**Total Tests: 171 passing**
+**Total Tests: 237 passing**
 
 **Git Commits:**
 - `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
@@ -299,7 +299,7 @@ Needed CODE_* namespace (Code Graph):
 ## Test Results Log
 
 ```
-2025-12-26: 171 tests passing (unit tests, excluding 2 integration tests)
+2025-12-26: 237 tests passing (unit tests, excluding 2 integration tests)
 - MRR metric: 17 tests
 - NDCG metric: 19 tests
 - Latency tracker: 20 tests
@@ -307,6 +307,7 @@ Needed CODE_* namespace (Code Graph):
 - Lexical decision matrix: 33 tests
 - Concrete adapters (Qwen3, Nomic, Gemini): 23 tests
 - CodeSearchNet dataset loader: 37 tests
+- Lexical backend interface: 66 tests
 ```
 
 ---
