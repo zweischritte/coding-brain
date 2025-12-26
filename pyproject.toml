@@ -95,6 +95,15 @@ observability = [
     "opentelemetry-instrumentation>=0.48b0",  # Instrumentation framework
     "structlog>=24.0.0",  # Structured logging
 ]
+indexing = [
+    "tree-sitter>=0.23.0,<0.25.0",  # AST parsing framework
+    "tree-sitter-python>=0.23.0,<0.24.0",  # Python grammar
+    "tree-sitter-typescript>=0.23.0,<0.24.0",  # TypeScript/TSX grammar
+    "tree-sitter-java>=0.23.0,<0.24.0",  # Java grammar
+]
+retrieval = [
+    "opensearch-py>=2.0.0",  # OpenSearch client for lexical and hybrid search
+]
 dev = [
     "ruff>=0.6.5",
     "isort>=5.13.2",

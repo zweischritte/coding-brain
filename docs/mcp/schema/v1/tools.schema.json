@@ -20,8 +20,10 @@
     "impact_analysis": { "$ref": "#/$defs/ImpactTool" },
     "get_symbol_hierarchy": { "$ref": "#/$defs/SymbolHierarchyTool" },
     "find_tests_for_symbol": { "$ref": "#/$defs/TestsForSymbolTool" },
+    "generate_tests": { "$ref": "#/$defs/GenerateTestsTool" },
     "get_recent_changes": { "$ref": "#/$defs/RecentChangesTool" },
     "explain_code_context": { "$ref": "#/$defs/ExplainCodeContextTool" },
+    "explain_code": { "$ref": "#/$defs/ExplainCodeTool" },
     "export_code_graph": { "$ref": "#/$defs/ExportGraphTool" },
     "export_call_graph": { "$ref": "#/$defs/ExportCallGraphTool" },
     "get_project_conventions": { "$ref": "#/$defs/GetProjectConventionsTool" },
@@ -29,9 +31,11 @@
     "unregister_repository": { "$ref": "#/$defs/UnregisterRepoTool" },
     "trigger_reindex": { "$ref": "#/$defs/TriggerReindexTool" },
     "get_index_status": { "$ref": "#/$defs/GetIndexStatusTool" },
+    "get_bootstrap_status": { "$ref": "#/$defs/GetBootstrapStatusTool" },
     "system_health": { "$ref": "#/$defs/SystemHealthTool" },
     "validate_input": { "$ref": "#/$defs/ValidateInputTool" },
     "get_audit_events": { "$ref": "#/$defs/GetAuditEventsTool" },
+    "provide_feedback": { "$ref": "#/$defs/ProvideFeedbackTool" },
     "add_memory": { "$ref": "#/$defs/AddMemoryTool" },
     "search_memories": { "$ref": "#/$defs/SearchMemoriesTool" },
     "update_memory": { "$ref": "#/$defs/UpdateMemoryTool" },
@@ -44,7 +48,9 @@
     "find_recurring_patterns": { "$ref": "#/$defs/FindRecurringPatternsTool" },
     "detect_code_smells": { "$ref": "#/$defs/DetectCodeSmellsTool" },
     "get_similar_past_issues": { "$ref": "#/$defs/GetSimilarPastIssuesTool" },
-    "get_test_coverage": { "$ref": "#/$defs/GetTestCoverageTool" }
+    "get_test_coverage": { "$ref": "#/$defs/GetTestCoverageTool" },
+    "analyze_pull_request": { "$ref": "#/$defs/AnalyzePullRequestTool" },
+    "suggest_review_comments": { "$ref": "#/$defs/SuggestReviewCommentsTool" }
   },
   "$defs": {
     "EmptyInput": {
@@ -363,9 +369,20 @@
       "type": "object",
       "properties": {
         "repo_id": { "type": "string" },
-        "changed_files": { "type": "array", "items": { "type": "string" } }
+        "changed_files": { "type": "array", "items": { "type": "string" } },
+        "symbol_id": { "type": "string" },
+        "include_cross_language": { "type": "boolean" },
+        "max_depth": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "confidence_threshold": {
+          "type": "string",
+          "enum": ["definite", "probable", "possible"]
+        }
       },
-      "required": ["repo_id", "changed_files"],
+      "anyOf": [
+        { "required": ["changed_files"] },
+        { "required": ["symbol_id"] }
+      ],
+      "required": ["repo_id"],
       "additionalProperties": false
     },
     "ImpactOutput": {
@@ -486,6 +503,166 @@
       "properties": {
         "input": { "$ref": "#/$defs/ExplainCodeContextInput" },
         "output": { "$ref": "#/$defs/ExplainCodeContextOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ExplainCodeInput": {
+      "type": "object",
+      "properties": {
+        "symbol_id": {
+          "type": "string",
+          "description": "SCIP symbol ID (e.g., 'scip-python myapp module/Class#method.')"
+        },
+        "config": { "$ref": "#/$defs/ExplainCodeConfig" }
+      },
+      "required": ["symbol_id"],
+      "additionalProperties": false
+    },
+    "ExplainCodeConfig": {
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "default": 2,
+          "description": "Call graph traversal depth"
+        },
+        "include_callers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include functions that call this symbol"
+        },
+        "include_callees": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include functions this symbol calls"
+        },
+        "include_usages": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include usage examples from codebase"
+        },
+        "max_usages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20,
+          "default": 5,
+          "description": "Maximum usage examples to return"
+        },
+        "include_related": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include related symbols"
+        },
+        "max_related": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50,
+          "default": 10,
+          "description": "Maximum related symbols to return"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["json", "markdown", "llm"],
+          "default": "llm",
+          "description": "Output format"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CallGraphEntry": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "file_path": { "type": "string" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "depth": { "type": "integer", "minimum": 1 },
+        "call_line": { "type": "integer", "minimum": 1 },
+        "call_col": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["symbol_id", "name"],
+      "additionalProperties": false
+    },
+    "UsageExample": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "file": { "type": "string" },
+        "score": { "type": "number" }
+      },
+      "required": ["code"],
+      "additionalProperties": false
+    },
+    "RelatedSymbol": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "file_path": { "type": "string" },
+        "score": { "type": "number" }
+      },
+      "required": ["symbol_id", "name"],
+      "additionalProperties": false
+    },
+    "SymbolExplanation": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "signature": { "type": "string" },
+        "file_path": { "type": "string" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "docstring": { "type": "string" },
+        "callers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CallGraphEntry" }
+        },
+        "callees": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CallGraphEntry" }
+        },
+        "usages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/UsageExample" }
+        },
+        "related": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RelatedSymbol" }
+        },
+        "context": { "type": "string" }
+      },
+      "required": ["symbol_id", "name", "kind", "signature", "file_path", "line_start", "line_end"],
+      "additionalProperties": false
+    },
+    "ExplainCodeOutput": {
+      "type": "object",
+      "properties": {
+        "explanation": { "$ref": "#/$defs/SymbolExplanation" },
+        "formatted": {
+          "type": "string",
+          "description": "Formatted output in requested format (json/markdown/llm)"
+        },
+        "cached": {
+          "type": "boolean",
+          "description": "Whether result was retrieved from cache"
+        },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["explanation", "meta"],
+      "additionalProperties": false
+    },
+    "ExplainCodeTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ExplainCodeInput" },
+        "output": { "$ref": "#/$defs/ExplainCodeOutput" }
       },
       "required": ["input", "output"],
       "additionalProperties": false
@@ -1009,6 +1186,212 @@
       "properties": {
         "input": { "$ref": "#/$defs/TestCoverageInput" },
         "output": { "$ref": "#/$defs/TestCoverageOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "GenerateTestsInput": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "symbol_name": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "options": {
+          "type": "object",
+          "properties": {
+            "framework": { "type": "string" },
+            "style": { "type": "string", "enum": ["unit", "integration", "e2e"] },
+            "coverage_target": {
+              "type": "string",
+              "enum": ["happy_path", "edge_cases", "comprehensive"]
+            },
+            "auto_mock": { "type": "boolean" },
+            "use_team_patterns": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "anyOf": [
+        { "required": ["symbol_id"] },
+        { "required": ["symbol_name"] }
+      ],
+      "additionalProperties": false
+    },
+    "GenerateTestsOutput": {
+      "type": "object",
+      "properties": {
+        "tests": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["tests", "meta"],
+      "additionalProperties": false
+    },
+    "GenerateTestsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/GenerateTestsInput" },
+        "output": { "$ref": "#/$defs/GenerateTestsOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ProvideFeedbackInput": {
+      "type": "object",
+      "properties": {
+        "query_id": { "type": "string" },
+        "rating": {
+          "type": "string",
+          "enum": ["helpful", "not_helpful", "wrong", "incomplete"]
+        },
+        "details": { "type": "object" }
+      },
+      "required": ["query_id", "rating"],
+      "additionalProperties": false
+    },
+    "ProvideFeedbackOutput": {
+      "type": "object",
+      "properties": {
+        "received": { "type": "boolean" },
+        "follow_up_question": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["received", "meta"],
+      "additionalProperties": false
+    },
+    "ProvideFeedbackTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ProvideFeedbackInput" },
+        "output": { "$ref": "#/$defs/ProvideFeedbackOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "GetBootstrapStatusInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "GetBootstrapStatusOutput": {
+      "type": "object",
+      "properties": {
+        "phase": { "type": "string" },
+        "progress": {
+          "type": "object",
+          "properties": {
+            "files_indexed": { "type": "integer", "minimum": 0 },
+            "files_total": { "type": "integer", "minimum": 0 },
+            "percentage": { "type": "number", "minimum": 0, "maximum": 100 }
+          },
+          "required": ["files_indexed", "files_total", "percentage"],
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "lexical_search": { "type": "boolean" },
+            "semantic_search": { "type": "boolean" },
+            "graph_queries": { "type": "boolean" },
+            "impact_analysis": { "type": "boolean" }
+          },
+          "required": [
+            "lexical_search",
+            "semantic_search",
+            "graph_queries",
+            "impact_analysis"
+          ],
+          "additionalProperties": false
+        },
+        "eta_seconds": { "type": "integer", "minimum": 0 },
+        "degraded_features": { "type": "array", "items": { "type": "string" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["phase", "progress", "capabilities", "meta"],
+      "additionalProperties": false
+    },
+    "GetBootstrapStatusTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/GetBootstrapStatusInput" },
+        "output": { "$ref": "#/$defs/GetBootstrapStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "PullRequestReference": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["github", "gitlab", "bitbucket"]
+        },
+        "repo": { "type": "string" },
+        "pr_number": { "type": "integer", "minimum": 1 },
+        "diff": { "type": "string" }
+      },
+      "anyOf": [
+        { "required": ["provider", "repo", "pr_number"] },
+        { "required": ["diff"] }
+      ],
+      "additionalProperties": false
+    },
+    "AnalyzePullRequestInput": {
+      "type": "object",
+      "properties": {
+        "pr_reference": { "$ref": "#/$defs/PullRequestReference" },
+        "analysis_types": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["pr_reference"],
+      "additionalProperties": false
+    },
+    "AnalyzePullRequestOutput": {
+      "type": "object",
+      "properties": {
+        "summary": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["summary", "meta"],
+      "additionalProperties": false
+    },
+    "AnalyzePullRequestTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/AnalyzePullRequestInput" },
+        "output": { "$ref": "#/$defs/AnalyzePullRequestOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SuggestReviewCommentsInput": {
+      "type": "object",
+      "properties": {
+        "pr_reference": { "$ref": "#/$defs/PullRequestReference" },
+        "focus_areas": { "type": "array", "items": { "type": "string" } },
+        "severity_threshold": {
+          "type": "string",
+          "enum": ["all", "warnings_and_errors", "errors_only"]
+        }
+      },
+      "required": ["pr_reference"],
+      "additionalProperties": false
+    },
+    "SuggestReviewCommentsOutput": {
+      "type": "object",
+      "properties": {
+        "comments": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["comments", "meta"],
+      "additionalProperties": false
+    },
+    "SuggestReviewCommentsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SuggestReviewCommentsInput" },
+        "output": { "$ref": "#/$defs/SuggestReviewCommentsOutput" }
       },
       "required": ["input", "output"],
       "additionalProperties": false

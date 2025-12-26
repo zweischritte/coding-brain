@@ -12,6 +12,32 @@ services:
       - codingbrain_storage:/qdrant/storage
     networks:
       - codingbrain-net
+  opensearch:
+    image: opensearchproject/opensearch:2.13.0
+    container_name: codingbrain-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Codingbrain123!
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - codingbrain_opensearch_data:/usr/share/opensearch/data
+    networks:
+      - codingbrain-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
   neo4j:
     image: neo4j:5-community
     container_name: codingbrain-neo4j
@@ -46,6 +72,7 @@ services:
       - NEO4J_URL=bolt://neo4j:7687
       - NEO4J_USERNAME=neo4j
       - NEO4J_PASSWORD=codingbrain123
+      - OPENSEARCH_HOSTS=opensearch:9200
     env_file:
       - api/.env
     depends_on:
@@ -53,6 +80,8 @@ services:
         condition: service_healthy
       codingbrain_store:
         condition: service_started
+      opensearch:
+        condition: service_healthy
     ports:
       - "8865:8765"
     volumes:
@@ -79,3 +108,4 @@ volumes:
   codingbrain_storage:
   codingbrain_neo4j_data:
   codingbrain_neo4j_logs:
+  codingbrain_opensearch_data:
