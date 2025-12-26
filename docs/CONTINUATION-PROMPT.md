@@ -6,7 +6,7 @@ Copy and paste one of the prompts below to continue implementation.
 
 ## Current State (as of 2025-12-26)
 
-**285 tests passing** across Phase 0a benchmark framework.
+**337 tests passing** across Phase 0a benchmark framework.
 
 ### Completed (DO NOT REDO):
 - ✅ MRR metric (17 tests)
@@ -18,6 +18,7 @@ Copy and paste one of the prompts below to continue implementation.
 - ✅ CodeSearchNet dataset loader (37 tests)
 - ✅ Lexical backend interface: Tantivy, OpenSearch (66 tests)
 - ✅ Benchmark runner (48 tests)
+- ✅ Benchmark reporter (52 tests)
 
 ### Git Commits:
 - `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
@@ -25,58 +26,17 @@ Copy and paste one of the prompts below to continue implementation.
 - `1c4ddc13` feat(benchmarks): add CodeSearchNet dataset loader
 - `fcb569d4` feat(benchmarks): add lexical backend interface with Tantivy and OpenSearch adapters
 - `21df18eb` feat(benchmarks): add benchmark runner for model and backend comparisons
+- `741fa031` feat(benchmarks): add benchmark reporter for comparison reports
 
 ---
 
-## Next Task: Benchmark Reporter
-
-```
-Continue implementing docs/IMPLEMENTATION-PLAN-DEV-ASSISTANT v7.md following TDD.
-
-## Current Status
-**285 tests passing**. Benchmark runner complete.
-
-### Completed (DO NOT REDO):
-- ✅ MRR, NDCG, Latency metrics
-- ✅ Embedder adapters (Qwen3, Nomic, Gemini)
-- ✅ Lexical decision matrix
-- ✅ CodeSearchNet dataset loader
-- ✅ Lexical backend interface (Tantivy, OpenSearch)
-- ✅ Benchmark runner
-
-### Next Task: Benchmark Reporter
-**Location**: openmemory/api/benchmarks/reporter/
-
-Create benchmark reporter for generating comparison reports:
-
-**TDD Steps**:
-1. Write tests in: openmemory/api/benchmarks/reporter/tests/test_benchmark_reporter.py
-2. Tests should cover:
-   - BenchmarkReporter class
-   - generate_report(results) method
-   - Model comparison table generation
-   - Winner selection based on thresholds
-   - Threshold validation (MRR >= 0.75, NDCG >= 0.80)
-   - JSON output format
-   - Markdown output format
-   - Console-friendly summary output
-3. Implement: openmemory/api/benchmarks/reporter/benchmark_reporter.py
-
-### Targets:
-- Clear winner identification
-- Threshold validation (MRR >= 0.75, NDCG >= 0.80)
-- Structured output for automation
-```
-
----
-
-## After Reporter: Run Actual Benchmarks
+## Next Task: Run Actual Benchmarks
 
 ```
 Run the benchmark framework to collect baseline metrics.
 
 ## Prerequisites
-Benchmark runner and reporter must be complete.
+Benchmark runner and reporter are now complete (337 tests).
 
 ### Tasks:
 1. Create a benchmark script: openmemory/api/benchmarks/run_benchmarks.py
@@ -89,6 +49,11 @@ Benchmark runner and reporter must be complete.
 - MRR, NDCG, P95 latency per embedding model
 - Decision matrix scores for Tantivy vs OpenSearch
 - Winner recommendation with rationale
+
+### Key Files to Reference:
+- Benchmark runner: openmemory/api/benchmarks/runner/benchmark_runner.py
+- Benchmark reporter: openmemory/api/benchmarks/reporter/benchmark_reporter.py
+- Results dataclasses: openmemory/api/benchmarks/runner/results.py
 ```
 
 ---
@@ -165,7 +130,7 @@ openmemory/api/benchmarks/
 │   ├── tests/
 │   ├── benchmark_runner.py
 │   └── results.py
-└── reporter/              # [NEXT] Report generation
+└── reporter/              # ✅ Complete (52 tests)
     ├── tests/
     └── benchmark_reporter.py
 ```
