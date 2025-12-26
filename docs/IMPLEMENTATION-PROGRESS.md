@@ -37,16 +37,18 @@
 - [x] Implement decision matrix (criteria + evaluator)
 - [x] Write concrete adapter tests (23 tests)
 - [x] Implement Qwen3, Nomic, Gemini adapters with factory
-- [ ] Create CodeSearchNet dataset loader
+- [x] Write CodeSearchNet dataset loader tests (37 tests)
+- [x] Implement CodeSearchNet dataset loader
 - [ ] Implement lexical backend interface
 - [ ] Create benchmark runner and reporter
 - [ ] Run benchmarks and collect baselines
 
-**Total Tests: 134 passing**
+**Total Tests: 171 passing**
 
 **Git Commits:**
 - `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
 - `cac96f6a` feat(benchmarks): add concrete embedder adapters
+- `1c4ddc13` feat(benchmarks): add CodeSearchNet dataset loader
 
 ---
 
@@ -297,7 +299,14 @@ Needed CODE_* namespace (Code Graph):
 ## Test Results Log
 
 ```
-No tests run yet
+2025-12-26: 171 tests passing (unit tests, excluding 2 integration tests)
+- MRR metric: 17 tests
+- NDCG metric: 19 tests
+- Latency tracker: 20 tests
+- Embedder adapter interface: 22 tests
+- Lexical decision matrix: 33 tests
+- Concrete adapters (Qwen3, Nomic, Gemini): 23 tests
+- CodeSearchNet dataset loader: 37 tests
 ```
 
 ---
@@ -312,5 +321,6 @@ To be populated after first commit
 
 ## Notes for Next Session
 
-- Continue from Phase 0 discovery
-- Review existing implementations before adding new code
+- Next task: Implement lexical backend interface (Tantivy vs OpenSearch)
+- Then: Create benchmark runner to orchestrate model comparisons
+- Finally: Create benchmark reporter to generate comparison reports
