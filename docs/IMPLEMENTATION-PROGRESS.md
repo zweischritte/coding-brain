@@ -35,12 +35,18 @@
 - [x] Implement embedder adapter base class
 - [x] Write lexical decision matrix tests (33 tests)
 - [x] Implement decision matrix (criteria + evaluator)
-- [ ] Implement concrete adapters (Qwen3, Nomic, Gemini)
+- [x] Write concrete adapter tests (23 tests)
+- [x] Implement Qwen3, Nomic, Gemini adapters with factory
 - [ ] Create CodeSearchNet dataset loader
 - [ ] Implement lexical backend interface
+- [ ] Create benchmark runner and reporter
 - [ ] Run benchmarks and collect baselines
 
-**Total Tests: 111 passing**
+**Total Tests: 134 passing**
+
+**Git Commits:**
+- `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
+- `cac96f6a` feat(benchmarks): add concrete embedder adapters
 
 ---
 
