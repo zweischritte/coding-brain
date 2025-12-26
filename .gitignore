@@ -191,7 +191,7 @@ testing.ipynb
 .cursor/rules/openmemory.mdc
 
 # Local history backups
-.history/
+# .history/
 
 # Neo4j local installation
 # neo4j/

@@ -1,0 +1,1046 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "docs/mcp/schema/v1/tools.schema.json",
+  "title": "MCP Tool Schemas",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "search_code_semantic": { "$ref": "#/$defs/SearchTool" },
+    "search_code_lexical": { "$ref": "#/$defs/SearchTool" },
+    "search_code_hybrid": { "$ref": "#/$defs/SearchTool" },
+    "search_by_signature": { "$ref": "#/$defs/SearchBySignatureTool" },
+    "find_similar_code": { "$ref": "#/$defs/SimilarCodeTool" },
+    "get_symbol_definition": { "$ref": "#/$defs/SymbolDefinitionTool" },
+    "find_callers": { "$ref": "#/$defs/CallGraphTool" },
+    "find_callees": { "$ref": "#/$defs/CallGraphTool" },
+    "find_implementations": { "$ref": "#/$defs/ImplementationsTool" },
+    "find_type_definition": { "$ref": "#/$defs/TypeDefinitionTool" },
+    "inheritance_tree": { "$ref": "#/$defs/InheritanceTool" },
+    "dependency_graph": { "$ref": "#/$defs/DependencyTool" },
+    "impact_analysis": { "$ref": "#/$defs/ImpactTool" },
+    "get_symbol_hierarchy": { "$ref": "#/$defs/SymbolHierarchyTool" },
+    "find_tests_for_symbol": { "$ref": "#/$defs/TestsForSymbolTool" },
+    "get_recent_changes": { "$ref": "#/$defs/RecentChangesTool" },
+    "explain_code_context": { "$ref": "#/$defs/ExplainCodeContextTool" },
+    "export_code_graph": { "$ref": "#/$defs/ExportGraphTool" },
+    "export_call_graph": { "$ref": "#/$defs/ExportCallGraphTool" },
+    "get_project_conventions": { "$ref": "#/$defs/GetProjectConventionsTool" },
+    "register_repository": { "$ref": "#/$defs/RegisterRepoTool" },
+    "unregister_repository": { "$ref": "#/$defs/UnregisterRepoTool" },
+    "trigger_reindex": { "$ref": "#/$defs/TriggerReindexTool" },
+    "get_index_status": { "$ref": "#/$defs/GetIndexStatusTool" },
+    "system_health": { "$ref": "#/$defs/SystemHealthTool" },
+    "validate_input": { "$ref": "#/$defs/ValidateInputTool" },
+    "get_audit_events": { "$ref": "#/$defs/GetAuditEventsTool" },
+    "add_memory": { "$ref": "#/$defs/AddMemoryTool" },
+    "search_memories": { "$ref": "#/$defs/SearchMemoriesTool" },
+    "update_memory": { "$ref": "#/$defs/UpdateMemoryTool" },
+    "delete_memory": { "$ref": "#/$defs/DeleteMemoryTool" },
+    "create_adr": { "$ref": "#/$defs/CreateAdrTool" },
+    "update_adr": { "$ref": "#/$defs/UpdateAdrTool" },
+    "search_adr": { "$ref": "#/$defs/SearchAdrTool" },
+    "list_adr": { "$ref": "#/$defs/ListAdrTool" },
+    "get_adr_by_id": { "$ref": "#/$defs/GetAdrByIdTool" },
+    "find_recurring_patterns": { "$ref": "#/$defs/FindRecurringPatternsTool" },
+    "detect_code_smells": { "$ref": "#/$defs/DetectCodeSmellsTool" },
+    "get_similar_past_issues": { "$ref": "#/$defs/GetSimilarPastIssuesTool" },
+    "get_test_coverage": { "$ref": "#/$defs/GetTestCoverageTool" }
+  },
+  "$defs": {
+    "EmptyInput": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "RepoRef": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "ScopeFilter": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["session", "user", "team", "project", "org", "enterprise"]
+        },
+        "org_id": { "type": "string" },
+        "enterprise_id": { "type": "string" },
+        "project_id": { "type": "string" },
+        "team_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "geo_scope": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "Pagination": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "offset": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "CursorPagination": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "cursor": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "CodeLocation": {
+      "type": "object",
+      "properties": {
+        "file_path": { "type": "string" },
+        "line_start": { "type": "integer", "minimum": 1 },
+        "line_end": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["file_path"],
+      "additionalProperties": false
+    },
+    "CodeSymbol": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "symbol_name": { "type": "string" },
+        "symbol_type": { "type": "string" },
+        "signature": { "type": "string" },
+        "language": { "type": "string" },
+        "location": { "$ref": "#/$defs/CodeLocation" }
+      },
+      "required": ["symbol_name", "symbol_type"],
+      "additionalProperties": false
+    },
+    "CodeHit": {
+      "type": "object",
+      "properties": {
+        "symbol": { "$ref": "#/$defs/CodeSymbol" },
+        "score": { "type": "number" },
+        "snippet": { "type": "string" },
+        "source": { "type": "string", "enum": ["vector", "lexical", "graph", "hybrid"] },
+        "repo_id": { "type": "string" }
+      },
+      "required": ["symbol", "score", "source"],
+      "additionalProperties": false
+    },
+    "GraphNode": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "properties": { "type": "object" }
+      },
+      "required": ["id", "type"],
+      "additionalProperties": false
+    },
+    "GraphEdge": {
+      "type": "object",
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "type": { "type": "string" },
+        "confidence": { "type": "string", "enum": ["definite", "probable", "possible"] },
+        "properties": { "type": "object" }
+      },
+      "required": ["from", "to", "type"],
+      "additionalProperties": false
+    },
+    "ResponseMeta": {
+      "type": "object",
+      "properties": {
+        "request_id": { "type": "string" },
+        "degraded_mode": { "type": "boolean" },
+        "missing_sources": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["vector", "lexical", "graph"] }
+        },
+        "confidence_adjustment": { "type": "number" },
+        "next_cursor": { "type": "string" }
+      },
+      "required": ["request_id"],
+      "additionalProperties": false
+    },
+    "SearchInput": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "minLength": 1 },
+        "repo_id": { "type": "string" },
+        "language": { "type": "string" },
+        "scope": { "$ref": "#/$defs/ScopeFilter" },
+        "pagination": { "$ref": "#/$defs/Pagination" },
+        "cursor_pagination": { "$ref": "#/$defs/CursorPagination" }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "SearchOutput": {
+      "type": "object",
+      "properties": {
+        "results": { "type": "array", "items": { "$ref": "#/$defs/CodeHit" } },
+        "next_cursor": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["results", "meta"],
+      "additionalProperties": false
+    },
+    "SearchTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SearchInput" },
+        "output": { "$ref": "#/$defs/SearchOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SignatureSearchInput": {
+      "type": "object",
+      "properties": {
+        "signature": { "type": "string", "minLength": 1 },
+        "repo_id": { "type": "string" },
+        "language": { "type": "string" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["signature"],
+      "additionalProperties": false
+    },
+    "SearchBySignatureTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SignatureSearchInput" },
+        "output": { "$ref": "#/$defs/SearchOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SimilarCodeInput": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "repo_id": { "type": "string" },
+        "language": { "type": "string" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["code"],
+      "additionalProperties": false
+    },
+    "SimilarCodeTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SimilarCodeInput" },
+        "output": { "$ref": "#/$defs/SearchOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SymbolLookupInput": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "symbol_name": { "type": "string" },
+        "file_path": { "type": "string" },
+        "repo_id": { "type": "string" }
+      },
+      "anyOf": [
+        { "required": ["symbol_id"] },
+        { "required": ["symbol_name"] }
+      ],
+      "additionalProperties": false
+    },
+    "SymbolDefinitionOutput": {
+      "type": "object",
+      "properties": {
+        "symbol": { "$ref": "#/$defs/CodeSymbol" },
+        "snippet": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["symbol", "meta"],
+      "additionalProperties": false
+    },
+    "SymbolDefinitionTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SymbolLookupInput" },
+        "output": { "$ref": "#/$defs/SymbolDefinitionOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "GraphOutput": {
+      "type": "object",
+      "properties": {
+        "nodes": { "type": "array", "items": { "$ref": "#/$defs/GraphNode" } },
+        "edges": { "type": "array", "items": { "$ref": "#/$defs/GraphEdge" } },
+        "next_cursor": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["nodes", "edges", "meta"],
+      "additionalProperties": false
+    },
+    "CallGraphInput": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "symbol_name": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 5 }
+      },
+      "anyOf": [
+        { "required": ["symbol_id"] },
+        { "required": ["symbol_name"] }
+      ],
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "CallGraphTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/CallGraphInput" },
+        "output": { "$ref": "#/$defs/GraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ImplementationsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SymbolLookupInput" },
+        "output": { "$ref": "#/$defs/GraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "TypeDefinitionTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SymbolLookupInput" },
+        "output": { "$ref": "#/$defs/GraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "InheritanceInput": {
+      "type": "object",
+      "properties": {
+        "class_name": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 5 }
+      },
+      "required": ["class_name", "repo_id"],
+      "additionalProperties": false
+    },
+    "InheritanceTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/InheritanceInput" },
+        "output": { "$ref": "#/$defs/GraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "DependencyInput": {
+      "type": "object",
+      "properties": {
+        "file_path": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 5 }
+      },
+      "required": ["file_path", "repo_id"],
+      "additionalProperties": false
+    },
+    "DependencyTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/DependencyInput" },
+        "output": { "$ref": "#/$defs/GraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ImpactInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "changed_files": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["repo_id", "changed_files"],
+      "additionalProperties": false
+    },
+    "ImpactOutput": {
+      "type": "object",
+      "properties": {
+        "affected_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "file_path": { "type": "string" },
+              "reason": { "type": "string" },
+              "confidence": { "type": "number" }
+            },
+            "required": ["file_path", "reason", "confidence"],
+            "additionalProperties": false
+          }
+        },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["affected_files", "meta"],
+      "additionalProperties": false
+    },
+    "ImpactTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ImpactInput" },
+        "output": { "$ref": "#/$defs/ImpactOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SymbolHierarchyInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "path_prefix": { "type": "string" },
+        "language": { "type": "string" },
+        "cursor_pagination": { "$ref": "#/$defs/CursorPagination" }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "SymbolHierarchyTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SymbolHierarchyInput" },
+        "output": { "$ref": "#/$defs/GraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "TestsForSymbolTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SymbolLookupInput" },
+        "output": { "$ref": "#/$defs/SearchOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "RecentChangesInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "path_prefix": { "type": "string" },
+        "since": { "type": "string", "format": "date-time" },
+        "until": { "type": "string", "format": "date-time" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "RecentChangesOutput": {
+      "type": "object",
+      "properties": {
+        "changes": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["changes", "meta"],
+      "additionalProperties": false
+    },
+    "RecentChangesTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/RecentChangesInput" },
+        "output": { "$ref": "#/$defs/RecentChangesOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ExplainCodeContextInput": {
+      "type": "object",
+      "properties": {
+        "symbol_id": { "type": "string" },
+        "file_path": { "type": "string" },
+        "repo_id": { "type": "string" }
+      },
+      "anyOf": [
+        { "required": ["symbol_id"] },
+        { "required": ["file_path"] }
+      ],
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "ExplainCodeContextOutput": {
+      "type": "object",
+      "properties": {
+        "summary": { "type": "string" },
+        "related_symbols": { "type": "array", "items": { "$ref": "#/$defs/CodeSymbol" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["summary", "meta"],
+      "additionalProperties": false
+    },
+    "ExplainCodeContextTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ExplainCodeContextInput" },
+        "output": { "$ref": "#/$defs/ExplainCodeContextOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ExportGraphInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "format": { "type": "string", "enum": ["json", "graphml"] }
+      },
+      "required": ["repo_id", "format"],
+      "additionalProperties": false
+    },
+    "ExportCallGraphInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "symbol_id": { "type": "string" },
+        "symbol_name": { "type": "string" },
+        "depth": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "format": { "type": "string", "enum": ["json", "graphml"] }
+      },
+      "anyOf": [
+        { "required": ["symbol_id"] },
+        { "required": ["symbol_name"] }
+      ],
+      "required": ["repo_id", "format"],
+      "additionalProperties": false
+    },
+    "ExportGraphOutput": {
+      "type": "object",
+      "properties": {
+        "format": { "type": "string" },
+        "data": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["format", "data", "meta"],
+      "additionalProperties": false
+    },
+    "ExportGraphTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ExportGraphInput" },
+        "output": { "$ref": "#/$defs/ExportGraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ExportCallGraphTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ExportCallGraphInput" },
+        "output": { "$ref": "#/$defs/ExportGraphOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ProjectConventionsInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "ProjectConventionsOutput": {
+      "type": "object",
+      "properties": {
+        "agents_md": { "type": "string" },
+        "claude_md": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["meta"],
+      "additionalProperties": false
+    },
+    "GetProjectConventionsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ProjectConventionsInput" },
+        "output": { "$ref": "#/$defs/ProjectConventionsOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "RegisterRepoInput": {
+      "type": "object",
+      "properties": {
+        "repo_name": { "type": "string" },
+        "root_path": { "type": "string" },
+        "default_branch": { "type": "string" },
+        "languages": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["repo_name", "root_path"],
+      "additionalProperties": false
+    },
+    "RepoStatusOutput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "status": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "RegisterRepoTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/RegisterRepoInput" },
+        "output": { "$ref": "#/$defs/RepoStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "UnregisterRepoTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/RepoRef" },
+        "output": { "$ref": "#/$defs/RepoStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "TriggerReindexInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "mode": { "type": "string", "enum": ["full", "incremental"] }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "TriggerReindexTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/TriggerReindexInput" },
+        "output": { "$ref": "#/$defs/RepoStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "IndexStatusOutput": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "last_indexed_at": { "type": "string", "format": "date-time" },
+        "error_count": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "GetIndexStatusTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/RepoRef" },
+        "output": { "$ref": "#/$defs/IndexStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SystemHealthOutput": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "error"] },
+        "services": { "type": "object" }
+      },
+      "required": ["status", "services"],
+      "additionalProperties": false
+    },
+    "SystemHealthTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/EmptyInput" },
+        "output": { "$ref": "#/$defs/SystemHealthOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ValidateInputInput": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "context": { "type": "string" }
+      },
+      "required": ["text"],
+      "additionalProperties": false
+    },
+    "ValidateInputOutput": {
+      "type": "object",
+      "properties": {
+        "risk_score": { "type": "number" },
+        "findings": { "type": "array", "items": { "type": "string" } },
+        "allowed": { "type": "boolean" }
+      },
+      "required": ["risk_score", "allowed"],
+      "additionalProperties": false
+    },
+    "ValidateInputTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ValidateInputInput" },
+        "output": { "$ref": "#/$defs/ValidateInputOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "AuditEventsInput": {
+      "type": "object",
+      "properties": {
+        "since": { "type": "string", "format": "date-time" },
+        "until": { "type": "string", "format": "date-time" },
+        "cursor_pagination": { "$ref": "#/$defs/CursorPagination" }
+      },
+      "additionalProperties": false
+    },
+    "AuditEventsOutput": {
+      "type": "object",
+      "properties": {
+        "events": { "type": "array", "items": { "type": "object" } },
+        "next_cursor": { "type": "string" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["events", "meta"],
+      "additionalProperties": false
+    },
+    "GetAuditEventsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/AuditEventsInput" },
+        "output": { "$ref": "#/$defs/AuditEventsOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "AddMemoryInput": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "scope": { "$ref": "#/$defs/ScopeFilter" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["text"],
+      "additionalProperties": false
+    },
+    "MemoryIdOutput": {
+      "type": "object",
+      "properties": {
+        "memory_id": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["memory_id"],
+      "additionalProperties": false
+    },
+    "AddMemoryTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/AddMemoryInput" },
+        "output": { "$ref": "#/$defs/MemoryIdOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SearchMemoriesInput": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "scope": { "$ref": "#/$defs/ScopeFilter" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "SearchMemoriesOutput": {
+      "type": "object",
+      "properties": {
+        "results": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["results", "meta"],
+      "additionalProperties": false
+    },
+    "SearchMemoriesTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SearchMemoriesInput" },
+        "output": { "$ref": "#/$defs/SearchMemoriesOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "UpdateMemoryInput": {
+      "type": "object",
+      "properties": {
+        "memory_id": { "type": "string" },
+        "text": { "type": "string" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["memory_id"],
+      "additionalProperties": false
+    },
+    "DeleteMemoryInput": {
+      "type": "object",
+      "properties": {
+        "memory_id": { "type": "string" }
+      },
+      "required": ["memory_id"],
+      "additionalProperties": false
+    },
+    "UpdateMemoryTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/UpdateMemoryInput" },
+        "output": { "$ref": "#/$defs/RepoStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "DeleteMemoryTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/DeleteMemoryInput" },
+        "output": { "$ref": "#/$defs/RepoStatusOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "CreateAdrInput": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "status": { "type": "string", "enum": ["proposed", "accepted", "deprecated"] },
+        "context": { "type": "string" },
+        "decision": { "type": "string" },
+        "consequences": { "type": "array", "items": { "type": "string" } },
+        "related_code": { "type": "array", "items": { "type": "string" } },
+        "scope": { "$ref": "#/$defs/ScopeFilter" }
+      },
+      "required": ["title", "status", "decision"],
+      "additionalProperties": false
+    },
+    "AdrIdOutput": {
+      "type": "object",
+      "properties": {
+        "adr_id": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["adr_id"],
+      "additionalProperties": false
+    },
+    "CreateAdrTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/CreateAdrInput" },
+        "output": { "$ref": "#/$defs/AdrIdOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "UpdateAdrInput": {
+      "type": "object",
+      "properties": {
+        "adr_id": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string", "enum": ["proposed", "accepted", "deprecated"] },
+        "context": { "type": "string" },
+        "decision": { "type": "string" },
+        "consequences": { "type": "array", "items": { "type": "string" } },
+        "related_code": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["adr_id"],
+      "additionalProperties": false
+    },
+    "UpdateAdrTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/UpdateAdrInput" },
+        "output": { "$ref": "#/$defs/AdrIdOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SearchAdrInput": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "scope": { "$ref": "#/$defs/ScopeFilter" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "AdrSearchOutput": {
+      "type": "object",
+      "properties": {
+        "results": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["results", "meta"],
+      "additionalProperties": false
+    },
+    "SearchAdrTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SearchAdrInput" },
+        "output": { "$ref": "#/$defs/AdrSearchOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "ListAdrTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/ScopeFilter" },
+        "output": { "$ref": "#/$defs/AdrSearchOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "GetAdrByIdInput": {
+      "type": "object",
+      "properties": {
+        "adr_id": { "type": "string" }
+      },
+      "required": ["adr_id"],
+      "additionalProperties": false
+    },
+    "AdrOutput": {
+      "type": "object",
+      "properties": {
+        "adr": { "type": "object" },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["adr", "meta"],
+      "additionalProperties": false
+    },
+    "GetAdrByIdTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/GetAdrByIdInput" },
+        "output": { "$ref": "#/$defs/AdrOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "FindRecurringPatternsInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "scope": { "$ref": "#/$defs/ScopeFilter" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "FindRecurringPatternsOutput": {
+      "type": "object",
+      "properties": {
+        "patterns": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["patterns", "meta"],
+      "additionalProperties": false
+    },
+    "FindRecurringPatternsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/FindRecurringPatternsInput" },
+        "output": { "$ref": "#/$defs/FindRecurringPatternsOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "DetectCodeSmellsInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "files": { "type": "array", "items": { "type": "string" } },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "DetectCodeSmellsOutput": {
+      "type": "object",
+      "properties": {
+        "issues": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["issues", "meta"],
+      "additionalProperties": false
+    },
+    "DetectCodeSmellsTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/DetectCodeSmellsInput" },
+        "output": { "$ref": "#/$defs/DetectCodeSmellsOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "TestCoverageInput": {
+      "type": "object",
+      "properties": {
+        "repo_id": { "type": "string" },
+        "path_prefix": { "type": "string" }
+      },
+      "required": ["repo_id"],
+      "additionalProperties": false
+    },
+    "TestCoverageOutput": {
+      "type": "object",
+      "properties": {
+        "coverage_percent": { "type": "number" },
+        "covered_files": { "type": "array", "items": { "type": "string" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["coverage_percent", "meta"],
+      "additionalProperties": false
+    },
+    "GetTestCoverageTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/TestCoverageInput" },
+        "output": { "$ref": "#/$defs/TestCoverageOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "SimilarPastIssuesInput": {
+      "type": "object",
+      "properties": {
+        "query": { "type": "string" },
+        "repo_id": { "type": "string" },
+        "scope": { "$ref": "#/$defs/ScopeFilter" },
+        "pagination": { "$ref": "#/$defs/Pagination" }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "SimilarPastIssuesOutput": {
+      "type": "object",
+      "properties": {
+        "issues": { "type": "array", "items": { "type": "object" } },
+        "meta": { "$ref": "#/$defs/ResponseMeta" }
+      },
+      "required": ["issues", "meta"],
+      "additionalProperties": false
+    },
+    "GetSimilarPastIssuesTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/SimilarPastIssuesInput" },
+        "output": { "$ref": "#/$defs/SimilarPastIssuesOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    }
+  }
+}
