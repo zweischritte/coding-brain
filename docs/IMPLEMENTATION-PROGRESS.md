@@ -40,15 +40,18 @@
 - [x] Write CodeSearchNet dataset loader tests (37 tests)
 - [x] Implement CodeSearchNet dataset loader
 - [x] Implement lexical backend interface (66 tests)
-- [ ] Create benchmark runner and reporter
+- [x] Create benchmark runner (48 tests)
+- [ ] Create benchmark reporter
 - [ ] Run benchmarks and collect baselines
 
-**Total Tests: 237 passing**
+**Total Tests: 285 passing**
 
 **Git Commits:**
 - `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
 - `cac96f6a` feat(benchmarks): add concrete embedder adapters
 - `1c4ddc13` feat(benchmarks): add CodeSearchNet dataset loader
+- `fcb569d4` feat(benchmarks): add lexical backend interface with Tantivy and OpenSearch adapters
+- `21df18eb` feat(benchmarks): add benchmark runner for model and backend comparisons
 
 ---
 
@@ -299,7 +302,7 @@ Needed CODE_* namespace (Code Graph):
 ## Test Results Log
 
 ```
-2025-12-26: 237 tests passing (unit tests, excluding 2 integration tests)
+2025-12-26: 285 tests passing (unit tests, excluding 4 integration tests)
 - MRR metric: 17 tests
 - NDCG metric: 19 tests
 - Latency tracker: 20 tests
@@ -308,6 +311,7 @@ Needed CODE_* namespace (Code Graph):
 - Concrete adapters (Qwen3, Nomic, Gemini): 23 tests
 - CodeSearchNet dataset loader: 37 tests
 - Lexical backend interface: 66 tests
+- Benchmark runner: 48 tests
 ```
 
 ---
@@ -322,6 +326,6 @@ To be populated after first commit
 
 ## Notes for Next Session
 
-- Next task: Implement lexical backend interface (Tantivy vs OpenSearch)
-- Then: Create benchmark runner to orchestrate model comparisons
-- Finally: Create benchmark reporter to generate comparison reports
+- Next task: Create benchmark reporter to generate comparison reports
+- Then: Run benchmarks and collect baselines
+- Finally: Begin Phase 0b (Security Baseline)
