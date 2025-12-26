@@ -80,6 +80,14 @@ test = [
     "pytest-mock>=3.14.0",
     "pytest-asyncio>=0.23.7",
 ]
+benchmark = [
+    "datasets>=3.0.0",  # For CodeSearchNet dataset loading
+]
+security = [
+    "authlib>=1.3.0",  # OAuth 2.1 / JWT handling per implementation plan
+    "cryptography>=42.0.0",  # For PKCE S256 and DPoP
+    "pyjwt>=2.8.0",  # JWT validation
+]
 dev = [
     "ruff>=0.6.5",
     "isort>=5.13.2",

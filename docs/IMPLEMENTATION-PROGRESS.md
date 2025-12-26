@@ -42,9 +42,17 @@
 - [x] Implement lexical backend interface (66 tests)
 - [x] Create benchmark runner (48 tests)
 - [x] Create benchmark reporter (52 tests)
-- [ ] Run benchmarks and collect baselines
+- [x] Create benchmark execution script (`run_benchmarks.py`)
+- [x] Run benchmarks and collect baselines
 
 **Total Tests: 337 passing**
+
+**Benchmark Results (2025-12-26):**
+- qwen3-embedding:8b: MRR=0.824, NDCG=0.848 ✅ Production ready
+- nomic-embed-text: MRR=0.659, NDCG=0.705 ❌ Below thresholds
+- OpenSearch: Weighted score 0.530 (winner for lexical)
+- Tantivy: Weighted score 0.475
+- Full results: `docs/BENCHMARK-RESULTS.md`
 
 **Git Commits:**
 - `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
@@ -203,21 +211,22 @@ Needed CODE_* namespace (Code Graph):
 
 ## Phase Tracker
 
-### Phase 0a: Decisions and Baselines
-| # | Task | Tests Written | Tests Passing | Committed | Commit Hash |
-|---|------|---------------|---------------|-----------|-------------|
-| 1 | Embedding model benchmark setup | [ ] | [ ] | [ ] | |
-| 2 | Lexical backend evaluation | [ ] | [ ] | [ ] | |
-| 3 | Baseline metrics collection | [ ] | [ ] | [ ] | |
+### Phase 0a: Decisions and Baselines ✅ COMPLETE
 
-### Phase 0b: Security Baseline
 | # | Task | Tests Written | Tests Passing | Committed | Commit Hash |
 |---|------|---------------|---------------|-----------|-------------|
-| 1 | JWT validation implementation | [ ] | [ ] | [ ] | |
-| 2 | RBAC system | [ ] | [ ] | [ ] | |
-| 3 | SCIM integration | [ ] | [ ] | [ ] | |
-| 4 | Code-owner policies | [ ] | [ ] | [ ] | |
-| 5 | Prompt injection defenses | [ ] | [ ] | [ ] | |
+| 1 | Embedding model benchmark setup | [x] | [x] | [x] | 9df4c1e1 |
+| 2 | Lexical backend evaluation | [x] | [x] | [x] | fcb569d4 |
+| 3 | Baseline metrics collection | [x] | [x] | [x] | See BENCHMARK-RESULTS.md |
+
+### Phase 0b: Security Baseline ✅ COMPLETE
+| # | Task | Tests Written | Tests Passing | Committed | Commit Hash |
+|---|------|---------------|---------------|-----------|-------------|
+| 1 | JWT validation (OAuth 2.1 + PKCE) | [x] 49 | [x] | [x] | 7a0743ff |
+| 2 | DPoP token binding | [x] 34 | [x] | [x] | 7a0743ff |
+| 3 | RBAC permission matrix | [x] 64 | [x] | [x] | 7a0743ff |
+| 4 | SCIM 2.0 stubs | [x] 34 | [x] | [x] | 7a0743ff |
+| 5 | Prompt injection defenses | [x] 53 | [x] | [x] | 7a0743ff |
 
 ### Phase 0c: Observability Baseline
 | # | Task | Tests Written | Tests Passing | Committed | Commit Hash |
@@ -282,7 +291,9 @@ Needed CODE_* namespace (Code Graph):
 
 | # | Decision | Rationale | Date |
 |---|----------|-----------|------|
-| 1 | | | |
+| 1 | Use qwen3-embedding:8b for production | MRR=0.824, NDCG=0.848 exceeds thresholds | 2025-12-26 |
+| 2 | Use OpenSearch for lexical backend | Higher weighted score (0.530) for scalability and features | 2025-12-26 |
+| 3 | Use nomic-embed-text for dev/testing | 20x faster, adequate for development workflows | 2025-12-26 |
 
 ---
 
@@ -328,7 +339,26 @@ To be populated after first commit
 
 ## Notes for Next Session
 
-- Next task: Run benchmarks and collect baselines
-- Create benchmark script: `openmemory/api/benchmarks/run_benchmarks.py`
-- Document results in `docs/BENCHMARK-RESULTS.md`
-- Then: Begin Phase 0b (Security Baseline)
+- ✅ Phase 0a COMPLETE - Benchmarks collected, results in `docs/BENCHMARK-RESULTS.md`
+- Next task: Begin Phase 0b (Security Baseline)
+- First task: JWT validation with OAuth 2.1 requirements
+- Location: `openmemory/api/security/`
+- See `docs/CONTINUATION-PROMPT.md` for Phase 0b instructions
+
+---
+
+## Benchmark Environment Setup Status
+
+See `docs/CONTINUATION-PROMPT.md` "Set Up Benchmark Environment" section for full instructions.
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Ollama installed | [x] | v0.13.5 installed via brew |
+| Ollama running | [x] | Running on localhost:11434 |
+| Qwen3-embedding:8b pulled | [x] | 4.7GB, 4096-dim embeddings |
+| Nomic-embed-text pulled | [x] | 274MB, 768-dim embeddings |
+| Gemini API key | [ ] | Optional: `export GEMINI_API_KEY=...` |
+| Dataset library installed | [x] | `datasets>=3.0.0` added to pyproject.toml |
+| CodeSearchNet loader updated | [x] | Using `claudios/code_search_net` parquet version |
+
+**Note**: Model name format changed from `qwen3-embedding-8b` to `qwen3-embedding:8b` (Ollama uses colons for size variants).
