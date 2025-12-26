@@ -1,6 +1,6 @@
 """Dataset loaders for benchmarking."""
 
-from benchmarks.embeddings.datasets.codesearchnet import (
+from openmemory.api.benchmarks.embeddings.datasets.codesearchnet import (
     CodeSearchNetLoader,
     CodeSearchNetSample,
 )

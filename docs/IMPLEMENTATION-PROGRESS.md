@@ -228,13 +228,14 @@ Needed CODE_* namespace (Code Graph):
 | 4 | SCIM 2.0 stubs | [x] 34 | [x] | [x] | 7a0743ff |
 | 5 | Prompt injection defenses | [x] 53 | [x] | [x] | 7a0743ff |
 
-### Phase 0c: Observability Baseline
+### Phase 0c: Observability Baseline ✅ COMPLETE
+
 | # | Task | Tests Written | Tests Passing | Committed | Commit Hash |
 |---|------|---------------|---------------|-----------|-------------|
-| 1 | OpenTelemetry tracing | [ ] | [ ] | [ ] | |
-| 2 | Structured logging | [ ] | [ ] | [ ] | |
-| 3 | Audit hooks | [ ] | [ ] | [ ] | |
-| 4 | SLO dashboards | [ ] | [ ] | [ ] | |
+| 1 | OpenTelemetry tracing | [x] 70 | [x] | [x] | pending |
+| 2 | Structured logging | [x] 49 | [x] | [x] | pending |
+| 3 | Audit hooks | [x] 51 | [x] | [x] | pending |
+| 4 | SLO dashboards | [x] 43 | [x] | [x] | pending |
 
 ### Phase 1: Code Indexing Core
 | # | Task | Tests Written | Tests Passing | Committed | Commit Hash |
@@ -314,7 +315,7 @@ Needed CODE_* namespace (Code Graph):
 ## Test Results Log
 
 ```
-2025-12-26: 337 tests passing (unit tests, excluding 4 integration tests)
+2025-12-26: 337 tests passing (Phase 0a - Benchmarks)
 - MRR metric: 17 tests
 - NDCG metric: 19 tests
 - Latency tracker: 20 tests
@@ -325,6 +326,21 @@ Needed CODE_* namespace (Code Graph):
 - Lexical backend interface: 66 tests
 - Benchmark runner: 48 tests
 - Benchmark reporter: 52 tests
+
+2025-12-26: 234 tests passing (Phase 0b - Security)
+- JWT validation: 49 tests
+- DPoP token binding: 34 tests
+- RBAC permission matrix: 64 tests
+- SCIM 2.0 stubs: 34 tests
+- Prompt injection defenses: 53 tests
+
+2025-12-26: 213 tests passing (Phase 0c - Observability)
+- OpenTelemetry tracing: 70 tests
+- Structured logging: 49 tests
+- Audit hooks: 51 tests
+- SLO tracking: 43 tests
+
+Total: 784 tests passing (Phase 0 complete)
 ```
 
 ---
@@ -340,10 +356,13 @@ To be populated after first commit
 ## Notes for Next Session
 
 - ✅ Phase 0a COMPLETE - Benchmarks collected, results in `docs/BENCHMARK-RESULTS.md`
-- Next task: Begin Phase 0b (Security Baseline)
-- First task: JWT validation with OAuth 2.1 requirements
-- Location: `openmemory/api/security/`
-- See `docs/CONTINUATION-PROMPT.md` for Phase 0b instructions
+- ✅ Phase 0b COMPLETE - Security baseline with 234 tests
+- ✅ Phase 0c COMPLETE - Observability baseline with 213 tests
+- **Phase 0 COMPLETE** - Total 784 tests passing
+- Next task: Begin Phase 1 (Code Indexing Core)
+- First task: AST parsing with Tree-sitter (Python first)
+- Location: `openmemory/api/indexing/`
+- See v7 plan section 6 for Phase 1 details
 
 ---
 

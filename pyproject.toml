@@ -88,6 +88,13 @@ security = [
     "cryptography>=42.0.0",  # For PKCE S256 and DPoP
     "pyjwt>=2.8.0",  # JWT validation
 ]
+observability = [
+    "opentelemetry-api>=1.37.0",  # OpenTelemetry tracing API
+    "opentelemetry-sdk>=1.37.0",  # OpenTelemetry SDK
+    "opentelemetry-exporter-otlp>=1.37.0",  # OTLP exporter for traces
+    "opentelemetry-instrumentation>=0.48b0",  # Instrumentation framework
+    "structlog>=24.0.0",  # Structured logging
+]
 dev = [
     "ruff>=0.6.5",
     "isort>=5.13.2",

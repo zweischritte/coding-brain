@@ -81,8 +81,8 @@ class TestQwen3Adapter:
         """Mock Ollama client for Qwen3."""
         with patch("benchmarks.embeddings.adapters.ollama.Client") as mock_client_class:
             mock_client = MagicMock()
-            mock_client.list.return_value = {"models": [{"name": "qwen3-embedding-8b"}]}
-            mock_client.embeddings.return_value = {"embedding": [0.1] * 1024}
+            mock_client.list.return_value = {"models": [{"name": "qwen3-embedding:8b"}]}
+            mock_client.embeddings.return_value = {"embedding": [0.1] * 4096}
             mock_client_class.return_value = mock_client
             yield mock_client
 
@@ -91,14 +91,14 @@ class TestQwen3Adapter:
         from benchmarks.embeddings.adapters.qwen3 import Qwen3_8BAdapter
 
         adapter = Qwen3_8BAdapter()
-        assert adapter.info.model_name == "qwen3-embedding-8b"
+        assert adapter.info.model_name == "qwen3-embedding:8b"
 
     def test_qwen3_8b_has_correct_dimensions(self, mock_ollama_client):
-        """Qwen3-8B should have 1024 dimensions."""
+        """Qwen3-8B should have 4096 dimensions."""
         from benchmarks.embeddings.adapters.qwen3 import Qwen3_8BAdapter
 
         adapter = Qwen3_8BAdapter()
-        assert adapter.info.dimensions == 1024
+        assert adapter.info.dimensions == 4096
 
     def test_qwen3_8b_is_code_optimized(self, mock_ollama_client):
         """Qwen3-8B should be marked as code optimized."""
@@ -109,13 +109,13 @@ class TestQwen3Adapter:
 
     def test_qwen3_06b_adapter_exists(self, mock_ollama_client):
         """Qwen3_06BAdapter (fallback) should be importable."""
-        mock_ollama_client.list.return_value = {"models": [{"name": "qwen3-embedding-0.6b"}]}
+        mock_ollama_client.list.return_value = {"models": [{"name": "qwen3-embedding:0.6b"}]}
         mock_ollama_client.embeddings.return_value = {"embedding": [0.1] * 1024}
 
         from benchmarks.embeddings.adapters.qwen3 import Qwen3_06BAdapter
 
         adapter = Qwen3_06BAdapter()
-        assert adapter.info.model_name == "qwen3-embedding-0.6b"
+        assert adapter.info.model_name == "qwen3-embedding:0.6b"
         assert adapter.info.dimensions == 1024
 
 
@@ -227,13 +227,13 @@ class TestAdapterFactory:
     def test_factory_creates_qwen3_8b(self):
         """Factory should create Qwen3_8BAdapter."""
         with patch("benchmarks.embeddings.adapters.ollama.Client") as mock:
-            mock.return_value.list.return_value = {"models": [{"name": "qwen3-embedding-8b"}]}
-            mock.return_value.embeddings.return_value = {"embedding": [0.1] * 1024}
+            mock.return_value.list.return_value = {"models": [{"name": "qwen3-embedding:8b"}]}
+            mock.return_value.embeddings.return_value = {"embedding": [0.1] * 4096}
 
             from benchmarks.embeddings.adapters import create_adapter
 
             adapter = create_adapter("qwen3-8b")
-            assert adapter.info.model_name == "qwen3-embedding-8b"
+            assert adapter.info.model_name == "qwen3-embedding:8b"
 
     def test_factory_creates_nomic(self):
         """Factory should create NomicCodeAdapter."""

@@ -170,11 +170,12 @@ class CodeSearchNetLoader:
                     "The 'datasets' library is required. "
                     "Install it with: pip install datasets"
                 )
+            # Use claudios/code_search_net parquet version since original
+            # code_search_net dataset script format is no longer supported
             self._dataset = load_dataset(
-                "code_search_net",
+                "claudios/code_search_net",
                 self.language,
                 cache_dir=self.cache_dir,
-                trust_remote_code=True,
             )
         return self._dataset
 

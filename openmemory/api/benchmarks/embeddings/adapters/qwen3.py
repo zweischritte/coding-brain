@@ -32,8 +32,8 @@ class Qwen3_8BAdapter(OllamaAdapter):
             base_url: Ollama server URL.
         """
         super().__init__(
-            model_name="qwen3-embedding-8b",
-            dimensions=1024,
+            model_name="qwen3-embedding:8b",
+            dimensions=4096,  # Qwen3-Embedding-8B outputs up to 4096 dims by default
             base_url=base_url,
             max_sequence_length=32768,
             is_code_optimized=True,
@@ -62,7 +62,7 @@ class Qwen3_06BAdapter(OllamaAdapter):
             base_url: Ollama server URL.
         """
         super().__init__(
-            model_name="qwen3-embedding-0.6b",
+            model_name="qwen3-embedding:0.6b",
             dimensions=1024,
             base_url=base_url,
             max_sequence_length=32768,
