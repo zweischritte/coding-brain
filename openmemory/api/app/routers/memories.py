@@ -847,15 +847,12 @@ async def filter_memories(
     if request.app_ids:
         query = query.filter(Memory.app_id.in_(request.app_ids))
 
-    # Apply vault/layer filters from metadata (SQLite uses json_extract)
+    # Apply vault/layer filters from indexed columns (database-agnostic)
+    # Note: Memory model has vault/layer as indexed columns for fast queries
     if request.vaults:
-        query = query.filter(
-            func.json_extract(Memory.metadata_, '$.vault').in_(request.vaults)
-        )
+        query = query.filter(Memory.vault.in_(request.vaults))
     if request.layers:
-        query = query.filter(
-            func.json_extract(Memory.metadata_, '$.layer').in_(request.layers)
-        )
+        query = query.filter(Memory.layer.in_(request.layers))
 
     # Add joins for app and categories
     query = query.outerjoin(App, Memory.app_id == App.id)

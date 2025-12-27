@@ -11,9 +11,22 @@ from sqlalchemy.orm import Session, joinedload
 
 router = APIRouter(prefix="/api/v1/apps", tags=["apps"])
 
+
 # Helper functions
-def get_app_or_404(db: Session, app_id: UUID) -> App:
-    app = db.query(App).filter(App.id == app_id).first()
+def get_user_from_principal(db: Session, principal: Principal) -> User:
+    """Get the User record for the authenticated principal."""
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+def get_app_or_404_for_user(db: Session, app_id: UUID, user: User) -> App:
+    """Get an app by ID, but only if it belongs to the specified user."""
+    app = db.query(App).filter(
+        App.id == app_id,
+        App.owner_id == user.id
+    ).first()
     if not app:
         raise HTTPException(status_code=404, detail="App not found")
     return app
@@ -30,7 +43,10 @@ async def list_apps(
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    # Create a subquery for memory counts
+    # Get user from JWT principal
+    user = get_user_from_principal(db, principal)
+
+    # Create a subquery for memory counts (only for this user's apps)
     memory_counts = db.query(
         Memory.app_id,
         func.count(Memory.id).label('memory_count')
@@ -44,11 +60,13 @@ async def list_apps(
         func.count(func.distinct(MemoryAccessLog.memory_id)).label('access_count')
     ).group_by(MemoryAccessLog.app_id).subquery()
 
-    # Base query
+    # Base query - FILTER BY OWNER_ID for tenant isolation
     query = db.query(
         App,
         func.coalesce(memory_counts.c.memory_count, 0).label('total_memories_created'),
         func.coalesce(access_counts.c.access_count, 0).label('total_memories_accessed')
+    ).filter(
+        App.owner_id == user.id  # Tenant isolation: only show user's own apps
     )
 
     # Join with subqueries
@@ -107,7 +125,9 @@ async def get_app_details(
     principal: Principal = Depends(require_scopes(Scope.APPS_READ)),
     db: Session = Depends(get_db)
 ):
-    app = get_app_or_404(db, app_id)
+    # Get user from JWT and verify app ownership
+    user = get_user_from_principal(db, principal)
+    app = get_app_or_404_for_user(db, app_id, user)
 
     # Get memory access statistics
     access_stats = db.query(
@@ -135,9 +155,13 @@ async def list_app_memories(
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    get_app_or_404(db, app_id)
+    # Verify user owns this app
+    user = get_user_from_principal(db, principal)
+    get_app_or_404_for_user(db, app_id, user)
+
     query = db.query(Memory).filter(
         Memory.app_id == app_id,
+        Memory.user_id == user.id,  # Double-check: only this user's memories
         Memory.state.in_([MemoryState.active, MemoryState.paused, MemoryState.archived])
     )
     # Add eager loading for categories
@@ -172,8 +196,11 @@ async def list_app_accessed_memories(
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
 ):
-    
-    # Get memories with access counts
+    # Verify user owns this app
+    user = get_user_from_principal(db, principal)
+    get_app_or_404_for_user(db, app_id, user)
+
+    # Get memories with access counts (only this user's memories)
     query = db.query(
         Memory,
         func.count(MemoryAccessLog.id).label("access_count")
@@ -181,7 +208,8 @@ async def list_app_accessed_memories(
         MemoryAccessLog,
         Memory.id == MemoryAccessLog.memory_id
     ).filter(
-        MemoryAccessLog.app_id == app_id
+        MemoryAccessLog.app_id == app_id,
+        Memory.user_id == user.id  # Tenant isolation
     ).group_by(
         Memory.id
     ).order_by(
@@ -224,7 +252,10 @@ async def update_app_details(
     principal: Principal = Depends(require_scopes(Scope.APPS_WRITE)),
     db: Session = Depends(get_db)
 ):
-    app = get_app_or_404(db, app_id)
+    # Verify user owns this app before updating
+    user = get_user_from_principal(db, principal)
+    app = get_app_or_404_for_user(db, app_id, user)
+
     app.is_active = is_active
     db.commit()
     return {"status": "success", "message": "Updated app details successfully"}
