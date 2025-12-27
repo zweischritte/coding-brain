@@ -2,6 +2,7 @@
 
 **Plan**: `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md`
 **Progress**: `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md`
+**Template**: `docs/CONTINUATION-PROMPT-TEMPLATE.md` (use when creating next phase prompt)
 **Style**: STRICT TDD - Write failing tests first, then implement. Use subagents for exploration.
 
 ---
