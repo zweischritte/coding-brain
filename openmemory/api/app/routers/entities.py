@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User
+from app.security.dependencies import require_scopes
+from app.security.types import Principal, Scope
 
 router = APIRouter(prefix="/api/v1/entities", tags=["entities"])
 
@@ -35,32 +37,32 @@ router = APIRouter(prefix="/api/v1/entities", tags=["entities"])
 
 @router.get("/analytics/centrality")
 async def get_centrality(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
     """Get entity centrality rankings."""
     from app.graph.graph_ops import get_entity_centrality_from_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    centrality = get_entity_centrality_from_graph(user_id=user_id, limit=limit)
+    centrality = get_entity_centrality_from_graph(user_id=principal.user_id, limit=limit)
 
     return {"entities": centrality}
 
 
 @router.get("/analytics/pagerank")
 async def get_pagerank(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
     """Get entity PageRank scores (requires GDS)."""
     from app.graph.graph_ops import get_entity_pagerank, is_gds_available
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -70,7 +72,7 @@ async def get_pagerank(
             detail="Neo4j GDS not available for PageRank"
         )
 
-    pagerank = get_entity_pagerank(user_id=user_id, limit=limit)
+    pagerank = get_entity_pagerank(user_id=principal.user_id, limit=limit)
 
     return {"entities": pagerank}
 
@@ -81,7 +83,6 @@ async def get_pagerank(
 
 
 class NormalizeRequest(BaseModel):
-    user_id: str
     canonical: Optional[str] = None
     variants: Optional[List[str]] = None
     auto: bool = False
@@ -90,17 +91,17 @@ class NormalizeRequest(BaseModel):
 
 @router.get("/normalization/duplicates")
 async def find_duplicates(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     db: Session = Depends(get_db),
 ):
     """Find duplicate entity candidates."""
     from app.graph.graph_ops import find_duplicate_entities_in_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    duplicates = find_duplicate_entities_in_graph(user_id=user_id)
+    duplicates = find_duplicate_entities_in_graph(user_id=principal.user_id)
 
     return {"duplicates": duplicates}
 
@@ -108,17 +109,18 @@ async def find_duplicates(
 @router.post("/normalization/merge")
 async def normalize_entities_endpoint(
     request: NormalizeRequest,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_WRITE)),
     db: Session = Depends(get_db),
 ):
     """Merge duplicate entities."""
     from app.graph.graph_ops import normalize_entities_in_graph
 
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     result = normalize_entities_in_graph(
-        user_id=request.user_id,
+        user_id=principal.user_id,
         canonical_name=request.canonical,
         variant_names=request.variants,
         auto=request.auto,
@@ -130,19 +132,19 @@ async def normalize_entities_endpoint(
 
 @router.get("/normalization/semantic-duplicates")
 async def find_semantic_duplicates_endpoint(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     threshold: float = Query(default=0.7, ge=0.0, le=1.0),
     db: Session = Depends(get_db),
 ):
     """Find semantic entity duplicates using advanced detection."""
     from app.graph.graph_ops import find_semantic_duplicates
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     duplicates = await find_semantic_duplicates(
-        user_id=user_id,
+        user_id=principal.user_id,
         threshold=threshold,
     )
 
@@ -150,7 +152,6 @@ async def find_semantic_duplicates_endpoint(
 
 
 class SemanticNormalizeRequest(BaseModel):
-    user_id: str
     canonical: Optional[str] = None
     variants: Optional[List[str]] = None
     auto: bool = False
@@ -161,17 +162,18 @@ class SemanticNormalizeRequest(BaseModel):
 @router.post("/normalization/semantic-merge")
 async def normalize_semantic(
     request: SemanticNormalizeRequest,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_WRITE)),
     db: Session = Depends(get_db),
 ):
     """Merge entities using semantic normalization."""
     from app.graph.graph_ops import normalize_entities_semantic
 
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     result = await normalize_entities_semantic(
-        user_id=request.user_id,
+        user_id=principal.user_id,
         canonical=request.canonical,
         variants=request.variants,
         auto=request.auto,
@@ -191,19 +193,19 @@ async def normalize_semantic(
 async def find_path(
     entity_a: str,
     entity_b: str,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     max_hops: int = Query(default=6, ge=2, le=12),
     db: Session = Depends(get_db),
 ):
     """Find shortest path between two entities."""
     from app.graph.graph_ops import path_between_entities_in_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     path = path_between_entities_in_graph(
-        user_id=user_id,
+        user_id=principal.user_id,
         entity_a=entity_a,
         entity_b=entity_b,
         max_hops=max_hops,
@@ -222,7 +224,7 @@ async def find_path(
 
 @router.get("")
 async def list_entities(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     limit: int = Query(default=50, ge=1, le=200),
     min_memories: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
@@ -230,13 +232,13 @@ async def list_entities(
     """List all entities for a user with memory counts."""
     from app.graph.graph_ops import aggregate_memories_in_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Aggregate by entity to get list with counts
     entities = aggregate_memories_in_graph(
-        user_id=user_id,
+        user_id=principal.user_id,
         group_by="entity",
         limit=limit,
     )
@@ -255,7 +257,7 @@ async def list_entities(
 @router.get("/{entity_name}")
 async def get_entity(
     entity_name: str,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     db: Session = Depends(get_db),
 ):
     """Get detailed info for a single entity."""
@@ -265,14 +267,14 @@ async def get_entity(
         aggregate_memories_in_graph,
     )
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     # Get network (co-mentions)
     network = get_entity_network_from_graph(
         entity_name=entity_name,
-        user_id=user_id,
+        user_id=principal.user_id,
         min_count=1,
         limit=50,
     )
@@ -280,14 +282,14 @@ async def get_entity(
     # Get typed relations
     relations = get_entity_relations_from_graph(
         entity_name=entity_name,
-        user_id=user_id,
+        user_id=principal.user_id,
         direction="both",
         limit=50,
     )
 
     # Get memory count for this entity
     entities = aggregate_memories_in_graph(
-        user_id=user_id,
+        user_id=principal.user_id,
         group_by="entity",
         limit=1000,  # High limit to find the entity
     )
@@ -308,7 +310,7 @@ async def get_entity(
 @router.get("/{entity_name}/network")
 async def get_entity_network(
     entity_name: str,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     min_count: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -316,13 +318,13 @@ async def get_entity_network(
     """Get the co-mention network for an entity."""
     from app.graph.graph_ops import get_entity_network_from_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     network = get_entity_network_from_graph(
         entity_name=entity_name,
-        user_id=user_id,
+        user_id=principal.user_id,
         min_count=min_count,
         limit=limit,
     )
@@ -336,7 +338,7 @@ async def get_entity_network(
 @router.get("/{entity_name}/relations")
 async def get_entity_relations(
     entity_name: str,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     relation_types: Optional[str] = Query(default=None),
     category: Optional[str] = Query(default=None),
     direction: str = Query(default="both", pattern="^(outgoing|incoming|both)$"),
@@ -346,7 +348,7 @@ async def get_entity_relations(
     """Get typed relations for an entity."""
     from app.graph.graph_ops import get_entity_relations_from_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -357,7 +359,7 @@ async def get_entity_relations(
 
     relations = get_entity_relations_from_graph(
         entity_name=entity_name,
-        user_id=user_id,
+        user_id=principal.user_id,
         relation_types=types_list,
         category=category,
         direction=direction,
@@ -370,19 +372,19 @@ async def get_entity_relations(
 @router.get("/{entity_name}/memories")
 async def get_entity_memories(
     entity_name: str,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
     """Get memories associated with an entity."""
     from app.graph.graph_ops import retrieve_via_entity_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     memories = retrieve_via_entity_graph(
-        user_id=user_id,
+        user_id=principal.user_id,
         entity_names=[entity_name],
         limit=limit,
     )

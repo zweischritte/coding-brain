@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
-import io 
-import json 
-import gzip 
+import io
+import json
+import gzip
 import zipfile
 from typing import Optional, List, Dict, Any
 from uuid import UUID
@@ -14,9 +14,11 @@ from sqlalchemy import and_
 
 from app.database import get_db
 from app.models import (
-    User, App, Memory, MemoryState, Category, memory_categories, 
+    User, App, Memory, MemoryState, Category, memory_categories,
     MemoryStatusHistory, AccessControl
 )
+from app.security.dependencies import require_scopes
+from app.security.types import Principal, Scope
 from app.utils.memory import get_memory_client
 
 from uuid import uuid4
@@ -24,7 +26,6 @@ from uuid import uuid4
 router = APIRouter(prefix="/api/v1/backup", tags=["backup"])
 
 class ExportRequest(BaseModel):
-    user_id: str
     app_id: Optional[UUID] = None
     from_date: Optional[int] = None
     to_date: Optional[int] = None
@@ -49,15 +50,15 @@ def _parse_iso(dt: Optional[str]) -> Optional[datetime]:
         except Exception:
             return None
 
-def _export_sqlite(db: Session, req: ExportRequest) -> Dict[str, Any]: 
-    user = db.query(User).filter(User.user_id == req.user_id).first()
-    if not user: 
+def _export_sqlite(db: Session, user_id: str, req: ExportRequest) -> Dict[str, Any]:
+    user = db.query(User).filter(User.user_id == user_id).first()
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     time_filters = []
-    if req.from_date: 
+    if req.from_date:
         time_filters.append(Memory.created_at >= datetime.fromtimestamp(req.from_date, tz=UTC))
-    if req.to_date: 
+    if req.to_date:
         time_filters.append(Memory.created_at <= datetime.fromtimestamp(req.to_date, tz=UTC))
 
     mem_q = (
@@ -237,46 +238,50 @@ def _export_logical_memories_gz(
     return buf.getvalue()
 
 @router.post("/export")
-async def export_backup(req: ExportRequest, db: Session = Depends(get_db)): 
-    sqlite_payload = _export_sqlite(db=db, req=req)
+async def export_backup(
+    req: ExportRequest,
+    principal: Principal = Depends(require_scopes(Scope.BACKUP_READ)),
+    db: Session = Depends(get_db)
+):
+    sqlite_payload = _export_sqlite(db=db, user_id=principal.user_id, req=req)
     memories_blob = _export_logical_memories_gz(
-        db=db, 
-        user_id=req.user_id, 
-        app_id=req.app_id, 
-        from_date=req.from_date, 
+        db=db,
+        user_id=principal.user_id,
+        app_id=req.app_id,
+        from_date=req.from_date,
         to_date=req.to_date,
-
     )
 
-    #TODO: add vector store specific exports in future for speed 
+    #TODO: add vector store specific exports in future for speed
 
     zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf: 
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("memories.json", json.dumps(sqlite_payload, indent=2))
         zf.writestr("memories.jsonl.gz", memories_blob)
-        
+
     zip_buf.seek(0)
     return StreamingResponse(
-        zip_buf, 
-        media_type="application/zip", 
-        headers={"Content-Disposition": f'attachment; filename="memories_export_{req.user_id}.zip"'},
+        zip_buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="memories_export_{principal.user_id}.zip"'},
     )
 
 @router.post("/import")
 async def import_backup(
-    file: UploadFile = File(..., description="Zip with memories.json and memories.jsonl.gz"), 
-    user_id: str = Form(..., description="Import memories into this user_id"),
-    mode: str = Query("overwrite"), 
+    file: UploadFile = File(..., description="Zip with memories.json and memories.jsonl.gz"),
+    principal: Principal = Depends(require_scopes(Scope.BACKUP_WRITE)),
+    mode: str = Query("overwrite"),
     db: Session = Depends(get_db)
-): 
-    if not file.filename.endswith(".zip"): 
+):
+    if not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="Expected a zip file.")
-    
+
     if mode not in {"skip", "overwrite"}:
         raise HTTPException(status_code=400, detail="Invalid mode. Must be 'skip' or 'overwrite'.")
-    
+
+    user_id = principal.user_id
     user = db.query(User).filter(User.user_id == user_id).first()
-    if not user: 
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     content = await file.read()
