@@ -15,8 +15,21 @@ All stores inherit from BaseStore ABC and enforce tenant isolation.
 
 from app.stores.base import BaseStore
 from app.stores.memory_store import ScopedMemoryStore
+from app.stores.feedback_store import PostgresFeedbackStore, FeedbackEventModel
+from app.stores.experiment_store import (
+    PostgresExperimentStore,
+    ExperimentModel,
+    ExperimentStatusHistoryModel,
+    VariantAssignmentModel,
+)
 
 __all__ = [
     "BaseStore",
     "ScopedMemoryStore",
+    "PostgresFeedbackStore",
+    "FeedbackEventModel",
+    "PostgresExperimentStore",
+    "ExperimentModel",
+    "ExperimentStatusHistoryModel",
+    "VariantAssignmentModel",
 ]

@@ -13,14 +13,14 @@ Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Pha
 
 ## Summary
 
-Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 = 3,104 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 = 3,139 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
 Phase 1 Tests Added: 99 (security module core)
 Phase 2 Tests Added: 13 (Pydantic settings)
 Phase 3 Tests Added: 52 (19 tenant isolation + 33 migration verification)
-Phase 4 Tests Added: 25 (7 tenant_session + 16 ScopedMemoryStore + 2 contract)
+Phase 4 Tests Added: 60 (7 tenant_session + 16 ScopedMemoryStore + 2 contract + 17 FeedbackStore + 18 ExperimentStore)
 
 ---
 
@@ -229,8 +229,8 @@ Goal: Persistent stores with RLS, org_id scoping, and contract tests.
 | RLS migration (memories, apps) | 0 | 0 | Complete | pending |
 | ScopedMemoryStore (Postgres) + RLS | 16 | 16 | Complete | pending |
 | RLS integration tests | 13 | 0 | Skipped (SQLite) | pending |
-| FeedbackStore (Postgres) | 0 | 0 | Not Started | |
-| ExperimentStore (Postgres) | 0 | 0 | Not Started | |
+| FeedbackStore (Postgres) | 17 | 17 | Complete | pending |
+| ExperimentStore (Postgres) | 18 | 18 | Complete | pending |
 | EpisodicMemoryStore (Valkey) | 0 | 0 | Not Started | |
 | Neo4j SymbolStore/Registry/DependencyGraph | 0 | 0 | Not Started | |
 | Qdrant EmbeddingStore (per-model) | 0 | 0 | Not Started | |
@@ -243,7 +243,25 @@ Goal: Persistent stores with RLS, org_id scoping, and contract tests.
 - RLS migration `add_rls_policies.py` - Enables RLS on memories/apps tables
 - `BaseStore` ABC in `app/stores/base.py` - Abstract interface for all stores
 - `ScopedMemoryStore` in `app/stores/memory_store.py` - CRUD with tenant isolation
-- Tests: 25 tests (23 passing, 2 skipped for PostgreSQL)
+- `PostgresFeedbackStore` in `app/stores/feedback_store.py` - Feedback events with retention queries
+- `PostgresExperimentStore` in `app/stores/experiment_store.py` - A/B experiments with status history
+- Tests: 60 tests (58 passing, 2 skipped for PostgreSQL)
+
+**FeedbackStore Features:**
+
+- Append-only storage for FeedbackEvent
+- Query by user, org, query_id, experiment_id
+- Retention query support (30-day default)
+- Aggregate metrics (acceptance rate, outcome distribution, by-tool)
+- RRF weight optimization queries
+
+**ExperimentStore Features:**
+
+- Full CRUD for Experiment entities
+- Status history tracking with audit trail
+- Variant assignment persistence
+- Status transition timestamps (start_time, end_time)
+- Org-scoped tenant isolation
 
 ---
 
@@ -345,4 +363,5 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 4 prep | Start Phase 4: ScopedMemoryStore RLS tests | Created Phase 4 continuation prompt; explored codebase for store patterns; ready to write TDD tests |
 | 2025-12-27 | Phase 4 PRD complete | Start Feature 1: RLS Infrastructure tests | Created `docs/PRD-PHASE4-MULTITENANT-STORES.md` with 10 success criteria, 45+ test specs, 9 features; explored codebase via 3 parallel sub-agents |
 | 2025-12-27 | Phase 4 Feature 1+2 complete | Start FeedbackStore | tenant_session context manager (7 tests); RLS migration for memories/apps; BaseStore ABC; ScopedMemoryStore (16 tests); 25 TDD tests total |
+| 2025-12-27 | Phase 4 Feature 3+4 complete | EpisodicMemoryStore (Valkey) | PostgresFeedbackStore (17 tests); PostgresExperimentStore (18 tests); 60 total store tests; commit pending |
 
