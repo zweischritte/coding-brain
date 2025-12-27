@@ -68,7 +68,9 @@ git commit -m "docs: update session progress and implementation tracker"
 | Stats Router Tenant Audit | COMPLETE | - |
 | Backup Router Tenant Audit | COMPLETE | - |
 
-**Phase 3 COMPLETE**: 131 security tests passing. All routers audited for tenant isolation. Stats router fixed (owner_id filter).
+**Phase 3 PARTIAL**: Tenant isolation complete (131 security tests). Alembic migrations NOT started per plan requirements.
+
+> ⚠️ **Plan Gap**: Phase 1 MCP auth also incomplete (SSE auth + tool scopes pending).
 
 ---
 
@@ -329,14 +331,33 @@ async def list_items(
 
 ## 10. Next Session Checklist
 
-Phase 3 is COMPLETE. Next steps for Phase 4:
+**Remaining work per Implementation Plan:**
 
-- [ ] Verify PostgreSQL Alembic migrations are current
-- [ ] Test full application flow with PostgreSQL
-- [ ] Consider extracting shared `get_user_from_principal()` helper
+### Phase 1 Gap - MCP Auth
+
+- [ ] Add auth to MCP SSE endpoints
+- [ ] Add tool-level permission checks in MCP server
+- [ ] Run test_mcp_auth.py to verify
+
+### Phase 3 Gap - Alembic Migrations
+
+- [ ] Set up Alembic migration scaffolding
+- [ ] Create initial migration from current models
+- [ ] Document pre-migration backup procedure
+- [ ] Add row count/checksum verification
+- [ ] Document rollback procedure
+- [ ] Test migration on fresh PostgreSQL
+
+### Technical Debt
+
+- [ ] Extract shared `get_user_from_principal()` helper
 - [ ] Address pre-existing test failures in test_router_auth.py
 - [ ] Fix Pydantic V1 @validator deprecation warning
-- [ ] Update this file and commit before ending session
+
+### Session End
+
+- [ ] Update this file and IMPLEMENTATION-PROGRESS-PROD-READINESS.md
+- [ ] Commit both files together
 
 ---
 
