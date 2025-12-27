@@ -1,9 +1,12 @@
 import os
+import uuid
+from contextlib import contextmanager
 from functools import lru_cache
+from typing import Generator, Union
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 # load .env file
@@ -73,3 +76,57 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@contextmanager
+def tenant_session(
+    db: Session,
+    user_id: Union[uuid.UUID, str]
+) -> Generator[Session, None, None]:
+    """
+    Context manager that sets PostgreSQL session variable for RLS.
+
+    Sets the 'app.current_user_id' session variable used by Row Level Security
+    policies to filter data by tenant. The variable is guaranteed to be reset
+    on exit, even if an exception occurs.
+
+    Args:
+        db: SQLAlchemy session to use
+        user_id: UUID of the current user (tenant identifier)
+
+    Yields:
+        The same session with tenant context set
+
+    Raises:
+        ValueError: If user_id is not a valid UUID
+        TypeError: If user_id is None or empty
+
+    Example:
+        with tenant_session(db, principal.user_id) as session:
+            memories = session.query(Memory).all()  # RLS filters automatically
+    """
+    # Validate user_id
+    if user_id is None:
+        raise TypeError("user_id cannot be None")
+
+    if isinstance(user_id, str):
+        if not user_id.strip():
+            raise ValueError("user_id cannot be empty")
+        try:
+            user_id = uuid.UUID(user_id)
+        except ValueError as e:
+            raise ValueError(f"Invalid UUID format: {user_id}") from e
+
+    if not isinstance(user_id, uuid.UUID):
+        raise TypeError(f"user_id must be UUID or string, got {type(user_id)}")
+
+    try:
+        # Set the PostgreSQL session variable for RLS
+        db.execute(
+            text("SET app.current_user_id = :user_id"),
+            {"user_id": str(user_id)}
+        )
+        yield db
+    finally:
+        # Always reset the session variable, even on exception
+        db.execute(text("RESET app.current_user_id"))

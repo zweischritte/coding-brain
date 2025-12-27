@@ -2,6 +2,7 @@
 
 **Plan**: `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md`
 **Progress**: `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md`
+**PRD**: `docs/PRD-PHASE4-MULTITENANT-STORES.md` (detailed specs, test cases, scratchpad)
 **Template**: `docs/CONTINUATION-PROMPT-TEMPLATE.md` (use when creating next phase prompt)
 **Style**: STRICT TDD - Write failing tests first, then implement. Use subagents for exploration.
 
@@ -184,15 +185,24 @@ def tenant_session(db: Session, user_id: UUID):
 
 ## 6. Last Session Summary (2025-12-27)
 
-**Completed**: Phase 3 - PostgreSQL Migration
+**Completed**: Phase 4 PRD Creation
+
+- Created comprehensive PRD: `docs/PRD-PHASE4-MULTITENANT-STORES.md`
+- Explored codebase using 3 parallel sub-agents:
+  - Test structure and patterns (no conftest.py at root, mock DB pattern)
+  - Model and database patterns (User-based tenancy, no formal store layer)
+  - RLS/tenant isolation (app-level isolation complete, RLS policies not yet created)
+- Documented 10 success criteria, 45+ test specifications
+- Specified 9 features with implementation approaches
+- Pre-populated Agent Scratchpad with exploration findings
+
+**Previous Session**: Phase 3 - PostgreSQL Migration
 
 - Phase 3a: Tenant isolation tests (19 tests)
 - Phase 3b: Router tenant isolation audit (all routers secure)
 - Phase 3c: Migration verification utilities (33 tests)
-  - MigrationVerifier, BackupValidator, BatchMigrator, RollbackManager
-  - env.py hooks for pre/post migration verification
 
-**Result**: 3,079 total tests
+**Result**: 3,079 total tests (unchanged - PRD only)
 
 ---
 
@@ -218,13 +228,19 @@ EOF
 
 ## 8. Key Files for Phase 4
 
+**PRD with detailed specs:**
+
+- `docs/PRD-PHASE4-MULTITENANT-STORES.md` - Success criteria, test specs, feature details, Agent Scratchpad
+
 **Existing (read first):**
 - `openmemory/api/app/models.py` - Memory, User, App models
 - `openmemory/api/app/database.py` - Current DB connection handling
 - `openmemory/api/app/routers/memories.py` - Current memory access patterns
-- `openmemory/api/tests/security/test_tenant_isolation.py` - Existing tenant tests
+- `openmemory/api/tests/security/test_tenant_isolation.py` - Existing tenant tests (19 tests)
+- `openmemory/api/app/alembic/utils.py` - MigrationVerifier, BatchMigrator, RollbackManager
 
 **To Create:**
 - `openmemory/api/app/stores/` - Store implementations
 - `openmemory/api/tests/stores/` - Store tests
+- `openmemory/api/tests/stores/conftest.py` - Shared test fixtures
 - `openmemory/api/alembic/versions/xxx_add_rls_policies.py` - RLS migration

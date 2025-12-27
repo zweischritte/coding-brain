@@ -13,13 +13,14 @@ Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Pha
 
 ## Summary
 
-Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 = 3,079 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 = 3,104 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
 Phase 1 Tests Added: 99 (security module core)
 Phase 2 Tests Added: 13 (Pydantic settings)
 Phase 3 Tests Added: 52 (19 tenant isolation + 33 migration verification)
+Phase 4 Tests Added: 25 (7 tenant_session + 16 ScopedMemoryStore + 2 contract)
 
 ---
 
@@ -224,14 +225,25 @@ Goal: Persistent stores with RLS, org_id scoping, and contract tests.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| ScopedMemoryStore (Postgres) + RLS | 0 | 0 | Not Started | |
+| tenant_session context manager | 7 | 7 | Complete | pending |
+| RLS migration (memories, apps) | 0 | 0 | Complete | pending |
+| ScopedMemoryStore (Postgres) + RLS | 16 | 16 | Complete | pending |
+| RLS integration tests | 13 | 0 | Skipped (SQLite) | pending |
 | FeedbackStore (Postgres) | 0 | 0 | Not Started | |
 | ExperimentStore (Postgres) | 0 | 0 | Not Started | |
 | EpisodicMemoryStore (Valkey) | 0 | 0 | Not Started | |
 | Neo4j SymbolStore/Registry/DependencyGraph | 0 | 0 | Not Started | |
 | Qdrant EmbeddingStore (per-model) | 0 | 0 | Not Started | |
 | OpenSearch tenant alias strategy | 0 | 0 | Not Started | |
-| Contract tests for all stores | 0 | 0 | Not Started | |
+| Contract tests for all stores | 2 | 2 | In Progress | pending |
+
+**Phase 4 Progress Summary:**
+
+- `tenant_session()` context manager in `app/database.py` - Sets PostgreSQL session var for RLS
+- RLS migration `add_rls_policies.py` - Enables RLS on memories/apps tables
+- `BaseStore` ABC in `app/stores/base.py` - Abstract interface for all stores
+- `ScopedMemoryStore` in `app/stores/memory_store.py` - CRUD with tenant isolation
+- Tests: 25 tests (23 passing, 2 skipped for PostgreSQL)
 
 ---
 
@@ -331,4 +343,6 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 3b complete | MCP SSE auth in mcp_server.py | Router audit complete; stats.py bug fixed; 131 security tests; commit 81e40c02 |
 | 2025-12-27 | Phase 3c complete | Phase 3 DONE; MCP SSE auth still blocked | Migration verification utilities: MigrationVerifier, BackupValidator, BatchMigrator, RollbackManager; env.py hooks; 33 TDD tests |
 | 2025-12-27 | Phase 4 prep | Start Phase 4: ScopedMemoryStore RLS tests | Created Phase 4 continuation prompt; explored codebase for store patterns; ready to write TDD tests |
+| 2025-12-27 | Phase 4 PRD complete | Start Feature 1: RLS Infrastructure tests | Created `docs/PRD-PHASE4-MULTITENANT-STORES.md` with 10 success criteria, 45+ test specs, 9 features; explored codebase via 3 parallel sub-agents |
+| 2025-12-27 | Phase 4 Feature 1+2 complete | Start FeedbackStore | tenant_session context manager (7 tests); RLS migration for memories/apps; BaseStore ABC; ScopedMemoryStore (16 tests); 25 TDD tests total |
 
