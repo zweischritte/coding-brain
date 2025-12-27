@@ -12,13 +12,13 @@ Status: In Progress (Phase 1 Core Complete, Router Integration Pending)
 - If scope changes, add a note in "Decisions & Changes."
 
 ## Summary
-Current Test Count: 2,878 + 37 + 99 + 13 + 16 = 3,043 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 = 3,046 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
 Phase 1 Tests Added: 99 (security module core)
 Phase 2 Tests Added: 13 (Pydantic settings)
-Phase 3a Tests Added: 16 (tenant isolation)
+Phase 3 Tests Added: 19 (tenant isolation - 16 original + 3 stats router)
 
 ---
 
@@ -130,14 +130,17 @@ Goal: Migrate from SQLite to Postgres with verified runbook.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| Tenant isolation tests | 16 | 16 | Complete | 4e2f5738 |
+| Tenant isolation tests | 19 | 19 | Complete | 81e40c02 |
 | Apps router tenant isolation fix | - | - | Complete | 4e2f5738 |
 | Database.py PostgreSQL support | - | - | Complete | 4e2f5738 |
 | Memories router json_extract fix | - | - | Complete | 4e2f5738 |
+| Audit graph.py tenant isolation | - | - | Complete | 81e40c02 |
+| Audit entities.py tenant isolation | - | - | Complete | 81e40c02 |
+| Audit stats.py tenant isolation (FIXED bug) | 3 | 3 | Complete | 81e40c02 |
+| Audit backup.py tenant isolation | - | - | Complete | 81e40c02 |
 | Alembic migration scaffolding | 0 | 0 | Not Started | |
 | Data migration tooling (batch, rollback) | 0 | 0 | Not Started | |
 | Verification checks (row counts, checksums) | 0 | 0 | Not Started | |
-| Audit remaining routers (graph, entities, stats, backup) | 0 | 0 | Pending | |
 
 **Phase 3a Complete (Tenant Isolation):**
 
@@ -158,16 +161,23 @@ Goal: Migrate from SQLite to Postgres with verified runbook.
   - Replaced `func.json_extract(Memory.metadata_, '$.vault')` with `Memory.vault`
   - Replaced `func.json_extract(Memory.metadata_, '$.layer')` with `Memory.layer`
 
-**Phase 3b Pending (Router Audit):**
+**Phase 3b Complete (Router Tenant Isolation Audit):**
 
-| Router | File | Status |
-|--------|------|--------|
-| memories | `app/routers/memories.py` | ✅ Uses principal.user_id |
-| apps | `app/routers/apps.py` | ✅ Fixed - uses owner_id |
-| graph | `app/routers/graph.py` | ⚠️ NEEDS AUDIT |
-| entities | `app/routers/entities.py` | ⚠️ NEEDS AUDIT |
-| stats | `app/routers/stats.py` | ⚠️ NEEDS AUDIT |
-| backup | `app/routers/backup.py` | ⚠️ NEEDS AUDIT |
+| Router | File | Endpoints | Status |
+|--------|------|-----------|--------|
+| memories | `app/routers/memories.py` | 15+ | ✅ Uses principal.user_id |
+| apps | `app/routers/apps.py` | 5 | ✅ Fixed - uses owner_id |
+| graph | `app/routers/graph.py` | 12 | ✅ SECURE - all filter by user_id |
+| entities | `app/routers/entities.py` | 12 | ✅ SECURE - all filter by user_id |
+| stats | `app/routers/stats.py` | 1 | ✅ FIXED - owner_id filter bug |
+| backup | `app/routers/backup.py` | 2 | ✅ SECURE - all filter by user_id |
+
+**Security fix applied:**
+- `openmemory/api/app/routers/stats.py` line 23: Fixed `App.owner == user` to `App.owner_id == user.id`
+
+**Tests added:**
+- 3 new tests for stats router tenant isolation (19 total tenant isolation tests)
+- 131 total security tests passing
 
 ---
 
@@ -272,4 +282,5 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 1 router auth continued | Converted graph.py (12 endpoints), entities.py (14 endpoints), stats.py (1 endpoint), backup.py (2 endpoints) to use Principal dependency; remaining: mcp_server.py SSE auth + tool scopes |
 | 2025-12-27 | Phase 2 complete | Pydantic Settings with secret validation; fail-fast startup; SECRET-ROTATION.md; 13 tests |
 | 2025-12-27 | Phase 3a complete | Tenant isolation: 16 tests; apps router security fix (owner_id filter); database.py PostgreSQL support; memories.py json_extract fix; commit 4e2f5738 |
+| 2025-12-27 | Phase 3b complete | Router tenant isolation audit: graph.py (12 endpoints SECURE), entities.py (12 endpoints SECURE), stats.py (1 endpoint FIXED), backup.py (2 endpoints SECURE); added 3 stats tests; 131 security tests passing; commit 81e40c02 |
 
