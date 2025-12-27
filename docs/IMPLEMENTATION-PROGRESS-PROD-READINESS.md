@@ -12,11 +12,13 @@ Status: In Progress (Phase 1 Core Complete, Router Integration Pending)
 - If scope changes, add a note in "Decisions & Changes."
 
 ## Summary
-Current Test Count: 2,878 + 37 + 99 = 3,014 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 16 = 3,043 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
 Phase 1 Tests Added: 99 (security module core)
+Phase 2 Tests Added: 13 (Pydantic settings)
+Phase 3a Tests Added: 16 (tenant isolation)
 
 ---
 
@@ -107,9 +109,18 @@ Goal: Pydantic settings, secret validation, rotation procedures.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| Settings model for all services | 0 | 0 | Not Started | |
-| Fail-fast validation for required secrets | 0 | 0 | Not Started | |
-| Secret rotation docs and templates | 0 | 0 | Not Started | |
+| Settings model for all services | 13 | 13 | Complete | 2e39c8a8 |
+| Fail-fast validation for required secrets | - | - | Complete | 2e39c8a8 |
+| Secret rotation docs and templates | - | - | Complete | 2e39c8a8 |
+
+**Phase 2 Complete:**
+
+- `openmemory/api/app/settings/settings.py` - Pydantic Settings with validation
+- `openmemory/api/app/settings/__init__.py` - Module exports
+- `openmemory/api/main.py` - Lifespan handler for startup validation
+- `openmemory/.env.example` - Complete configuration template
+- `docs/SECRET-ROTATION.md` - Rotation procedures
+- `openmemory/api/tests/security/test_config.py` - 13 tests
 
 ---
 
@@ -119,10 +130,44 @@ Goal: Migrate from SQLite to Postgres with verified runbook.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
+| Tenant isolation tests | 16 | 16 | Complete | 4e2f5738 |
+| Apps router tenant isolation fix | - | - | Complete | 4e2f5738 |
+| Database.py PostgreSQL support | - | - | Complete | 4e2f5738 |
+| Memories router json_extract fix | - | - | Complete | 4e2f5738 |
 | Alembic migration scaffolding | 0 | 0 | Not Started | |
 | Data migration tooling (batch, rollback) | 0 | 0 | Not Started | |
 | Verification checks (row counts, checksums) | 0 | 0 | Not Started | |
-| pgcrypto enablement if needed | 0 | 0 | Not Started | |
+| Audit remaining routers (graph, entities, stats, backup) | 0 | 0 | Pending | |
+
+**Phase 3a Complete (Tenant Isolation):**
+
+- `openmemory/api/tests/security/test_tenant_isolation.py` - 16 tests for multi-tenant isolation
+- `openmemory/api/app/routers/apps.py` - Fixed: all endpoints now filter by owner_id
+  - Added `get_user_from_principal()` helper
+  - Added `get_app_or_404_for_user()` helper with ownership check
+  - `list_apps()` - filters by `App.owner_id == user.id`
+  - `get_app_details()` - verifies ownership before returning
+  - `list_app_memories()` - verifies app ownership + filters by user_id
+  - `list_app_accessed_memories()` - verifies app ownership + filters by user_id
+  - `update_app_details()` - verifies ownership before updating
+- `openmemory/api/app/database.py` - Updated for PostgreSQL support
+  - Uses Settings.database_url (PostgreSQL from Pydantic Settings)
+  - PostgreSQL connection pooling with QueuePool
+  - SQLite fallback only for development
+- `openmemory/api/app/routers/memories.py` - Fixed SQLite-specific json_extract
+  - Replaced `func.json_extract(Memory.metadata_, '$.vault')` with `Memory.vault`
+  - Replaced `func.json_extract(Memory.metadata_, '$.layer')` with `Memory.layer`
+
+**Phase 3b Pending (Router Audit):**
+
+| Router | File | Status |
+|--------|------|--------|
+| memories | `app/routers/memories.py` | ✅ Uses principal.user_id |
+| apps | `app/routers/apps.py` | ✅ Fixed - uses owner_id |
+| graph | `app/routers/graph.py` | ⚠️ NEEDS AUDIT |
+| entities | `app/routers/entities.py` | ⚠️ NEEDS AUDIT |
+| stats | `app/routers/stats.py` | ⚠️ NEEDS AUDIT |
+| backup | `app/routers/backup.py` | ⚠️ NEEDS AUDIT |
 
 ---
 
@@ -225,4 +270,6 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 1 core complete | Implemented security module with JWT validation, DPoP RFC 9449, RBAC scope enforcement, security headers middleware; 99 TDD tests all passing; main.py integrated with security; remaining: router integration and MCP auth |
 | 2025-12-27 | Phase 1 router auth partial | Converted memories.py (15+ endpoints) and apps.py (5 endpoints) to use Principal dependency; removed user_id query params; added scope checks; remaining: graph.py, entities.py, stats.py, backup.py, mcp_server.py |
 | 2025-12-27 | Phase 1 router auth continued | Converted graph.py (12 endpoints), entities.py (14 endpoints), stats.py (1 endpoint), backup.py (2 endpoints) to use Principal dependency; remaining: mcp_server.py SSE auth + tool scopes |
+| 2025-12-27 | Phase 2 complete | Pydantic Settings with secret validation; fail-fast startup; SECRET-ROTATION.md; 13 tests |
+| 2025-12-27 | Phase 3a complete | Tenant isolation: 16 tests; apps router security fix (owner_id filter); database.py PostgreSQL support; memories.py json_extract fix; commit 4e2f5738 |
 
