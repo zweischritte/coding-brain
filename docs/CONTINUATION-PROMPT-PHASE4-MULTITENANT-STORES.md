@@ -155,16 +155,18 @@ def tenant_session(db: Session, user_id: UUID):
 1. [x] FeedbackStore with retention queries - 17 tests (`app/stores/feedback_store.py`)
 2. [x] ExperimentStore with status history - 18 tests (`app/stores/experiment_store.py`)
 
-### Priority 3: External Stores (NEXT)
+### COMPLETED: Priority 3 - External Stores
 
-1. [ ] EpisodicMemoryStore (Valkey) with TTL
-2. [ ] Neo4j stores with org_id constraints
-3. [ ] Qdrant EmbeddingStore with tenant payload index
-4. [ ] OpenSearch tenant alias strategy
+1. [x] ValkeyEpisodicStore with TTL - 25 tests (`app/stores/episodic_store.py`)
+2. [x] TenantQdrantStore with tenant payload index - 20 tests (`app/stores/qdrant_store.py`)
+3. [x] TenantOpenSearchStore with tenant alias strategy - 20 tests (`app/stores/opensearch_store.py`)
+4. [ ] Neo4j stores - DEFERRED (existing graph layer in `app/graph/` has comprehensive tenant isolation via userId)
 
-### Lower Priority
+### Lower Priority / Next Phase
 
 - Phase 1 MCP auth (blocked on SSE architecture)
+- Phase 4.5 GDPR Compliance (PII inventory, SAR export, cascading delete)
+- Phase 5 API Route Wiring (expose new stores via REST routes)
 - Technical debt items (see Progress file)
 
 ---
@@ -185,33 +187,38 @@ def tenant_session(db: Session, user_id: UUID):
 
 ## 6. Last Session Summary (2025-12-27)
 
-**Completed**: Phase 4 Features 3 & 4 - FeedbackStore and ExperimentStore
+**Completed**: Phase 4 External Stores - Valkey, Qdrant, OpenSearch
 
-- Implemented `PostgresFeedbackStore` in `app/stores/feedback_store.py`
-  - Append-only storage for FeedbackEvent
-  - Query by user, org, query_id, experiment_id
-  - Retention query support (30-day default)
-  - Aggregate metrics (acceptance rate, outcome distribution, by-tool)
-  - RRF weight optimization queries
-- Implemented `PostgresExperimentStore` in `app/stores/experiment_store.py`
-  - Full CRUD for A/B Experiment entities
-  - Status history tracking with audit trail
-  - Variant assignment persistence
-  - Status transition timestamps (start_time, end_time)
-  - Org-scoped tenant isolation
-- Both stores:
-  - Self-contained domain types (avoid circular imports from feedback module)
-  - SQLAlchemy models with proper indexes
-  - Implements ABC interface for testing
-  - Tenant isolation via org_id/user_id
-- Added root `conftest.py` for proper Python path setup in tests
-- TDD tests: 35 new tests
-  - `tests/stores/test_feedback_store.py` - 17 tests
-  - `tests/stores/test_experiment_store.py` - 18 tests
+- Implemented `ValkeyEpisodicStore` in `app/stores/episodic_store.py`
+  - Session-scoped storage with configurable TTL (default 24 hours)
+  - Tenant isolation via user_id key prefix
+  - Recency decay support via sorted sets
+  - Key format: `episodic:{user_id}:{session_id}:{memory_id}`
+  - Implements EpisodicMemoryStore ABC
+- Implemented `TenantQdrantStore` in `app/stores/qdrant_store.py`
+  - Per-model collection naming (embeddings_{sanitized_model_name})
+  - Automatic org_id injection into payloads
+  - Payload index creation for org_id, user_id, vault, layer
+  - Tenant-safe search, get, list, delete operations
+- Implemented `TenantOpenSearchStore` in `app/stores/opensearch_store.py`
+  - Tenant alias strategy: `tenant_{org_id}` routing
+  - Shared index for small tenants, dedicated index option for large
+  - Hybrid search (lexical + vector kNN) with tenant filtering
+  - Automatic org_id injection into documents
+- All stores:
+  - Comprehensive TDD tests with mocked clients
+  - Tenant isolation verification tests
+  - Health check support
+  - Factory functions for environment-based instantiation
+- Neo4j stores deferred - existing `app/graph/` layer has comprehensive tenant isolation via userId
 
-**Commit**: `e1cc11ea` - feat(stores): add FeedbackStore and ExperimentStore with TDD tests
+**TDD tests added**: 65 new tests
 
-**Result**: 3,139 total tests (+35 from this session, 60 total store tests)
+- `tests/stores/test_episodic_store.py` - 25 tests
+- `tests/stores/test_qdrant_store.py` - 20 tests
+- `tests/stores/test_opensearch_store.py` - 20 tests
+
+**Result**: 3,204 total tests (+65 from this session, 125 total store tests)
 
 ---
 
@@ -264,10 +271,15 @@ EOF
 - `openmemory/api/tests/integration/test_rls_enforcement.py` - 13 tests (PostgreSQL only)
 - `openmemory/api/alembic/versions/add_rls_policies.py` - RLS migration
 
-**To Create (Next - External Stores):**
+**Created (External Stores - COMPLETE):**
 
-- `openmemory/api/app/stores/episodic_store.py` - EpisodicMemoryStore (Valkey with TTL)
-- `openmemory/api/tests/stores/test_episodic_store.py` - EpisodicStore tests
-- Neo4j stores (SymbolStore, Registry, DependencyGraph)
-- Qdrant EmbeddingStore with tenant payload index
-- OpenSearch tenant alias implementation
+- `openmemory/api/app/stores/episodic_store.py` - ValkeyEpisodicStore (session TTL, recency decay)
+- `openmemory/api/app/stores/qdrant_store.py` - TenantQdrantStore (per-model, org_id filtering)
+- `openmemory/api/app/stores/opensearch_store.py` - TenantOpenSearchStore (tenant alias routing)
+- `openmemory/api/tests/stores/test_episodic_store.py` - 25 tests
+- `openmemory/api/tests/stores/test_qdrant_store.py` - 20 tests
+- `openmemory/api/tests/stores/test_opensearch_store.py` - 20 tests
+
+**Deferred:**
+
+- Neo4j stores - existing `app/graph/` layer has comprehensive userId-based tenant isolation

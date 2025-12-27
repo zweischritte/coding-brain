@@ -13,14 +13,14 @@ Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Pha
 
 ## Summary
 
-Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 = 3,139 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 = 3,204 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
 Phase 1 Tests Added: 99 (security module core)
 Phase 2 Tests Added: 13 (Pydantic settings)
 Phase 3 Tests Added: 52 (19 tenant isolation + 33 migration verification)
-Phase 4 Tests Added: 60 (7 tenant_session + 16 ScopedMemoryStore + 2 contract + 17 FeedbackStore + 18 ExperimentStore)
+Phase 4 Tests Added: 125 (7 tenant_session + 16 ScopedMemoryStore + 2 contract + 17 FeedbackStore + 18 ExperimentStore + 25 ValkeyEpisodicStore + 20 TenantQdrantStore + 20 TenantOpenSearchStore)
 
 ---
 
@@ -231,10 +231,10 @@ Goal: Persistent stores with RLS, org_id scoping, and contract tests.
 | RLS integration tests | 13 | 0 | Skipped (SQLite) | pending |
 | FeedbackStore (Postgres) | 17 | 17 | Complete | pending |
 | ExperimentStore (Postgres) | 18 | 18 | Complete | pending |
-| EpisodicMemoryStore (Valkey) | 0 | 0 | Not Started | |
-| Neo4j SymbolStore/Registry/DependencyGraph | 0 | 0 | Not Started | |
-| Qdrant EmbeddingStore (per-model) | 0 | 0 | Not Started | |
-| OpenSearch tenant alias strategy | 0 | 0 | Not Started | |
+| EpisodicMemoryStore (Valkey) | 25 | 25 | Complete | pending |
+| Neo4j SymbolStore/Registry/DependencyGraph | 0 | 0 | Deferred (existing graph layer) | |
+| Qdrant EmbeddingStore (per-model) | 20 | 20 | Complete | pending |
+| OpenSearch tenant alias strategy | 20 | 20 | Complete | pending |
 | Contract tests for all stores | 2 | 2 | In Progress | pending |
 
 **Phase 4 Progress Summary:**
@@ -245,7 +245,32 @@ Goal: Persistent stores with RLS, org_id scoping, and contract tests.
 - `ScopedMemoryStore` in `app/stores/memory_store.py` - CRUD with tenant isolation
 - `PostgresFeedbackStore` in `app/stores/feedback_store.py` - Feedback events with retention queries
 - `PostgresExperimentStore` in `app/stores/experiment_store.py` - A/B experiments with status history
-- Tests: 60 tests (58 passing, 2 skipped for PostgreSQL)
+- `ValkeyEpisodicStore` in `app/stores/episodic_store.py` - Session-scoped ephemeral memory with TTL
+- `TenantQdrantStore` in `app/stores/qdrant_store.py` - Vector embeddings with org_id payload filtering
+- `TenantOpenSearchStore` in `app/stores/opensearch_store.py` - Tenant alias routing for search
+- Tests: 125 tests (123 passing, 2 skipped for PostgreSQL)
+
+**ValkeyEpisodicStore Features:**
+
+- Session-scoped storage with configurable TTL (default 24 hours)
+- Tenant isolation via user_id key prefix
+- Recency decay support via sorted sets
+- Reference resolution within session context
+- Implements EpisodicMemoryStore ABC
+
+**TenantQdrantStore Features:**
+
+- Per-model collection naming (embeddings_{model_name})
+- Automatic org_id injection into payloads
+- Payload index creation for efficient org_id filtering
+- Tenant-safe search, get, list, delete operations
+
+**TenantOpenSearchStore Features:**
+
+- Tenant alias strategy (tenant_{org_id})
+- Shared index for small tenants, dedicated index option for large tenants
+- Hybrid search (lexical + vector) with tenant filtering
+- Automatic org_id injection into documents
 
 **FeedbackStore Features:**
 
@@ -364,4 +389,5 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 4 PRD complete | Start Feature 1: RLS Infrastructure tests | Created `docs/PRD-PHASE4-MULTITENANT-STORES.md` with 10 success criteria, 45+ test specs, 9 features; explored codebase via 3 parallel sub-agents |
 | 2025-12-27 | Phase 4 Feature 1+2 complete | Start FeedbackStore | tenant_session context manager (7 tests); RLS migration for memories/apps; BaseStore ABC; ScopedMemoryStore (16 tests); 25 TDD tests total |
 | 2025-12-27 | Phase 4 Feature 3+4 complete | EpisodicMemoryStore (Valkey) | PostgresFeedbackStore (17 tests); PostgresExperimentStore (18 tests); 60 total store tests; commit pending |
+| 2025-12-27 | Phase 4 External Stores complete | Phase 4 COMPLETE | ValkeyEpisodicStore (25 tests); TenantQdrantStore (20 tests); TenantOpenSearchStore (20 tests); 125 total store tests; Neo4j deferred to existing graph layer |
 
