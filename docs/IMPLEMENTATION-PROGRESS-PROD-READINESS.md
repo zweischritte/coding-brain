@@ -306,15 +306,21 @@ Goal: SAR export, cascading delete, backup purge strategy.
 
 ## Phase 5: API Route Wiring
 
-Goal: Expose missing APIs with auth and validation.
+Goal: Expose new stores via REST API with auth and validation.
+
+**Continuation Prompt**: `docs/CONTINUATION-PROMPT-PHASE5-API-ROUTES.md`
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| OpenSearch tri-hybrid REST routes | 0 | 0 | Not Started | |
-| Cross-repo routes | 0 | 0 | Not Started | |
-| Feedback + experiments routes | 0 | 0 | Not Started | |
-| Scoped + episodic memory routes | 0 | 0 | Not Started | |
-| Input validation and limits | 0 | 0 | Not Started | |
+| Fix MCP SSE auth (Phase 1 blocker) | 0 | 0 | Not Started | |
+| Fix test_router_auth.py failures | 0 | 0 | Not Started | |
+| Add new Scopes (FEEDBACK_*, EXPERIMENTS_*, SEARCH_*) | 0 | 0 | Not Started | |
+| Feedback router (4 endpoints) | 0 | 0 | Not Started | |
+| Experiments router (7 endpoints) | 0 | 0 | Not Started | |
+| Search router - OpenSearch hybrid (3 endpoints) | 0 | 0 | Not Started | |
+| Register routers in main.py | 0 | 0 | Not Started | |
+| Episodic memory routes (lower priority) | 0 | 0 | Not Started | |
+| Cross-repo routes (lower priority) | 0 | 0 | Not Started | |
 
 ---
 
@@ -390,4 +396,6 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 4 Feature 1+2 complete | Start FeedbackStore | tenant_session context manager (7 tests); RLS migration for memories/apps; BaseStore ABC; ScopedMemoryStore (16 tests); 25 TDD tests total |
 | 2025-12-27 | Phase 4 Feature 3+4 complete | EpisodicMemoryStore (Valkey) | PostgresFeedbackStore (17 tests); PostgresExperimentStore (18 tests); 60 total store tests; commit pending |
 | 2025-12-27 | Phase 4 External Stores complete | Phase 4 COMPLETE | ValkeyEpisodicStore (25 tests); TenantQdrantStore (20 tests); TenantOpenSearchStore (20 tests); 125 total store tests; Neo4j deferred to existing graph layer |
+| 2025-12-27 | Phase 5 continuation prompt created | Start Phase 5: MCP auth fix | Created `docs/CONTINUATION-PROMPT-PHASE5-API-ROUTES.md`; Phase 5 exposes stores via REST routes |
+| 2025-12-27 | Phase 5 PRD complete | Start Feature 0: Fix test failures | Created `docs/PRD-PHASE5-API-ROUTE-WIRING.md` with 10 success criteria, 6 features, ~100 test specs; explored codebase patterns via 4 parallel sub-agents |
 
