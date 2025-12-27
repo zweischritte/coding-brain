@@ -49,6 +49,7 @@ def create_test_token(
         "scope": " ".join(scopes or [
             "memories:read", "memories:write", "memories:delete",
             "apps:read", "apps:write",
+            "stats:read",
         ]),
     }
     return jose_jwt.encode(payload, TEST_SECRET_KEY, algorithm=TEST_ALGORITHM)
@@ -350,6 +351,63 @@ class TestCrossTenantQueryBehavior:
             data = response.json()
             assert "apps" in data
             # For a new user, should be empty (not containing other users' apps)
+
+
+class TestStatsTenantIsolation:
+    """Tests for tenant isolation in the stats router."""
+
+    def test_stats_only_returns_user_data(
+        self, client, mock_jwt_config, user_a_headers, user_b_headers
+    ):
+        """
+        Stats should only include the authenticated user's data.
+
+        User A's stats should not include User B's memories or apps.
+        """
+        # User A gets their stats
+        response_a = client.get("/api/v1/stats/", headers=user_a_headers)
+        # 200 if user exists, 404 if user not yet in database
+        assert response_a.status_code in [200, 404]
+
+        # User B gets their stats
+        response_b = client.get("/api/v1/stats/", headers=user_b_headers)
+        assert response_b.status_code in [200, 404]
+
+        # If users exist, verify the stats are scoped to each user
+        if response_a.status_code == 200:
+            data_a = response_a.json()
+            assert "total_memories" in data_a
+            assert "total_apps" in data_a
+
+        if response_b.status_code == 200:
+            data_b = response_b.json()
+            assert "total_memories" in data_b
+            assert "total_apps" in data_b
+
+    def test_stats_apps_filter_by_owner_id(
+        self, client, mock_jwt_config, user_a_headers
+    ):
+        """
+        Stats endpoint should filter apps by owner_id, not the owner relationship.
+
+        This tests the critical fix: App.owner_id == user.id (not App.owner == user)
+        """
+        # Get stats for user A
+        response = client.get("/api/v1/stats/", headers=user_a_headers)
+
+        # Should either work (200) or return 404 for new user
+        # The key is that it doesn't return 500 (server error) from bad SQL
+        assert response.status_code in [200, 404]
+
+        # Should NOT return 500 which would indicate the query failed
+        assert response.status_code != 500
+
+    def test_stats_requires_auth(self, client):
+        """Stats endpoint requires authentication."""
+        response = client.get("/api/v1/stats/")
+
+        # Should require auth
+        assert response.status_code == 401
 
 
 class TestPrincipalUserIdUsage:

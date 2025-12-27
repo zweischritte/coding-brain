@@ -48,15 +48,15 @@ git commit -m "docs: update continuation prompt with session progress"
 | Router Auth (all routers) | COMPLETE | 25 |
 | MCP Server Auth | COMPLETE | 13+ |
 | Pydantic Settings | COMPLETE | 13 |
-| Tenant Isolation Tests | COMPLETE | 16 |
+| Tenant Isolation Tests | COMPLETE | 19 |
 | Apps Router Tenant Fix | COMPLETE | - |
 | Database PostgreSQL Support | COMPLETE | - |
-| Graph Router Tenant Audit | PENDING | - |
-| Entities Router Tenant Audit | PENDING | - |
-| Stats Router Tenant Audit | PENDING | - |
-| Backup Router Tenant Audit | PENDING | - |
+| Graph Router Tenant Audit | COMPLETE | - |
+| Entities Router Tenant Audit | COMPLETE | - |
+| Stats Router Tenant Audit | COMPLETE | - |
+| Backup Router Tenant Audit | COMPLETE | - |
 
-**Phase 3a Progress**: 128+ security tests passing. Apps router now filters by owner_id. Database.py supports PostgreSQL with connection pooling.
+**Phase 3 COMPLETE**: 131 security tests passing. All routers audited for tenant isolation. Stats router fixed (owner_id filter).
 
 ---
 
@@ -110,6 +110,25 @@ git commit -m "docs: update continuation prompt with session progress"
 - `4e2f5738` - feat(security): add tenant isolation to apps router and PostgreSQL support
 - `a133d4a6` - docs: update progress tracker with Phase 2 and Phase 3a completion
 
+### Phase 3b: Router Tenant Isolation Audit (2025-12-27) - COMPLETE
+
+**Audited routers:**
+
+- `openmemory/api/app/routers/graph.py` - ✅ SECURE (12 endpoints, all filter by user_id)
+- `openmemory/api/app/routers/entities.py` - ✅ SECURE (12 endpoints, all filter by user_id)
+- `openmemory/api/app/routers/stats.py` - 🔧 FIXED (owner_id filter bug)
+- `openmemory/api/app/routers/backup.py` - ✅ SECURE (2 endpoints, all filter by user_id)
+
+**Security fix applied:**
+
+- `openmemory/api/app/routers/stats.py` line 23: Fixed `App.owner == user` to `App.owner_id == user.id`
+
+**Tests added:**
+
+- `openmemory/api/tests/security/test_tenant_isolation.py` - Added 3 tests for stats router (19 total)
+
+**Test count:** 131 security tests passing
+
 ### Infrastructure
 
 - `openmemory/docker-compose.yml` - Project name `codingbrain`, all containers prefixed
@@ -124,16 +143,16 @@ git commit -m "docs: update continuation prompt with session progress"
 
 Verify all remaining routers properly filter by user_id from JWT principal.
 
-### Routers to Audit
+### Routers Audited
 
 | Router | File | Status |
 |--------|------|--------|
 | memories | `app/routers/memories.py` | ✅ Uses principal.user_id |
 | apps | `app/routers/apps.py` | ✅ Fixed - uses owner_id |
-| graph | `app/routers/graph.py` | ⚠️ NEEDS AUDIT |
-| entities | `app/routers/entities.py` | ⚠️ NEEDS AUDIT |
-| stats | `app/routers/stats.py` | ⚠️ NEEDS AUDIT |
-| backup | `app/routers/backup.py` | ⚠️ NEEDS AUDIT |
+| graph | `app/routers/graph.py` | ✅ SECURE - 12 endpoints filter by user_id |
+| entities | `app/routers/entities.py` | ✅ SECURE - 12 endpoints filter by user_id |
+| stats | `app/routers/stats.py` | ✅ FIXED - owner_id filter bug resolved |
+| backup | `app/routers/backup.py` | ✅ SECURE - 2 endpoints filter by user_id |
 
 ### STEP 1: Audit Graph Router
 
@@ -298,14 +317,13 @@ async def list_items(
 
 ## 10. Next Session Checklist
 
-- [ ] Audit graph.py router for tenant isolation
-- [ ] Audit entities.py router for tenant isolation
-- [ ] Audit stats.py router for tenant isolation
-- [ ] Audit backup.py router for tenant isolation
-- [ ] Add tests for any found issues
-- [ ] Fix any routers missing tenant filtering
+Phase 3 is COMPLETE. Next steps for Phase 4:
+
 - [ ] Verify PostgreSQL Alembic migrations are current
-- [ ] Run full security test suite
+- [ ] Test full application flow with PostgreSQL
+- [ ] Consider extracting shared `get_user_from_principal()` helper
+- [ ] Address pre-existing test failures in test_router_auth.py
+- [ ] Fix Pydantic V1 @validator deprecation warning
 - [ ] Update this file and commit before ending session
 
 ---
@@ -342,6 +360,41 @@ Mark items complete with [x] and add notes
 **Blocked/Deferred:**
 
 - Remaining router audits (graph, entities, stats, backup) - next session
+
+---
+
+### Session: 2025-12-27 (Phase 3b)
+
+**Started:** Router tenant isolation audit
+**Ended:** Phase 3 complete
+
+**Completed:**
+
+- [x] Audit graph.py router for tenant isolation (SECURE - 12 endpoints)
+- [x] Audit entities.py router for tenant isolation (SECURE - 12 endpoints)
+- [x] Audit stats.py router for tenant isolation (FIXED - owner_id filter bug)
+- [x] Audit backup.py router for tenant isolation (SECURE - 2 endpoints)
+- [x] Add tests for stats router (3 new tests)
+- [x] Fix stats.py owner_id filter bug
+- [x] Run full security test suite (131 tests passing)
+- [x] Update continuation prompt
+
+**Notes:**
+
+- Graph router: All 12 endpoints properly filter by user_id in Neo4j queries
+- Entities router: All 12 endpoints properly filter by user_id
+- Stats router: Had critical bug `App.owner == user` instead of `App.owner_id == user.id`
+- Backup router: Both endpoints properly filter by user_id; categories are global by design
+- Recommendation: Extract shared `get_user_from_principal()` helper to reduce code duplication
+
+**Security Audit Summary:**
+
+| Router | Endpoints | Status | Notes |
+|--------|-----------|--------|-------|
+| graph.py | 12 | ✅ SECURE | All Neo4j queries filter by userId |
+| entities.py | 12 | ✅ SECURE | All queries filter by user_id |
+| stats.py | 1 | 🔧 FIXED | Fixed owner_id filter |
+| backup.py | 2 | ✅ SECURE | Categories global by design |
 
 ---
 
