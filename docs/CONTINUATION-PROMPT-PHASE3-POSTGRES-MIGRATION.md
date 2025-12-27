@@ -22,18 +22,24 @@
 
 ### At Session End - MANDATORY
 
-1. Update Section 11 with all completed work
-2. Update Section 1 (Current State Summary) if status changed
-3. Update Section 2 (Completed Work Registry) with new completed items
-4. Update Section 10 (Next Session Checklist) with remaining work
-5. Commit changes:
+**IMPORTANT: Both documentation files MUST be updated before committing.**
+
+1. Update Section 11 (Session Progress Tracker) with all completed work
+1. Update Section 1 (Current State Summary) if status changed
+1. Update Section 2 (Completed Work Registry) with new completed items
+1. Update Section 10 (Next Session Checklist) with remaining work
+1. **UPDATE `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md`:**
+   - Update test counts in Summary section
+   - Update task status tables for completed work
+   - Add entry to Daily Log with date, work completed, and notes
+1. Commit BOTH files together:
 
 ```bash
 git add docs/CONTINUATION-PROMPT-PHASE3-POSTGRES-MIGRATION.md docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md
-git commit -m "docs: update continuation prompt with session progress"
+git commit -m "docs: update session progress and implementation tracker"
 ```
 
-6. If phase is complete, create the next continuation prompt in this same file
+1. If phase is complete, create the next continuation prompt in this same file
 
 ---
 
