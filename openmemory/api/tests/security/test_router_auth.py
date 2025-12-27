@@ -138,9 +138,10 @@ class TestMemoriesRouterAuth:
         response = client.get("/api/v1/memories/some-uuid")
         assert response.status_code == 401
 
-    def test_delete_memory_requires_auth(self, client):
-        """DELETE /api/v1/memories/{id} should require authentication."""
-        response = client.delete("/api/v1/memories/some-uuid")
+    def test_delete_memories_requires_auth(self, client):
+        """DELETE /api/v1/memories (bulk delete) should require authentication."""
+        # Note: The API uses bulk delete at /memories/, not individual delete at /memories/{id}
+        response = client.delete("/api/v1/memories/")
         assert response.status_code == 401
 
     def test_memories_with_valid_token(self, client, mock_jwt_config):
@@ -165,11 +166,13 @@ class TestAppsRouterAuth:
         response = client.get("/api/v1/apps")
         assert response.status_code == 401
 
-    def test_create_app_requires_auth(self, client):
-        """POST /api/v1/apps should require authentication."""
-        response = client.post(
-            "/api/v1/apps",
-            json={"name": "test-app"}
+    def test_update_app_requires_auth(self, client):
+        """PUT /api/v1/apps/{app_id} should require authentication."""
+        # Note: The API doesn't have POST /apps for creation; apps are created
+        # implicitly. PUT /apps/{app_id} is used for updates.
+        response = client.put(
+            "/api/v1/apps/some-app-id",
+            json={"name": "updated-app"}
         )
         assert response.status_code == 401
 
@@ -206,7 +209,8 @@ class TestBackupRouterAuth:
 
     def test_export_requires_auth(self, client):
         """Backup export should require authentication."""
-        response = client.get("/api/v1/backup/export")
+        # Note: Export endpoint is POST, not GET (triggers export generation)
+        response = client.post("/api/v1/backup/export")
         assert response.status_code == 401
 
     def test_import_requires_auth(self, client):
@@ -314,15 +318,16 @@ class TestScopeEnforcement:
         assert response.status_code == 403
 
     def test_memories_delete_requires_scope(self, client, mock_jwt_config):
-        """Deleting memories should require memories:delete scope."""
+        """Bulk deleting memories should require memories:delete scope."""
         if not HAS_JOSE:
             pytest.skip("python-jose not installed")
 
         # Token without delete scope
         token = create_test_token(scopes=["memories:read", "memories:write"])
 
+        # Note: The API uses bulk delete at /memories/, not /memories/{id}
         response = client.delete(
-            "/api/v1/memories/some-uuid",
+            "/api/v1/memories/",
             headers={"Authorization": f"Bearer {token}"}
         )
         assert response.status_code == 403

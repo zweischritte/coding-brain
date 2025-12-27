@@ -65,6 +65,17 @@ class Scope(str, Enum):
     BACKUP_READ = "backup:read"
     BACKUP_WRITE = "backup:write"
 
+    # Feedback operations (Phase 5)
+    FEEDBACK_READ = "feedback:read"
+    FEEDBACK_WRITE = "feedback:write"
+
+    # Experiment operations (Phase 5)
+    EXPERIMENTS_READ = "experiments:read"
+    EXPERIMENTS_WRITE = "experiments:write"
+
+    # Search operations (Phase 5)
+    SEARCH_READ = "search:read"
+
 
 @dataclass
 class TokenClaims:
