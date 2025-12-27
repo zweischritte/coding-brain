@@ -330,4 +330,5 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 3a complete | - | Tenant isolation: 16 tests; apps router fix; database.py PostgreSQL; commit 4e2f5738 |
 | 2025-12-27 | Phase 3b complete | MCP SSE auth in mcp_server.py | Router audit complete; stats.py bug fixed; 131 security tests; commit 81e40c02 |
 | 2025-12-27 | Phase 3c complete | Phase 3 DONE; MCP SSE auth still blocked | Migration verification utilities: MigrationVerifier, BackupValidator, BatchMigrator, RollbackManager; env.py hooks; 33 TDD tests |
+| 2025-12-27 | Phase 4 prep | Start Phase 4: ScopedMemoryStore RLS tests | Created Phase 4 continuation prompt; explored codebase for store patterns; ready to write TDD tests |
 
