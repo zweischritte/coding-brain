@@ -1,5 +1,7 @@
 import datetime
+import logging
 import os
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from app.config import DEFAULT_APP_ID, USER_ID
@@ -14,7 +16,32 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
 
-app = FastAPI(title="OpenMemory API")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler for startup/shutdown."""
+    # Startup: Validate settings
+    try:
+        from app.settings import get_settings
+        settings = get_settings()
+        logger.info("Settings validated successfully")
+        logger.info(f"JWT issuer: {settings.jwt_issuer}")
+        logger.info(f"Database: {settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}")
+    except Exception as e:
+        logger.critical(f"Settings validation failed: {e}")
+        # In production, we'd want to fail fast
+        # For now, log the error but continue for backward compatibility
+        logger.warning("Continuing with environment-based configuration")
+
+    yield  # Application runs
+
+    # Shutdown: cleanup if needed
+    logger.info("Application shutting down")
+
+
+app = FastAPI(title="OpenMemory API", lifespan=lifespan)
 
 # Security headers middleware (applied to all responses)
 app.add_middleware(SecurityHeadersMiddleware)

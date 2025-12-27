@@ -19,10 +19,41 @@ from jose.exceptions import ExpiredSignatureError, JWTClaimsError, JWTError
 from .types import AuthenticationError, TokenClaims
 
 
+# Flag to control whether to use Settings or fall back to os.environ
+# This allows existing tests to continue working with their mocked env vars
+_USE_SETTINGS = True
+
+
+def _get_config_from_settings() -> Dict[str, Any]:
+    """Get JWT config from Pydantic Settings."""
+    try:
+        from app.settings import get_settings
+        settings = get_settings()
+        return {
+            "secret_key": settings.jwt_secret_key,
+            "algorithm": settings.jwt_algorithm,
+            "issuer": settings.jwt_issuer,
+            "audience": settings.jwt_audience,
+        }
+    except Exception:
+        # Fall back to environment if Settings not available
+        return _get_config_from_env()
+
+
+def _get_config_from_env() -> Dict[str, Any]:
+    """Get JWT config directly from environment (legacy/fallback)."""
+    return {
+        "secret_key": os.environ.get("JWT_SECRET_KEY", ""),
+        "algorithm": os.environ.get("JWT_ALGORITHM", "HS256"),
+        "issuer": os.environ.get("JWT_ISSUER", ""),
+        "audience": os.environ.get("JWT_AUDIENCE", ""),
+    }
+
+
 @lru_cache()
 def get_jwt_config() -> Dict[str, Any]:
     """
-    Get JWT configuration from environment.
+    Get JWT configuration.
 
     Returns:
         Dict with:
@@ -30,13 +61,19 @@ def get_jwt_config() -> Dict[str, Any]:
         - algorithm: The signing algorithm
         - issuer: Expected token issuer
         - audience: Expected token audience
+
+    Note:
+        Uses Pydantic Settings when available, falls back to os.environ for
+        backward compatibility with existing tests.
     """
-    return {
-        "secret_key": os.environ.get("JWT_SECRET_KEY", ""),
-        "algorithm": os.environ.get("JWT_ALGORITHM", "HS256"),
-        "issuer": os.environ.get("JWT_ISSUER", ""),
-        "audience": os.environ.get("JWT_AUDIENCE", ""),
-    }
+    # For tests that mock os.environ, fall back to env-based config
+    # In production, use Settings
+    if _USE_SETTINGS:
+        try:
+            return _get_config_from_settings()
+        except Exception:
+            pass
+    return _get_config_from_env()
 
 
 def validate_jwt(token: str) -> TokenClaims:
