@@ -1,8 +1,12 @@
 # Phase 3 Continuation: PostgreSQL Migration
 
+**Plan Reference**: `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md`
+**Progress Tracker**: `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md`
 **Purpose**: Continue Phase 3 - PostgreSQL Migration for multi-user support.
 **Usage**: Paste this entire prompt to resume implementation exactly where interrupted.
 **Development Style**: STRICT TDD - Write failing tests first, then implement. Use subagents for exploration.
+
+> **IMPORTANT**: Always follow the phased approach defined in the Implementation Plan. Check the Progress Tracker for current status before starting work.
 
 ---
 
@@ -10,9 +14,11 @@
 
 ### At Session Start
 
-1. Read this file to understand current state
-2. Check the Session Progress Tracker (Section 11) for incomplete work
-3. Continue from where the last session left off
+1. Read `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md` for the overall plan
+1. Read `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md` for current progress
+1. Read this file to understand current phase state
+1. Check the Session Progress Tracker (Section 11) for incomplete work
+1. Continue from where the last session left off
 
 ### During Session
 
