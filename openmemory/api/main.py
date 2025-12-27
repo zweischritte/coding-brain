@@ -1,4 +1,5 @@
 import datetime
+import os
 from uuid import uuid4
 
 from app.config import DEFAULT_APP_ID, USER_ID
@@ -6,20 +7,30 @@ from app.database import Base, SessionLocal, engine
 from app.mcp_server import setup_mcp_server
 from app.axis_guidance_server import setup_axis_guidance_server
 from app.models import App, User
-from app.routers import apps_router, backup_router, config_router, entities_router, graph_router, memories_router, stats_router
+from app.routers import apps_router, backup_router, config_router, entities_router, graph_router, health_router, memories_router, stats_router
+from app.security.middleware import SecurityHeadersMiddleware
+from app.security.exception_handlers import register_security_exception_handlers
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
 
 app = FastAPI(title="OpenMemory API")
 
+# Security headers middleware (applied to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS middleware - restrict origins in production
+allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register security exception handlers (401/403 responses)
+register_security_exception_handlers(app)
 
 # Create all tables
 Base.metadata.create_all(bind=engine)
@@ -81,6 +92,7 @@ setup_mcp_server(app)
 setup_axis_guidance_server(app)
 
 # Include routers
+app.include_router(health_router)  # Health checks first for quick probe responses
 app.include_router(memories_router)
 app.include_router(apps_router)
 app.include_router(stats_router)

@@ -1,265 +1,419 @@
-# Continuation Prompt for Claude Code
+# Phase 2 Continuation: Configuration and Secrets
 
-Copy and paste one of the prompts below to continue implementation.
-
----
-
-## Current State (as of 2025-12-26)
-
-**Phase 0: COMPLETE** ✅
-
-**784 tests passing** across Phase 0a benchmarks (337), Phase 0b security (234), and Phase 0c observability (213).
-
-### Phase 0a Completed (DO NOT REDO):
-
-- ✅ MRR metric (17 tests)
-- ✅ NDCG metric (19 tests)
-- ✅ Latency tracker (20 tests)
-- ✅ Embedder adapter interface (22 tests)
-- ✅ Lexical decision matrix (33 tests)
-- ✅ Concrete adapters: Qwen3, Nomic, Gemini (23 tests)
-- ✅ CodeSearchNet dataset loader (37 tests)
-- ✅ Lexical backend interface: Tantivy, OpenSearch (66 tests)
-- ✅ Benchmark runner (48 tests)
-- ✅ Benchmark reporter (52 tests)
-- ✅ Benchmark execution script (`run_benchmarks.py`)
-- ✅ Baseline metrics collected (`docs/BENCHMARK-RESULTS.md`)
-
-### Phase 0b Completed (DO NOT REDO):
-
-- ✅ JWT validation with OAuth 2.1/PKCE S256 (49 tests)
-- ✅ DPoP token binding per RFC 9449 (34 tests)
-- ✅ RBAC permission matrix with 7 roles (64 tests)
-- ✅ SCIM 2.0 integration stubs (34 tests)
-- ✅ Prompt injection defenses (53 tests)
-
-### Phase 0c Completed (DO NOT REDO):
-
-- ✅ OpenTelemetry tracing with GenAI conventions (70 tests)
-- ✅ Structured logging with trace correlation (49 tests)
-- ✅ Audit hooks for security events (51 tests)
-- ✅ SLO tracking with burn rate alerts (43 tests)
-
-### Decisions Made
-
-1. **Production embedding**: qwen3-embedding:8b (MRR: 0.824, NDCG: 0.848)
-2. **Development embedding**: nomic-embed-text (20x faster)
-3. **Lexical backend**: OpenSearch (better scalability/features)
-
-### Git Commits
-
-Phase 0a:
-- `9df4c1e1` feat(benchmarks): add Phase 0a benchmark framework with TDD
-- `cac96f6a` feat(benchmarks): add concrete embedder adapters
-- `1c4ddc13` feat(benchmarks): add CodeSearchNet dataset loader
-- `fcb569d4` feat(benchmarks): add lexical backend interface
-- `21df18eb` feat(benchmarks): add benchmark runner
-- `43e36e54` feat(benchmarks): add benchmark reporter
-
-Phase 0b:
-
-- `8e611782` feat(security): add Phase 0b security baseline with TDD
-
-Phase 0c:
-
-- Pending commit for observability baseline
+**Purpose**: Continue Phase 2 - Configuration and Secrets Management.
+**Usage**: Paste this entire prompt to resume implementation exactly where interrupted.
+**Development Style**: STRICT TDD - Write failing tests first, then implement. Use subagents for exploration.
 
 ---
 
-## NEXT: Phase 1 - Code Indexing Core
+## 1. Current State Summary
 
-```text
-Begin Phase 1 code indexing core per docs/IMPLEMENTATION-PLAN-DEV-ASSISTANT v7.md.
+| Component | Status | Tests |
+|-----------|--------|-------|
+| Security Core Types | COMPLETE | 32 |
+| JWT Validation | COMPLETE | 24 |
+| DPoP RFC 9449 | COMPLETE | 16 |
+| Security Headers | COMPLETE | 27 |
+| Router Auth (all routers) | COMPLETE | 25 |
+| MCP Server Auth | COMPLETE | 13+ |
 
-## Prerequisites
+**Phase 1 Complete**: All routers and MCP SSE endpoints require JWT authentication. Tool scope checks implemented for all MCP tools. 99 security tests passing.
 
-Phase 0 must be complete. Current test count: 784 tests passing.
+---
 
-### Phase 1 Tasks (per section 6 & 7)
+## 2. Completed Work Registry - DO NOT REDO
 
-1. AST parsing with Tree-sitter (Python first)
-2. Incremental indexer with Merkle tree
-3. SCIP symbol ID format
-4. Code embeddings pipeline
-5. CODE_* graph projection in Neo4j
-6. Data-flow edges (READS, WRITES, DATA_FLOWS_TO)
+### Phase 0b: Security Module
+- `openmemory/api/app/security/types.py` - Principal, TokenClaims, Scope, errors
+- `openmemory/api/app/security/jwt.py` - JWT validation
+- `openmemory/api/app/security/dpop.py` - DPoP RFC 9449 with Valkey replay cache
+- `openmemory/api/app/security/dependencies.py` - get_current_principal(), require_scopes()
+- `openmemory/api/app/security/middleware.py` - Security headers
+- `openmemory/api/app/security/exception_handlers.py` - 401/403 formatting
 
-### First Task: AST Parsing (Python)
+### Phase 1a: Router Auth - ALL COMPLETE
+- `openmemory/api/app/routers/memories.py` - 15+ endpoints, MEMORIES_READ/WRITE/DELETE
+- `openmemory/api/app/routers/apps.py` - 5 endpoints, APPS_READ/WRITE
+- `openmemory/api/app/routers/graph.py` - 12 endpoints, GRAPH_READ
+- `openmemory/api/app/routers/entities.py` - 14 endpoints, ENTITIES_READ/WRITE
+- `openmemory/api/app/routers/stats.py` - 1 endpoint, STATS_READ
+- `openmemory/api/app/routers/backup.py` - 2 endpoints, BACKUP_READ/WRITE
 
-**Location**: openmemory/api/indexing/
+### Phase 1b: MCP Server Auth - COMPLETE
+- `openmemory/api/app/mcp_server.py` - SSE endpoints require JWT
+- MCP tools check scopes:
+  - add_memories: memories:write
+  - search_memory: memories:read
+  - list_memories: memories:read
+  - delete_memories: memories:delete
+  - delete_all_memories: memories:delete
+  - update_memory: memories:write
 
-**TDD Steps**:
-1. Create directory: openmemory/api/indexing/
-2. Write tests in: openmemory/api/indexing/tests/test_ast_parser.py
-3. Tests should cover:
-   - Parse Python file into AST
-   - Extract symbols: functions, classes, methods, imports
-   - Extract symbol properties: name, signature, docstring, line numbers
-   - Handle malformed/partial files gracefully (skip with logging)
-   - Parse error rate tracking
-   - Language plugin interface
-4. Implement: openmemory/api/indexing/ast_parser.py
-5. Write tests for incremental indexing with Merkle tree
+### Infrastructure
+- `openmemory/docker-compose.yml` - Project name `codingbrain`, all containers prefixed
+- `openmemory/.env` - Complete local dev environment
+- `openmemory/api/requirements.txt` - Includes python-jose[cryptography]
 
-### Key Requirements (from v7 plan section 7)
+---
 
-- Tree-sitter for AST parsing with language plugins
-- Parser resilience: try/catch, skip malformed files, log errors
-- Track parse_error_rate metric
-- Partial indexing for recoverable files
-- Language plugin interface: parse(file) -> AST, symbols(AST), references(AST)
-- Incremental parsing with ts_tree_edit() for structural sharing
-- Symbol IDs follow SCIP format: <scheme> <package> <descriptor>+
-- Transactions per commit; atomic delete/insert; rollback on failure
+## 3. Next Task: Configuration and Secrets (Phase 2)
 
-### Key Dependencies
+### STEP 1: Analyze Current Configuration
 
-Consider adding to pyproject.toml [project.optional-dependencies.indexing]:
-- tree-sitter>=0.21.0
-- tree-sitter-python>=0.21.0
+**Use a subagent** to explore current config:
 
-### Exit Criteria (from v7 plan section 16)
-
-- Parser error rate <= 2% on target repos
-- Indexing success >= 99%
-- CodeSearchNet MRR >= 0.70 (target 0.75+)
+```
+Use Task tool with subagent_type=Explore to:
+1. Find all config loading patterns in the codebase
+2. Identify hardcoded secrets or defaults
+3. List environment variables used
+4. Check for existing Pydantic settings
 ```
 
 ---
 
-## Development Practices (ALWAYS FOLLOW)
+### STEP 2: Write Configuration Tests (TDD Red Phase)
 
-1. **ALWAYS write tests FIRST** - Never implement code before tests exist
-2. **Track progress** in docs/IMPLEMENTATION-PROGRESS.md after each milestone
-3. **Use TodoWrite tool** to track all tasks
-4. **Commit frequently** with descriptive messages
-5. **Use subagents** for exploration and parallel work
-6. **Mock external dependencies** in unit tests
-7. **Mark integration tests** with @pytest.mark.integration
+Create `openmemory/api/tests/security/test_config.py`:
 
-## Running Tests
+```python
+"""Tests for configuration and secrets management."""
+
+import pytest
+from unittest.mock import patch
+import os
+
+
+class TestSettingsValidation:
+    """Test that settings validate required secrets at startup."""
+
+    def test_missing_jwt_secret_fails_fast(self):
+        """Settings should raise if JWT_SECRET_KEY is missing."""
+        ...
+
+    def test_missing_postgres_password_fails_fast(self):
+        """Settings should raise if POSTGRES_PASSWORD is missing."""
+        ...
+
+    def test_weak_jwt_secret_rejected(self):
+        """JWT secret must be at least 32 characters."""
+        ...
+
+    def test_settings_loads_from_env(self):
+        """Settings should load all values from environment."""
+        ...
+
+
+class TestSecretRotation:
+    """Test secret rotation metadata tracking."""
+
+    def test_jwt_key_rotation_timestamp_tracked(self):
+        """JWT key rotation should be tracked with timestamp."""
+        ...
+
+    def test_rotation_schedule_validation(self):
+        """Validate rotation schedules are enforced."""
+        ...
+```
+
+Run tests:
+```bash
+docker compose exec codingbrain-mcp pytest tests/security/test_config.py -v --tb=short
+```
+
+**Confirm tests fail.** This is the RED phase.
+
+---
+
+### STEP 3: Implement Pydantic Settings
+
+Create `openmemory/api/app/config/settings.py`:
+
+```python
+"""Pydantic settings for all services and secrets."""
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # Required secrets - fail fast if missing
+    jwt_secret_key: str
+    postgres_password: str
+    neo4j_password: str
+    openai_api_key: str
+
+    # Database connections
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    postgres_db: str = "codingbrain"
+    postgres_user: str = "codingbrain"
+
+    # Neo4j
+    neo4j_url: str = "bolt://neo4j:7687"
+    neo4j_username: str = "neo4j"
+
+    # Valkey/Redis
+    valkey_host: str = "valkey"
+    valkey_port: int = 6379
+
+    # Qdrant
+    qdrant_host: str = "qdrant"
+    qdrant_port: int = 6333
+
+    # OpenSearch
+    opensearch_hosts: str = "opensearch:9200"
+
+    # JWT settings
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "https://codingbrain.local"
+    jwt_audience: str = "https://api.codingbrain.local"
+    jwt_expiry_minutes: int = 60
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError("JWT_SECRET_KEY must be at least 32 characters")
+        return v
+
+
+# Singleton instance
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings
+```
+
+---
+
+### STEP 4: Update JWT Module to Use Settings
+
+Modify `openmemory/api/app/security/jwt.py` to use Pydantic settings:
+
+```python
+from app.config.settings import get_settings
+
+def validate_jwt(token: str) -> TokenClaims:
+    settings = get_settings()
+    # Use settings.jwt_secret_key, settings.jwt_algorithm, etc.
+    ...
+```
+
+---
+
+### STEP 5: Add Startup Validation
+
+Modify `openmemory/api/main.py`:
+
+```python
+from app.config.settings import get_settings
+
+@app.on_event("startup")
+async def validate_settings():
+    """Validate required secrets at startup - fail fast."""
+    try:
+        settings = get_settings()
+        logger.info("Settings validated successfully")
+    except Exception as e:
+        logger.critical(f"Settings validation failed: {e}")
+        raise SystemExit(1)
+```
+
+---
+
+### STEP 6: Run Configuration Tests (TDD Green Phase)
 
 ```bash
-# Run all Phase 0 tests
-.venv/bin/python -m pytest openmemory/api/benchmarks/ openmemory/api/security/tests/ openmemory/api/observability/tests/ -v
-
-# Run only observability tests
-.venv/bin/python -m pytest openmemory/api/observability/tests/ -v
-
-# Run only security tests
-.venv/bin/python -m pytest openmemory/api/security/tests/ -v
-
-# Run only benchmark tests (excluding integration)
-.venv/bin/python -m pytest openmemory/api/benchmarks/ -v -m "not integration"
-
-# Quick test count
-.venv/bin/python -m pytest openmemory/api/benchmarks/ openmemory/api/security/tests/ openmemory/api/observability/tests/ -v 2>&1 | tail -3
+docker compose exec codingbrain-mcp pytest tests/security/test_config.py -v
 ```
 
-## Key Thresholds (from v7 plan)
+**All tests should pass.**
 
-- MRR >= 0.75 for production readiness ✅ (achieved 0.824)
-- NDCG@10 >= 0.80 ✅ (achieved 0.848)
-- Parser error rate <= 2%
-- Indexing success >= 99%
-- SLO: fast burn 2x over 1h, slow burn 4x over 6h
-- Error budget freeze at 50% burn
+---
 
-## Directory Structure
+### STEP 7: Run All Security Tests
 
-```text
-openmemory/api/
-├── benchmarks/               # ✅ Phase 0a complete (337 tests)
-│   ├── embeddings/
-│   ├── lexical/
-│   ├── runner/
-│   ├── reporter/
-│   └── run_benchmarks.py
-├── security/                 # ✅ Phase 0b complete (234 tests)
-│   ├── __init__.py
-│   ├── jwt_validator.py      # OAuth 2.1/PKCE S256
-│   ├── dpop_validator.py     # RFC 9449 DPoP
-│   ├── rbac.py               # Role permission matrix
-│   ├── scim.py               # SCIM 2.0 stubs
-│   ├── prompt_injection.py   # Pattern library, risk scoring
-│   └── tests/
-├── observability/            # ✅ Phase 0c complete (213 tests)
-│   ├── __init__.py
-│   ├── tracing.py            # OpenTelemetry with GenAI conventions
-│   ├── logging.py            # Structured logging with trace correlation
-│   ├── audit.py              # Audit hooks with hash chaining
-│   ├── slo.py                # SLO tracking with burn rate alerts
-│   └── tests/
-└── indexing/                 # 🎯 Phase 1 (next)
-    ├── __init__.py
-    ├── ast_parser.py         # Tree-sitter AST parsing
-    ├── merkle_tree.py        # Incremental indexing
-    ├── symbol_extractor.py   # SCIP symbol ID format
-    ├── embeddings.py         # Code embedding pipeline
-    ├── graph_projection.py   # CODE_* Neo4j projection
-    └── tests/
+```bash
+docker compose exec codingbrain-mcp pytest tests/security/ -v
 ```
 
-## Observability Module Reference
+Ensure no regressions.
 
-The Phase 0c observability module provides:
+---
 
-```python
-# Tracing
-from openmemory.api.observability.tracing import (
-    Tracer, TracingConfig, TracingContext,
-    SpanKind, SpanStatus, Span, NoOpSpan,
-    create_tracer, get_current_span, get_current_trace_id,
-    inject_context, extract_context, trace,
-)
+### STEP 8: Create .env.example Template
 
-# Logging
-from openmemory.api.observability.logging import (
-    StructuredLogger, LogConfig, LogRecord, LogLevel,
-    create_logger, get_logger, bind_context, unbind_context,
-)
+Update `openmemory/.env.example`:
 
-# Audit
-from openmemory.api.observability.audit import (
-    AuditLogger, AuditEvent, AuditConfig, AuditEventType,
-    AuditStore, MemoryAuditStore, AuditChainVerifier,
-    create_audit_logger,
-)
+```bash
+# Coding Brain Configuration
+# Copy to .env and fill in required values
 
-# SLO
-from openmemory.api.observability.slo import (
-    SLOTracker, SLODefinition, SLOBudget, SLOConfig,
-    BurnRate, BurnRateWindow, SLOAlert, AlertSeverity,
-    create_slo_tracker,
-)
+# Required Secrets (fail-fast if missing)
+JWT_SECRET_KEY=           # Min 32 characters, rotate every 90 days
+POSTGRES_PASSWORD=        # Rotate every 180 days
+NEO4J_PASSWORD=           # Rotate every 180 days
+OPENAI_API_KEY=           # Rotate every 30-90 days
+
+# PostgreSQL
+POSTGRES_USER=codingbrain
+POSTGRES_DB=codingbrain
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+
+# Neo4j
+NEO4J_USERNAME=neo4j
+NEO4J_URL=bolt://neo4j:7687
+
+# Valkey
+VALKEY_HOST=valkey
+VALKEY_PORT=6379
+
+# Qdrant
+QDRANT_HOST=qdrant
+QDRANT_PORT=6333
+
+# OpenSearch
+OPENSEARCH_HOSTS=opensearch:9200
+OPENSEARCH_INITIAL_ADMIN_PASSWORD=
+
+# JWT
+JWT_ALGORITHM=HS256
+JWT_ISSUER=https://codingbrain.local
+JWT_AUDIENCE=https://api.codingbrain.local
+JWT_EXPIRY_MINUTES=60
+
+# CORS
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3433
+
+# UI
+NEXT_PUBLIC_API_URL=http://localhost:8865
+USER=coding-brain-user
 ```
 
-## Security Module Reference
+---
 
-The Phase 0b security module provides:
+### STEP 9: Document Secret Rotation
 
-```python
-# JWT validation
-from openmemory.api.security.jwt_validator import JWTValidator, PKCEValidator
-from openmemory.api.security.jwt_validator import JWTValidationError, JWTExpiredError
+Create `docs/SECRET-ROTATION.md`:
 
-# DPoP token binding
-from openmemory.api.security.dpop_validator import DPoPValidator, create_dpop_proof
-from openmemory.api.security.dpop_validator import DPoPValidationError, DPoPReplayError
+```markdown
+# Secret Rotation Procedures
 
-# RBAC
-from openmemory.api.security.rbac import RBACEnforcer, Principal, Role, Permission, Scope
-from openmemory.api.security.rbac import PermissionDeniedError, ScopeMismatchError
+## Rotation Schedule
 
-# SCIM
-from openmemory.api.security.scim import SCIMService, SCIMUser, UserStatus
+| Secret | Rotation Period | Last Rotated |
+|--------|-----------------|--------------|
+| JWT_SECRET_KEY | 90 days | YYYY-MM-DD |
+| POSTGRES_PASSWORD | 180 days | YYYY-MM-DD |
+| NEO4J_PASSWORD | 180 days | YYYY-MM-DD |
+| OPENAI_API_KEY | 30-90 days | YYYY-MM-DD |
 
-# Prompt injection
-from openmemory.api.security.prompt_injection import (
-    PromptInjectionDetector,
-    InputSanitizer,
-    ContextIsolator,
-    RiskLevel,
-    InjectionType,
-)
+## Rotation Procedures
+
+### JWT Secret Key
+1. Generate new key: `openssl rand -base64 48`
+2. Add new key to JWT_SECRET_KEY_NEW in .env
+3. Update code to accept both old and new keys
+4. Deploy and wait for all old tokens to expire
+5. Remove old key from JWT_SECRET_KEY
+
+### Database Passwords
+1. Create new password
+2. Update in database
+3. Update in .env
+4. Restart services
+```
+
+---
+
+### STEP 10: Commit and Write Next Continuation Prompt
+
+Commit with message:
+```
+feat(config): add Pydantic settings with secret validation
+```
+
+Write next continuation prompt for Phase 3 (PostgreSQL Migration).
+
+---
+
+## 4. TDD Workflow - MANDATORY
+
+1. **RED**: Run tests, confirm they fail
+2. **GREEN**: Write minimal code to pass tests
+3. **REFACTOR**: Clean up while keeping tests green
+
+**NEVER skip the RED phase.** If tests already pass, verify the feature works.
+
+---
+
+## 5. Subagent Usage - RECOMMENDED
+
+```
+# Explore configuration patterns
+Use Task tool with subagent_type=Explore to find all config loading in the codebase
+
+# Check for hardcoded secrets
+Use Task tool with subagent_type=Explore to find hardcoded passwords or keys
+```
+
+---
+
+## 6. Exit Gates for Phase 2
+
+| Metric | Threshold |
+|--------|-----------|
+| test_config.py | All tests pass |
+| Settings validated | At startup |
+| No hardcoded secrets | 0 remaining |
+| .env.example | Complete template |
+| SECRET-ROTATION.md | Documented |
+
+---
+
+## 7. Command Reference
+
+```bash
+# Configuration tests
+docker compose exec codingbrain-mcp pytest tests/security/test_config.py -v
+
+# All security tests
+docker compose exec codingbrain-mcp pytest tests/security/ -v
+
+# Validate settings load
+docker compose exec codingbrain-mcp python -c "from app.config.settings import get_settings; print(get_settings())"
+```
+
+---
+
+## 8. Phase 1 Completion Summary (2025-12-27)
+
+**What was implemented:**
+- JWT authentication on all MCP SSE endpoints (/mcp/ and /concepts/)
+- Scope checks on all MCP tools (add_memories, search_memory, list_memories, delete_memories, delete_all_memories, update_memory)
+- User ID now comes from JWT token, NOT from URL path parameters
+- 99 security tests passing
+
+**Files modified:**
+- `openmemory/api/app/mcp_server.py` - Added _extract_principal_from_request() and _check_tool_scope() helpers
+- `openmemory/docker-compose.yml` - Added `name: codingbrain` to prevent container namespace conflicts
+- `openmemory/api/requirements.txt` - Added python-jose[cryptography]
+- `openmemory/.env` - Complete local development environment
+
+**Verification:**
+```bash
+curl http://localhost:8865/mcp/test-client/sse/attacker-user  # Returns 401
+curl http://localhost:8865/concepts/test-client/sse/attacker-user  # Returns 401
 ```

@@ -16,6 +16,8 @@ from app.models import (
     User,
 )
 from app.schemas import MemoryResponse
+from app.security.dependencies import get_current_principal, require_scopes
+from app.security.types import Principal, Scope
 from app.utils.axis_tags import process_memory_input
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
@@ -102,7 +104,7 @@ def get_accessible_memory_ids(db: Session, app_id: UUID) -> Set[UUID]:
 # List all memories with filtering
 @router.get("/", response_model=Page[MemoryResponse])
 async def list_memories(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     app_id: Optional[UUID] = None,
     from_date: Optional[int] = Query(
         None,
@@ -121,7 +123,8 @@ async def list_memories(
     sort_direction: Optional[str] = Query(None, description="Sort direction (asc or desc)"),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.user_id == user_id).first()
+    # Get user from principal (user_id from JWT, not from query param)
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -190,10 +193,10 @@ async def list_memories(
 # Get all categories
 @router.get("/categories")
 async def get_categories(
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -212,7 +215,6 @@ async def get_categories(
 
 
 class CreateMemoryRequest(BaseModel):
-    user_id: str
     text: str
     metadata: dict = {}
     infer: bool = True
@@ -223,9 +225,10 @@ class CreateMemoryRequest(BaseModel):
 @router.post("/")
 async def create_memory(
     request: CreateMemoryRequest,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_WRITE)),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     # Get or create app
@@ -242,7 +245,7 @@ async def create_memory(
         raise HTTPException(status_code=403, detail=f"App {request.app} is currently paused on OpenMemory. Cannot create new memories.")
 
     # Log what we're about to do
-    logging.info(f"Creating memory for user_id: {request.user_id} with app: {request.app}")
+    logging.info(f"Creating memory for user_id: {principal.user_id} with app: {request.app}")
     
     clean_text, axis_metadata = process_memory_input(request.text)
 
@@ -268,7 +271,7 @@ async def create_memory(
         }
         qdrant_response = memory_client.add(
             clean_text,
-            user_id=request.user_id,  # Use string user_id to match search
+            user_id=principal.user_id,  # Use JWT user_id to match search
             metadata=combined_metadata,
             infer=request.infer
         )
@@ -340,9 +343,14 @@ async def create_memory(
 @router.get("/{memory_id}")
 async def get_memory(
     memory_id: UUID,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     db: Session = Depends(get_db)
 ):
     memory = get_memory_or_404(db, memory_id)
+    # Verify user owns this memory
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
+    if not user or memory.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Memory not found")
 
     # Extract AXIS metadata from metadata_ dict for frontend
     metadata = {}
@@ -373,15 +381,15 @@ async def get_memory(
 
 class DeleteMemoriesRequest(BaseModel):
     memory_ids: List[UUID]
-    user_id: str
 
 # Delete multiple memories
 @router.delete("/")
 async def delete_memories(
     request: DeleteMemoriesRequest,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_DELETE)),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -418,11 +426,14 @@ async def delete_memories(
 @router.post("/actions/archive")
 async def archive_memories(
     memory_ids: List[UUID],
-    user_id: UUID,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_WRITE)),
     db: Session = Depends(get_db)
 ):
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     for memory_id in memory_ids:
-        update_memory_state(db, memory_id, MemoryState.archived, user_id)
+        update_memory_state(db, memory_id, MemoryState.archived, user.id)
     return {"message": f"Successfully archived {len(memory_ids)} memories"}
 
 
@@ -433,15 +444,15 @@ class PauseMemoriesRequest(BaseModel):
     all_for_app: bool = False
     global_pause: bool = False
     state: Optional[MemoryState] = None
-    user_id: str
 
 # Pause access to memories
 @router.post("/actions/pause")
 async def pause_memories(
     request: PauseMemoriesRequest,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_WRITE)),
     db: Session = Depends(get_db)
 ):
-    
+
     global_pause = request.global_pause
     all_for_app = request.all_for_app
     app_id = request.app_id
@@ -449,10 +460,10 @@ async def pause_memories(
     category_ids = request.category_ids
     state = request.state or MemoryState.paused
 
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     user_id = user.id
     
     if global_pause:
@@ -512,6 +523,7 @@ async def pause_memories(
 @router.get("/{memory_id}/access-log")
 async def get_memory_access_log(
     memory_id: UUID,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
@@ -534,7 +546,6 @@ async def get_memory_access_log(
 
 
 class UpdateMemoryRequest(BaseModel):
-    user_id: str
     memory_content: Optional[str] = None
     vault: Optional[str] = None
     layer: Optional[str] = None
@@ -580,6 +591,7 @@ class UpdateMemoryRequest(BaseModel):
 async def update_memory(
     memory_id: UUID,
     request: UpdateMemoryRequest,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_WRITE)),
     db: Session = Depends(get_db)
 ):
     """Update memory content and/or metadata with best-effort sync to vector + graph stores."""
@@ -596,10 +608,13 @@ async def update_memory(
     from app.graph.entity_bridge import bridge_entities_to_om_graph
     from app.utils.structured_memory import validate_update_fields, apply_metadata_updates
 
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     memory = get_memory_or_404(db, memory_id)
+    # Verify user owns this memory
+    if memory.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Memory not found")
 
     sync_warnings: List[str] = []
     content_updated = request.memory_content is not None
@@ -610,7 +625,7 @@ async def update_memory(
         try:
             old_entities = get_entities_for_memory_from_graph(
                 memory_id=str(memory_id),
-                user_id=request.user_id,
+                user_id=principal.user_id,
             )
         except Exception as e:
             sync_warnings.append(f"graph_old_entities_failed:{e}")
@@ -666,7 +681,7 @@ async def update_memory(
 
             # Merge payload safely (preserve session ids + mem0 core keys)
             payload = dict(existing_payload)
-            payload["user_id"] = request.user_id
+            payload["user_id"] = principal.user_id
             payload["data"] = new_content
             payload["hash"] = hashlib.md5(new_content.encode()).hexdigest()
             payload["created_at"] = (
@@ -719,7 +734,7 @@ async def update_memory(
         try:
             project_memory_to_graph(
                 memory_id=str(memory_id),
-                user_id=request.user_id,
+                user_id=principal.user_id,
                 content=new_content,
                 metadata=updated_metadata,
                 created_at=memory.created_at.isoformat() if memory.created_at else None,
@@ -735,7 +750,7 @@ async def update_memory(
             try:
                 bridge_entities_to_om_graph(
                     memory_id=str(memory_id),
-                    user_id=request.user_id,
+                    user_id=principal.user_id,
                     content=new_content,
                     existing_entity=updated_metadata.get("re"),
                 )
@@ -746,7 +761,7 @@ async def update_memory(
         # Update tag co-occurrence edges only if tags were part of the request
         if request.tags is not None:
             try:
-                update_tag_edges_on_memory_add(str(memory_id), request.user_id)
+                update_tag_edges_on_memory_add(str(memory_id), principal.user_id)
                 tag_edges_updated = True
             except Exception as e:
                 sync_warnings.append(f"tag_edges_update_failed:{e}")
@@ -754,8 +769,8 @@ async def update_memory(
         # Similarity edges depend on embeddings; only refresh when content changed.
         if content_updated:
             try:
-                delete_similarity_edges_for_memory(str(memory_id), request.user_id)
-                project_similarity_edges_for_memory(str(memory_id), request.user_id)
+                delete_similarity_edges_for_memory(str(memory_id), principal.user_id)
+                project_similarity_edges_for_memory(str(memory_id), principal.user_id)
                 similarity_refreshed = True
             except Exception as e:
                 sync_warnings.append(f"similarity_refresh_failed:{e}")
@@ -764,12 +779,12 @@ async def update_memory(
         try:
             new_entities = get_entities_for_memory_from_graph(
                 memory_id=str(memory_id),
-                user_id=request.user_id,
+                user_id=principal.user_id,
             )
             affected_entities = sorted({*(old_entities or []), *(new_entities or [])})
             if affected_entities:
                 refresh_co_mention_edges_for_entities(
-                    user_id=request.user_id,
+                    user_id=principal.user_id,
                     entity_names=affected_entities,
                 )
                 co_mentions_refreshed = True
@@ -791,7 +806,6 @@ async def update_memory(
     }
 
 class FilterMemoriesRequest(BaseModel):
-    user_id: str
     page: int = 1
     size: int = 10
     search_query: Optional[str] = None
@@ -808,9 +822,10 @@ class FilterMemoriesRequest(BaseModel):
 @router.post("/filter", response_model=Page[MemoryResponse])
 async def filter_memories(
     request: FilterMemoriesRequest,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     db: Session = Depends(get_db)
 ):
-    user = db.query(User).filter(User.user_id == request.user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -912,17 +927,20 @@ async def filter_memories(
 @router.get("/{memory_id}/related", response_model=Page[MemoryResponse])
 async def get_related_memories(
     memory_id: UUID,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     params: Params = Depends(),
     db: Session = Depends(get_db)
 ):
-    # Validate user
-    user = db.query(User).filter(User.user_id == user_id).first()
+    # Validate user from JWT
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Get the source memory
     memory = get_memory_or_404(db, memory_id)
+    # Verify ownership
+    if memory.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Memory not found")
     
     # Extract category IDs from the source memory
     category_ids = [category.id for category in memory.categories]
@@ -974,7 +992,7 @@ async def get_related_memories(
 @router.get("/{memory_id}/graph")
 async def get_memory_graph_context(
     memory_id: UUID,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     db: Session = Depends(get_db),
 ):
     """Get graph context for a memory: similar memories, subgraph, etc."""
@@ -984,7 +1002,7 @@ async def get_memory_graph_context(
     )
 
     # Verify memory exists and belongs to user
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -999,7 +1017,7 @@ async def get_memory_graph_context(
     # Get similar memories via OM_SIMILAR edges
     similar = get_similar_memories_from_graph(
         memory_id=str(memory_id),
-        user_id=user_id,
+        user_id=principal.user_id,
         min_score=0.5,
         limit=10
     )
@@ -1007,7 +1025,7 @@ async def get_memory_graph_context(
     # Get subgraph (entities, dimensions, related memories)
     subgraph = get_memory_subgraph_from_graph(
         memory_id=str(memory_id),
-        user_id=user_id,
+        user_id=principal.user_id,
         depth=2,
         related_limit=20
     )
@@ -1022,7 +1040,7 @@ async def get_memory_graph_context(
 @router.get("/{memory_id}/similar")
 async def get_similar_memories(
     memory_id: UUID,
-    user_id: str,
+    principal: Principal = Depends(require_scopes(Scope.MEMORIES_READ)),
     min_score: float = Query(default=0.5, ge=0.0, le=1.0),
     limit: int = Query(default=10, ge=1, le=50),
     db: Session = Depends(get_db),
@@ -1030,7 +1048,7 @@ async def get_similar_memories(
     """Get semantically similar memories via pre-computed OM_SIMILAR edges."""
     from app.graph.graph_ops import get_similar_memories_from_graph
 
-    user = db.query(User).filter(User.user_id == user_id).first()
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -1044,7 +1062,7 @@ async def get_similar_memories(
 
     similar = get_similar_memories_from_graph(
         memory_id=str(memory_id),
-        user_id=user_id,
+        user_id=principal.user_id,
         min_score=min_score,
         limit=limit
     )

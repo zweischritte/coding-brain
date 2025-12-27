@@ -88,6 +88,7 @@ from app.graph.graph_ops import (
 from app.graph.entity_bridge import bridge_entities_to_om_graph
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from mcp.server.fastmcp import FastMCP
 from mcp.server.sse import SseServerTransport
@@ -110,9 +111,19 @@ def get_memory_client_safe():
         logging.warning(f"Failed to get memory client: {e}")
         return None
 
-# Context variables for user_id and client_name
+# Context variables for user_id, client_name, and org_id
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id")
 client_name_var: contextvars.ContextVar[str] = contextvars.ContextVar("client_name")
+org_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("org_id")
+
+# Import security dependencies for JWT validation
+try:
+    from app.security.jwt import validate_jwt
+    from app.security.types import Principal, AuthenticationError, AuthorizationError, Scope
+    HAS_SECURITY = True
+except ImportError:
+    HAS_SECURITY = False
+    logging.warning("Security module not available - MCP endpoints will not require authentication")
 
 # Create a router for MCP endpoints
 mcp_router = APIRouter(prefix="/mcp")
@@ -125,6 +136,105 @@ sse = SseServerTransport("/mcp/messages/")
 
 # Initialize SSE transport for Business Concept tools
 concept_sse = SseServerTransport("/concepts/messages/")
+
+
+def _extract_principal_from_request(request: Request) -> "Principal":
+    """
+    Extract and validate the authenticated principal from the request.
+
+    Raises:
+        AuthenticationError: If authentication fails or is missing
+    """
+    if not HAS_SECURITY:
+        # Security module not available - create a mock principal from path params
+        # This is for backwards compatibility during migration
+        uid = request.path_params.get("user_id", "anonymous")
+        return type('Principal', (), {
+            'user_id': uid,
+            'org_id': 'default',
+            'has_scope': lambda self, scope: True,
+            'claims': None,
+        })()
+
+    # Extract Authorization header
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header:
+        raise AuthenticationError(
+            message="Missing authorization header",
+            code="MISSING_AUTH"
+        )
+
+    # Parse Bearer token
+    if not auth_header.lower().startswith("bearer "):
+        raise AuthenticationError(
+            message="Invalid authorization header format - expected 'Bearer <token>'",
+            code="INVALID_AUTH_FORMAT"
+        )
+
+    token = auth_header[7:]  # Remove "Bearer " prefix
+    if not token:
+        raise AuthenticationError(
+            message="Empty authorization token",
+            code="EMPTY_TOKEN"
+        )
+
+    # Validate the JWT token
+    claims = validate_jwt(token)
+
+    # Build the principal
+    principal = Principal(
+        user_id=claims.sub,
+        org_id=claims.org_id,
+        claims=claims,
+    )
+
+    return principal
+
+
+def _check_scope(principal, scope: "Scope") -> None:
+    """
+    Check if the principal has the required scope.
+
+    Raises:
+        AuthorizationError: If the principal lacks the required scope
+    """
+    if not HAS_SECURITY:
+        return  # Security not available, skip check
+
+    if not principal.has_scope(scope):
+        raise AuthorizationError(
+            message=f"Required scope '{scope.value}' not granted",
+            code="INSUFFICIENT_SCOPE",
+        )
+
+
+# Context variable to store the current principal for tool scope checks
+principal_var: contextvars.ContextVar["Principal"] = contextvars.ContextVar("principal")
+
+
+def _check_tool_scope(required_scope: str) -> str | None:
+    """
+    Check if the current principal has the required scope for a tool.
+
+    Returns None if scope check passes, or a JSON error string if it fails.
+    This is designed for MCP tools which return JSON strings.
+    """
+    if not HAS_SECURITY:
+        return None  # Security not available, skip check
+
+    # Get principal from context var (set by SSE handlers)
+    # If no principal, we're in backwards-compat mode
+    principal = principal_var.get(None)
+    if not principal:
+        return None  # Backwards compatibility - no auth check
+
+    # Check scope
+    if not principal.has_scope(required_scope):
+        return json.dumps({
+            "error": f"Insufficient scope",
+            "code": "INSUFFICIENT_SCOPE",
+            "required_scope": required_scope,
+        })
 
 @mcp.tool(description="""Add a new memory with structured parameters.
 
@@ -164,6 +274,11 @@ async def add_memories(
     evidence: list = None,
     tags: dict = None,
 ) -> str:
+    # Check scope - requires memories:write
+    scope_error = _check_tool_scope("memories:write")
+    if scope_error:
+        return scope_error
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
 
@@ -443,6 +558,11 @@ async def search_memory(
     auto_route: bool = True,
 ) -> str:
     """Search memories with re-ranking. See tool description for full docs."""
+    # Check scope - requires memories:read
+    scope_error = _check_tool_scope("memories:read")
+    if scope_error:
+        return scope_error
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
 
@@ -1339,6 +1459,11 @@ Returns lean JSON optimized for LLM processing:
 - updated_at: Berlin time (if present)
 """)
 async def list_memories() -> str:
+    # Check scope - requires memories:read
+    scope_error = _check_tool_scope("memories:read")
+    if scope_error:
+        return scope_error
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
     if not uid:
@@ -1429,6 +1554,11 @@ async def list_memories() -> str:
 
 @mcp.tool(description="Delete specific memories by their IDs")
 async def delete_memories(memory_ids: list[str]) -> str:
+    # Check scope - requires memories:delete
+    scope_error = _check_tool_scope("memories:delete")
+    if scope_error:
+        return scope_error
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
     if not uid:
@@ -1516,6 +1646,11 @@ async def delete_memories(memory_ids: list[str]) -> str:
 
 @mcp.tool(description="Delete all memories in the user's memory")
 async def delete_all_memories() -> str:
+    # Check scope - requires memories:delete
+    scope_error = _check_tool_scope("memories:delete")
+    if scope_error:
+        return scope_error
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
     if not uid:
@@ -1641,6 +1776,11 @@ async def update_memory(
     # Maintenance mode
     preserve_timestamps: bool = False,
 ) -> str:
+    # Check scope - requires memories:write
+    scope_error = _check_tool_scope("memories:write")
+    if scope_error:
+        return scope_error
+
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
 
@@ -2896,12 +3036,29 @@ async def delete_business_concept(
 
 @mcp_router.get("/{client_name}/sse/{user_id}")
 async def handle_sse(request: Request):
-    """Handle SSE connections for a specific user and client"""
-    # Extract user_id and client_name from path parameters
-    uid = request.path_params.get("user_id")
-    user_token = user_id_var.set(uid or "")
+    """Handle SSE connections for a specific user and client.
+
+    Authentication is required - the user_id in the path is IGNORED.
+    The authenticated user comes from the JWT token in the Authorization header.
+    """
+    # Authenticate the request - user_id comes from JWT, not path
+    try:
+        principal = _extract_principal_from_request(request)
+    except Exception as e:
+        if HAS_SECURITY and isinstance(e, AuthenticationError):
+            return JSONResponse(
+                status_code=401,
+                content={"error": e.message, "code": e.code},
+                headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
+            )
+        raise
+
+    # Set context variables from authenticated principal (NOT from path)
+    user_token = user_id_var.set(principal.user_id)
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
+    org_token = org_id_var.set(principal.org_id)
+    principal_token = principal_var.set(principal)
 
     try:
         # Handle SSE connection
@@ -2919,6 +3076,8 @@ async def handle_sse(request: Request):
         # Clean up context variables
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
+        org_id_var.reset(org_token)
+        principal_var.reset(principal_token)
 
 
 @mcp_router.post("/messages/")
@@ -2932,7 +3091,29 @@ async def handle_mcp_post_message(request: Request):
 
 
 async def handle_post_message(request: Request):
-    """Handle POST messages for SSE"""
+    """Handle POST messages for SSE.
+
+    Authentication is required - context vars must be set from authenticated principal.
+    """
+    # Authenticate the request
+    try:
+        principal = _extract_principal_from_request(request)
+    except Exception as e:
+        if HAS_SECURITY and isinstance(e, AuthenticationError):
+            return JSONResponse(
+                status_code=401,
+                content={"error": e.message, "code": e.code},
+                headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
+            )
+        raise
+
+    # Set context variables from authenticated principal
+    user_token = user_id_var.set(principal.user_id)
+    client_name = request.path_params.get("client_name", "")
+    client_token = client_name_var.set(client_name)
+    org_token = org_id_var.set(principal.org_id)
+    principal_token = principal_var.set(principal)
+
     try:
         body = await request.body()
 
@@ -2950,7 +3131,10 @@ async def handle_post_message(request: Request):
         # Return a success response
         return {"status": "ok"}
     finally:
-        pass
+        user_id_var.reset(user_token)
+        client_name_var.reset(client_token)
+        org_id_var.reset(org_token)
+        principal_var.reset(principal_token)
 
 
 # =============================================================================
@@ -2962,12 +3146,29 @@ async def handle_post_message(request: Request):
 
 @concept_router.get("/{client_name}/sse/{user_id}")
 async def handle_concept_sse(request: Request):
-    """Handle SSE connections for Business Concepts MCP"""
-    # Extract user_id and client_name from path parameters
-    uid = request.path_params.get("user_id")
-    user_token = user_id_var.set(uid or "")
+    """Handle SSE connections for Business Concepts MCP.
+
+    Authentication is required - the user_id in the path is IGNORED.
+    The authenticated user comes from the JWT token in the Authorization header.
+    """
+    # Authenticate the request - user_id comes from JWT, not path
+    try:
+        principal = _extract_principal_from_request(request)
+    except Exception as e:
+        if HAS_SECURITY and isinstance(e, AuthenticationError):
+            return JSONResponse(
+                status_code=401,
+                content={"error": e.message, "code": e.code},
+                headers={"WWW-Authenticate": 'Bearer realm="concepts"'},
+            )
+        raise
+
+    # Set context variables from authenticated principal (NOT from path)
+    user_token = user_id_var.set(principal.user_id)
     client_name = request.path_params.get("client_name")
     client_token = client_name_var.set(client_name or "")
+    org_token = org_id_var.set(principal.org_id)
+    principal_token = principal_var.set(principal)
 
     try:
         # Handle SSE connection using concept_mcp server
@@ -2985,6 +3186,8 @@ async def handle_concept_sse(request: Request):
         # Clean up context variables
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
+        org_id_var.reset(org_token)
+        principal_var.reset(principal_token)
 
 
 @concept_router.post("/messages/")
@@ -2998,7 +3201,29 @@ async def handle_concept_post_message_route(request: Request):
 
 
 async def handle_concept_post_message(request: Request):
-    """Handle POST messages for Business Concepts SSE"""
+    """Handle POST messages for Business Concepts SSE.
+
+    Authentication is required - context vars must be set from authenticated principal.
+    """
+    # Authenticate the request
+    try:
+        principal = _extract_principal_from_request(request)
+    except Exception as e:
+        if HAS_SECURITY and isinstance(e, AuthenticationError):
+            return JSONResponse(
+                status_code=401,
+                content={"error": e.message, "code": e.code},
+                headers={"WWW-Authenticate": 'Bearer realm="concepts"'},
+            )
+        raise
+
+    # Set context variables from authenticated principal
+    user_token = user_id_var.set(principal.user_id)
+    client_name = request.path_params.get("client_name", "")
+    client_token = client_name_var.set(client_name)
+    org_token = org_id_var.set(principal.org_id)
+    principal_token = principal_var.set(principal)
+
     try:
         body = await request.body()
 
@@ -3016,7 +3241,10 @@ async def handle_concept_post_message(request: Request):
         # Return a success response
         return {"status": "ok"}
     finally:
-        pass
+        user_id_var.reset(user_token)
+        client_name_var.reset(client_token)
+        org_id_var.reset(org_token)
+        principal_var.reset(principal_token)
 
 
 def setup_mcp_server(app: FastAPI):

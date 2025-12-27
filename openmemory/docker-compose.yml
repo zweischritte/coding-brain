@@ -1,17 +1,89 @@
+# Production-ready docker-compose for coding-brain
+# Phase 0.5: Infrastructure Prerequisites
+#
+# Required: Copy .env.example to .env and set all required values before running
+#
+# IMPORTANT: This is the CODING-BRAIN instance, completely separate from openmemory.
+# All containers are prefixed with "codingbrain-" to avoid conflicts.
+#
+# Services:
+# - PostgreSQL 16: Primary relational database with pgvector
+# - Valkey 8: Cache and session store (Redis-compatible)
+# - Neo4j 5: Graph database for code relationships
+# - OpenSearch 2.13: Full-text and hybrid search
+# - Qdrant 1.12: Vector database for embeddings
+# - MCP API: The main application server
+# - UI: The web interface
+
+# Force project name to ensure all containers are prefixed with "codingbrain-"
+name: codingbrain
+
 networks:
   codingbrain-net:
     driver: bridge
 
 services:
-  codingbrain_store:
-    image: qdrant/qdrant
-    container_name: codingbrain-qdrant
+  # PostgreSQL 16 with pgvector for relational data and vector storage
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: codingbrain-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-codingbrain}
     ports:
-      - "6433:6333"
+      - "5532:5432"
     volumes:
-      - codingbrain_storage:/qdrant/storage
+      - codingbrain_postgres_data:/var/lib/postgresql/data
     networks:
       - codingbrain-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-codingbrain}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Valkey 8 - Redis-compatible cache and session store
+  valkey:
+    image: valkey/valkey:8.0.2-alpine
+    container_name: codingbrain-valkey
+    restart: unless-stopped
+    ports:
+      - "6479:6379"
+    volumes:
+      - codingbrain_valkey_data:/data
+    networks:
+      - codingbrain-net
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: valkey-server --appendonly yes
+
+  # Qdrant vector database
+  qdrant:
+    image: qdrant/qdrant:v1.12.5
+    container_name: codingbrain-qdrant
+    restart: unless-stopped
+    ports:
+      - "6433:6333"
+      - "6434:6334"  # gRPC port
+    volumes:
+      - codingbrain_qdrant_storage:/qdrant/storage
+    networks:
+      - codingbrain-net
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # OpenSearch for full-text and hybrid search
   opensearch:
     image: opensearchproject/opensearch:2.13.0
     container_name: codingbrain-opensearch
@@ -20,7 +92,7 @@ services:
       - discovery.type=single-node
       - plugins.security.disabled=true
       - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
-      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=Codingbrain123!
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_INITIAL_ADMIN_PASSWORD}
       - bootstrap.memory_lock=true
     ulimits:
       memlock: { soft: -1, hard: -1 }
@@ -33,19 +105,22 @@ services:
     networks:
       - codingbrain-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200 >/dev/null || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
+
+  # Neo4j graph database
   neo4j:
-    image: neo4j:5-community
+    image: neo4j:5.26.4-community
     container_name: codingbrain-neo4j
+    restart: unless-stopped
     ports:
       - "7574:7474"
       - "7787:7687"
     environment:
-      - NEO4J_AUTH=neo4j/codingbrain123
+      - NEO4J_AUTH=${NEO4J_USERNAME}/${NEO4J_PASSWORD}
       # Enable Graph Data Science and APOC plugins
       - NEO4J_PLUGINS=["graph-data-science", "apoc"]
       # Allow GDS and APOC procedures
@@ -62,24 +137,46 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
+
+  # Main API/MCP server
   codingbrain-mcp:
     image: codingbrain/mcp
     container_name: codingbrain-mcp
     build: api/
+    restart: unless-stopped
     environment:
-      - USER
-      - API_KEY
+      - USER=${USER}
+      - API_KEY=${API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # PostgreSQL connection
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-codingbrain}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # Neo4j connection
       - NEO4J_URL=bolt://neo4j:7687
-      - NEO4J_USERNAME=neo4j
-      - NEO4J_PASSWORD=codingbrain123
+      - NEO4J_USERNAME=${NEO4J_USERNAME}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      # OpenSearch connection
       - OPENSEARCH_HOSTS=opensearch:9200
+      # Qdrant connection
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      # Valkey connection
+      - VALKEY_HOST=valkey
+      - VALKEY_PORT=6379
     env_file:
       - api/.env
     depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
       neo4j:
         condition: service_healthy
-      codingbrain_store:
-        condition: service_started
+      qdrant:
+        condition: service_healthy
       opensearch:
         condition: service_healthy
     ports:
@@ -88,14 +185,23 @@ services:
       - ./api:/usr/src/openmemory
     networks:
       - codingbrain-net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8765/health/live')\""]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     command: >
       sh -c "uvicorn main:app --host 0.0.0.0 --port 8765 --reload --workers 4"
+
+  # Web UI
   codingbrain-ui:
     build:
       context: ui/
       dockerfile: Dockerfile
     image: codingbrain/ui:latest
     container_name: codingbrain-ui
+    restart: unless-stopped
     ports:
       - "3433:3000"
     environment:
@@ -103,9 +209,14 @@ services:
       - NEXT_PUBLIC_USER_ID=${USER}
     networks:
       - codingbrain-net
+    depends_on:
+      codingbrain-mcp:
+        condition: service_healthy
 
 volumes:
-  codingbrain_storage:
+  codingbrain_postgres_data:
+  codingbrain_valkey_data:
+  codingbrain_qdrant_storage:
   codingbrain_neo4j_data:
   codingbrain_neo4j_logs:
   codingbrain_opensearch_data:

@@ -2,7 +2,9 @@ from typing import Optional
 from uuid import UUID
 
 from app.database import get_db
-from app.models import App, Memory, MemoryAccessLog, MemoryState
+from app.models import App, Memory, MemoryAccessLog, MemoryState, User
+from app.security.dependencies import get_current_principal, require_scopes
+from app.security.types import Principal, Scope
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session, joinedload
@@ -19,6 +21,7 @@ def get_app_or_404(db: Session, app_id: UUID) -> App:
 # List all apps with filtering
 @router.get("/")
 async def list_apps(
+    principal: Principal = Depends(require_scopes(Scope.APPS_READ)),
     name: Optional[str] = None,
     is_active: Optional[bool] = None,
     sort_by: str = 'name',
@@ -101,6 +104,7 @@ async def list_apps(
 @router.get("/{app_id}")
 async def get_app_details(
     app_id: UUID,
+    principal: Principal = Depends(require_scopes(Scope.APPS_READ)),
     db: Session = Depends(get_db)
 ):
     app = get_app_or_404(db, app_id)
@@ -126,6 +130,7 @@ async def get_app_details(
 @router.get("/{app_id}/memories")
 async def list_app_memories(
     app_id: UUID,
+    principal: Principal = Depends(require_scopes(Scope.APPS_READ)),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
@@ -162,6 +167,7 @@ async def list_app_memories(
 @router.get("/{app_id}/accessed")
 async def list_app_accessed_memories(
     app_id: UUID,
+    principal: Principal = Depends(require_scopes(Scope.APPS_READ)),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db)
@@ -215,6 +221,7 @@ async def list_app_accessed_memories(
 async def update_app_details(
     app_id: UUID,
     is_active: bool,
+    principal: Principal = Depends(require_scopes(Scope.APPS_WRITE)),
     db: Session = Depends(get_db)
 ):
     app = get_app_or_404(db, app_id)
