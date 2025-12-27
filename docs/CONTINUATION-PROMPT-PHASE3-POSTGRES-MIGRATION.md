@@ -6,6 +6,37 @@
 
 ---
 
+## SESSION WORKFLOW - MUST FOLLOW
+
+### At Session Start
+
+1. Read this file to understand current state
+2. Check the Session Progress Tracker (Section 11) for incomplete work
+3. Continue from where the last session left off
+
+### During Session
+
+1. Update Section 11 (Session Progress Tracker) as you complete tasks
+2. Mark checkboxes as complete: `- [x]`
+3. Add notes about any issues or decisions
+
+### At Session End - MANDATORY
+
+1. Update Section 11 with all completed work
+2. Update Section 1 (Current State Summary) if status changed
+3. Update Section 2 (Completed Work Registry) with new completed items
+4. Update Section 10 (Next Session Checklist) with remaining work
+5. Commit changes:
+
+```bash
+git add docs/CONTINUATION-PROMPT-PHASE3-POSTGRES-MIGRATION.md docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md
+git commit -m "docs: update continuation prompt with session progress"
+```
+
+6. If phase is complete, create the next continuation prompt in this same file
+
+---
+
 ## 1. Current State Summary
 
 | Component | Status | Tests |
@@ -17,9 +48,13 @@
 | Router Auth (all routers) | COMPLETE | 25 |
 | MCP Server Auth | COMPLETE | 13+ |
 | Pydantic Settings | COMPLETE | 13 |
-| **Tenant Isolation Tests** | **COMPLETE** | **16** |
-| **Apps Router Tenant Fix** | **COMPLETE** | - |
-| **Database PostgreSQL Support** | **COMPLETE** | - |
+| Tenant Isolation Tests | COMPLETE | 16 |
+| Apps Router Tenant Fix | COMPLETE | - |
+| Database PostgreSQL Support | COMPLETE | - |
+| Graph Router Tenant Audit | PENDING | - |
+| Entities Router Tenant Audit | PENDING | - |
+| Stats Router Tenant Audit | PENDING | - |
+| Backup Router Tenant Audit | PENDING | - |
 
 **Phase 3a Progress**: 128+ security tests passing. Apps router now filters by owner_id. Database.py supports PostgreSQL with connection pooling.
 
@@ -28,6 +63,7 @@
 ## 2. Completed Work Registry - DO NOT REDO
 
 ### Phase 0b: Security Module
+
 - `openmemory/api/app/security/types.py` - Principal, TokenClaims, Scope, errors
 - `openmemory/api/app/security/jwt.py` - JWT validation (now uses Settings)
 - `openmemory/api/app/security/dpop.py` - DPoP RFC 9449 with Valkey replay cache
@@ -36,11 +72,13 @@
 - `openmemory/api/app/security/exception_handlers.py` - 401/403 formatting
 
 ### Phase 1: Router Auth - ALL COMPLETE
+
 - All routers require JWT authentication
 - All MCP tools check scopes
 - User ID comes from JWT token, not URL parameters
 
 ### Phase 2: Configuration and Secrets - COMPLETE
+
 - `openmemory/api/app/settings/settings.py` - Pydantic Settings with validation
 - `openmemory/api/app/settings/__init__.py` - Module exports
 - `openmemory/api/main.py` - Lifespan handler for startup validation
@@ -48,6 +86,7 @@
 - `docs/SECRET-ROTATION.md` - Rotation procedures
 
 ### Phase 3a: Tenant Isolation (2025-12-27) - COMPLETE
+
 - `openmemory/api/tests/security/test_tenant_isolation.py` - 16 tests for multi-tenant isolation
 - `openmemory/api/app/routers/apps.py` - Fixed: all endpoints now filter by owner_id
   - Added `get_user_from_principal()` helper
@@ -66,7 +105,13 @@
   - Replaced `func.json_extract(Memory.metadata_, '$.layer')` with `Memory.layer`
   - Uses indexed columns for database-agnostic filtering
 
+**Commits:**
+
+- `4e2f5738` - feat(security): add tenant isolation to apps router and PostgreSQL support
+- `a133d4a6` - docs: update progress tracker with Phase 2 and Phase 3a completion
+
 ### Infrastructure
+
 - `openmemory/docker-compose.yml` - Project name `codingbrain`, all containers prefixed
 - `openmemory/.env` - Complete local dev environment
 - `openmemory/api/requirements.txt` - Includes python-jose[cryptography], pydantic-settings
@@ -76,6 +121,7 @@
 ## 3. Next Task: Verify Remaining Routers (Phase 3b)
 
 ### Goal
+
 Verify all remaining routers properly filter by user_id from JWT principal.
 
 ### Routers to Audit
@@ -93,7 +139,7 @@ Verify all remaining routers properly filter by user_id from JWT principal.
 
 **Use a subagent** to explore:
 
-```
+```text
 Use Task tool with subagent_type=Explore to:
 1. Read openmemory/api/app/routers/graph.py
 2. Check if queries filter by principal.user_id
@@ -120,6 +166,7 @@ class TestGraphTenantIsolation:
 ### STEP 3: Fix Graph Router (if needed)
 
 Apply the same pattern as apps.py:
+
 1. Get user from principal using `get_user_from_principal()`
 2. Filter all queries by `user_id`
 3. Verify ownership before returning data
@@ -173,12 +220,14 @@ docker compose exec codingbrain-mcp alembic current
 ## 7. Phase 3a Completion Summary (2025-12-27)
 
 **What was implemented:**
+
 - Tenant isolation tests (16 tests in test_tenant_isolation.py)
 - Apps router security fix (all endpoints filter by owner_id)
 - Database.py PostgreSQL support (connection pooling, Settings integration)
 - Memories router fix (replaced SQLite json_extract with indexed columns)
 
 **Security fixes applied:**
+
 - `list_apps()` - Now filters by `App.owner_id == user.id`
 - `get_app_details()` - Now verifies ownership
 - `list_app_memories()` - Now verifies app ownership + user_id filter
@@ -186,6 +235,7 @@ docker compose exec codingbrain-mcp alembic current
 - `update_app_details()` - Now verifies ownership before update
 
 **Files created/modified:**
+
 - `openmemory/api/tests/security/test_tenant_isolation.py` - NEW (16 tests)
 - `openmemory/api/app/routers/apps.py` - MODIFIED (tenant isolation)
 - `openmemory/api/app/database.py` - MODIFIED (PostgreSQL support)
@@ -256,3 +306,77 @@ async def list_items(
 - [ ] Fix any routers missing tenant filtering
 - [ ] Verify PostgreSQL Alembic migrations are current
 - [ ] Run full security test suite
+- [ ] Update this file and commit before ending session
+
+---
+
+## 11. Session Progress Tracker
+
+<!--
+UPDATE THIS SECTION DURING EACH SESSION
+Mark items complete with [x] and add notes
+-->
+
+### Session: 2025-12-27 (Phase 3a)
+
+**Started:** Phase 3 - PostgreSQL Migration
+**Ended:** Phase 3a complete
+
+**Completed:**
+
+- [x] Analyze current database schema and models
+- [x] Write tenant isolation tests (16 tests)
+- [x] Fix apps router tenant isolation (owner_id filter)
+- [x] Fix database.py for PostgreSQL support
+- [x] Fix filter_memories json_extract for PostgreSQL
+- [x] Run security tests (128 passing)
+- [x] Commit changes (4e2f5738)
+- [x] Update progress file (a133d4a6)
+
+**Notes:**
+
+- Schema already had user_id/owner_id fields with indexes
+- Apps router had critical security issue: no owner filtering
+- Database.py needed PostgreSQL connection pooling
+
+**Blocked/Deferred:**
+
+- Remaining router audits (graph, entities, stats, backup) - next session
+
+---
+
+### Session: YYYY-MM-DD (Next Session Template)
+
+**Started:**
+**Ended:**
+
+**Completed:**
+
+- [ ] Task 1
+- [ ] Task 2
+
+**Notes:**
+
+**Blocked/Deferred:**
+
+---
+
+## 12. End of Session Commit Template
+
+When ending a session, use this commit message format:
+
+```bash
+git add docs/CONTINUATION-PROMPT-PHASE3-POSTGRES-MIGRATION.md docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md
+git commit -m "$(cat <<'EOF'
+docs: update continuation prompt with session progress
+
+Session: YYYY-MM-DD
+- [Brief summary of completed work]
+- [Test count update if applicable]
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+```
