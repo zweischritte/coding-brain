@@ -150,12 +150,12 @@ def tenant_session(db: Session, user_id: UUID):
 4. [x] Implement `ScopedMemoryStore` class - `app/stores/memory_store.py`
 5. [x] Add contract tests for store interface - 2 tests
 
-### Priority 2: Other PostgreSQL Stores (NEXT)
+### COMPLETED: Priority 2 - Other PostgreSQL Stores
 
-1. [ ] FeedbackStore with retention queries
-2. [ ] ExperimentStore with status history
+1. [x] FeedbackStore with retention queries - 17 tests (`app/stores/feedback_store.py`)
+2. [x] ExperimentStore with status history - 18 tests (`app/stores/experiment_store.py`)
 
-### Priority 3: External Stores
+### Priority 3: External Stores (NEXT)
 
 1. [ ] EpisodicMemoryStore (Valkey) with TTL
 2. [ ] Neo4j stores with org_id constraints
@@ -185,27 +185,33 @@ def tenant_session(db: Session, user_id: UUID):
 
 ## 6. Last Session Summary (2025-12-27)
 
-**Completed**: Phase 4 Feature 1 & 2 - RLS Infrastructure and ScopedMemoryStore
+**Completed**: Phase 4 Features 3 & 4 - FeedbackStore and ExperimentStore
 
-- Implemented `tenant_session()` context manager in `app/database.py`
-  - Sets PostgreSQL session variable `app.current_user_id` for RLS
-  - Guaranteed cleanup in finally block, input validation
-- Created RLS migration `add_rls_policies.py` for memories/apps tables
-  - SELECT, INSERT, UPDATE, DELETE policies
-  - Uses NULLIF for fail-closed behavior
-- Implemented `BaseStore` ABC in `app/stores/base.py`
-- Implemented `ScopedMemoryStore` in `app/stores/memory_store.py`
-  - Full CRUD with tenant isolation via user_id filtering
-  - Soft delete via MemoryState.deleted
-- TDD tests: 25 tests (23 passing, 2 skipped for PostgreSQL)
-  - `tests/stores/test_tenant_session.py` - 7 tests
-  - `tests/stores/test_memory_store.py` - 16 tests
-  - `tests/integration/test_rls_enforcement.py` - 13 tests (skipped on SQLite)
-  - Contract tests - 2 tests
+- Implemented `PostgresFeedbackStore` in `app/stores/feedback_store.py`
+  - Append-only storage for FeedbackEvent
+  - Query by user, org, query_id, experiment_id
+  - Retention query support (30-day default)
+  - Aggregate metrics (acceptance rate, outcome distribution, by-tool)
+  - RRF weight optimization queries
+- Implemented `PostgresExperimentStore` in `app/stores/experiment_store.py`
+  - Full CRUD for A/B Experiment entities
+  - Status history tracking with audit trail
+  - Variant assignment persistence
+  - Status transition timestamps (start_time, end_time)
+  - Org-scoped tenant isolation
+- Both stores:
+  - Self-contained domain types (avoid circular imports from feedback module)
+  - SQLAlchemy models with proper indexes
+  - Implements ABC interface for testing
+  - Tenant isolation via org_id/user_id
+- Added root `conftest.py` for proper Python path setup in tests
+- TDD tests: 35 new tests
+  - `tests/stores/test_feedback_store.py` - 17 tests
+  - `tests/stores/test_experiment_store.py` - 18 tests
 
-**Commit**: `a1c912fe` - feat(stores): add RLS infrastructure and ScopedMemoryStore
+**Commit**: `e1cc11ea` - feat(stores): add FeedbackStore and ExperimentStore with TDD tests
 
-**Result**: 3,104 total tests (+25 from Phase 4)
+**Result**: 3,139 total tests (+35 from this session, 60 total store tests)
 
 ---
 
@@ -247,15 +253,21 @@ EOF
 - `openmemory/api/app/stores/__init__.py` - Store package exports
 - `openmemory/api/app/stores/base.py` - BaseStore ABC interface
 - `openmemory/api/app/stores/memory_store.py` - ScopedMemoryStore implementation
+- `openmemory/api/app/stores/feedback_store.py` - FeedbackStore with retention queries (17 tests)
+- `openmemory/api/app/stores/experiment_store.py` - ExperimentStore with status history (18 tests)
+- `openmemory/api/conftest.py` - Root conftest for Python path setup
 - `openmemory/api/tests/stores/conftest.py` - Shared test fixtures
 - `openmemory/api/tests/stores/test_tenant_session.py` - 7 tests
 - `openmemory/api/tests/stores/test_memory_store.py` - 16 tests
+- `openmemory/api/tests/stores/test_feedback_store.py` - 17 tests
+- `openmemory/api/tests/stores/test_experiment_store.py` - 18 tests
 - `openmemory/api/tests/integration/test_rls_enforcement.py` - 13 tests (PostgreSQL only)
 - `openmemory/api/alembic/versions/add_rls_policies.py` - RLS migration
 
-**To Create (Next):**
+**To Create (Next - External Stores):**
 
-- `openmemory/api/app/stores/feedback_store.py` - FeedbackStore implementation
-- `openmemory/api/app/stores/experiment_store.py` - ExperimentStore implementation
-- `openmemory/api/tests/stores/test_feedback_store.py` - FeedbackStore tests
-- `openmemory/api/tests/stores/test_experiment_store.py` - ExperimentStore tests
+- `openmemory/api/app/stores/episodic_store.py` - EpisodicMemoryStore (Valkey with TTL)
+- `openmemory/api/tests/stores/test_episodic_store.py` - EpisodicStore tests
+- Neo4j stores (SymbolStore, Registry, DependencyGraph)
+- Qdrant EmbeddingStore with tenant payload index
+- OpenSearch tenant alias implementation
