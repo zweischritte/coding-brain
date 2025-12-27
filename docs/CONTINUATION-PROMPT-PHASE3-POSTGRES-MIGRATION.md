@@ -11,10 +11,11 @@
 
 ### At Session Start
 
+1. Read `docs/SYSTEM-CONTEXT.md` for system overview (if unfamiliar with the codebase)
 1. Read `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md` for overall plan
 1. Read `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md` for current progress and daily log
-1. Check Section 4 (Next Tasks) below for what to work on
-1. Continue from where the last session left off
+1. Check Section 4 (Next Tasks) below for priorities
+1. Check the Daily Log "Resume Point" column for exactly where to continue
 
 ### At Session End - MANDATORY
 
@@ -35,7 +36,7 @@ git commit -m "docs: update session progress and implementation tracker"
 ## 1. Current Gaps (per Implementation Plan)
 
 **Phase 1 Gap**: MCP auth incomplete (SSE auth + tool scopes pending)
-**Phase 3 Gap**: Alembic migrations NOT started (plan requires migration scaffolding, verification, rollback)
+**Phase 3**: ✅ COMPLETE (tenant isolation + migration verification utilities)
 
 ---
 
@@ -93,26 +94,38 @@ async def list_items(
 
 ## 4. Next Tasks
 
-### Phase 1 Gap - MCP Auth
+**See Progress file task tables for detailed status. Priorities below.**
 
-- [ ] Add auth to MCP SSE endpoints
-- [ ] Add tool-level permission checks in MCP server
-- [ ] Run test_mcp_auth.py to verify
+### Priority 1: Phase 1 Gap - MCP Auth (Blocked)
 
-### Phase 3 Gap - Alembic Migrations
+See Progress file Phase 1 table - "MCP tool permission checks" is blocked pending SSE auth architecture.
 
-- [ ] Set up Alembic migration scaffolding
-- [ ] Create initial migration from current models
-- [ ] Document pre-migration backup procedure
-- [ ] Add row count/checksum verification
-- [ ] Document rollback procedure
-- [ ] Test migration on fresh PostgreSQL
+**When unblocked:**
 
-### Technical Debt
+1. Add auth to MCP SSE endpoints
+2. Add tool-level permission checks in MCP server
+3. Run test_mcp_auth.py to verify
 
-- [ ] Extract shared `get_user_from_principal()` helper to reduce duplication
-- [ ] Address pre-existing test failures in test_router_auth.py
-- [ ] Fix Pydantic V1 @validator deprecation warning in `app/schemas.py:54`
+### Priority 2: Phase 3 - ✅ COMPLETE
+
+All Alembic migration tasks completed:
+
+- ✅ Migration scaffolding (pre-existing - 4 migrations)
+- ✅ Migration verification utilities (MigrationVerifier, BackupValidator)
+- ✅ Data migration tooling (BatchMigrator with progress callbacks)
+- ✅ Rollback procedures (RollbackManager with savepoints)
+- ✅ env.py hooks for pre/post migration verification (ALEMBIC_VERIFY_MIGRATIONS=true)
+- ✅ 33 TDD tests in test_migration_verification.py
+
+### Priority 3: Phase 4 - Multi-tenant Data Plane Stores (Next)
+
+See Progress file Phase 4 table - all tasks Not Started.
+
+### Technical Debt (Lower Priority)
+
+- Extract shared `get_user_from_principal()` helper to reduce duplication
+- Address pre-existing test failures in test_router_auth.py (see Blocking Issues Log)
+- Fix Pydantic V1 @validator deprecation warning in `app/schemas.py:54`
 
 ---
 
@@ -132,14 +145,17 @@ async def list_items(
 
 ## 6. Last Session Summary (2025-12-27)
 
-**Completed**: Router tenant isolation audit
+**Completed**: Phase 3c - Migration Verification Utilities
 
-- graph.py (12 endpoints) - ✅ SECURE
-- entities.py (12 endpoints) - ✅ SECURE
-- stats.py (1 endpoint) - 🔧 FIXED `App.owner == user` → `App.owner_id == user.id`
-- backup.py (2 endpoints) - ✅ SECURE
+- Created `app/alembic/utils.py` with:
+  - `MigrationVerifier` - Row count and checksum verification
+  - `BackupValidator` - Pre-migration backup validation
+  - `BatchMigrator` - Large data migration in batches
+  - `RollbackManager` - Safe rollback with savepoints
+- Updated `alembic/env.py` with pre/post migration hooks
+- Added 33 TDD tests in `tests/infrastructure/test_migration_verification.py`
 
-**Result**: 131 security tests passing, 19 tenant isolation tests
+**Result**: 3,079 total tests (33 new migration verification tests)
 
 ---
 

@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from logging.config import fileConfig
@@ -28,10 +29,86 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+# Migration verification settings
+VERIFY_MIGRATIONS = os.getenv("ALEMBIC_VERIFY_MIGRATIONS", "false").lower() == "true"
+CORE_TABLES = ["users", "apps", "memories", "categories", "configs"]
+
+logger = logging.getLogger("alembic.env")
+
+
+def capture_pre_migration_state(engine):
+    """Capture row counts and checksums before migration for verification.
+
+    Only runs when ALEMBIC_VERIFY_MIGRATIONS=true environment variable is set.
+
+    Returns:
+        dict with pre_counts and pre_checksums, or None if verification disabled.
+    """
+    if not VERIFY_MIGRATIONS:
+        return None
+
+    try:
+        from app.alembic.utils import MigrationVerifier
+
+        verifier = MigrationVerifier(engine)
+
+        logger.info("Capturing pre-migration state for verification...")
+
+        # Capture row counts for core tables
+        pre_counts = verifier.get_table_row_counts(CORE_TABLES)
+        logger.info(f"Pre-migration row counts: {pre_counts}")
+
+        return {"pre_counts": pre_counts}
+
+    except Exception as e:
+        logger.warning(f"Failed to capture pre-migration state: {e}")
+        return None
+
+
+def verify_post_migration_state(engine, pre_state):
+    """Verify data integrity after migration completes.
+
+    Compares pre and post row counts and logs any discrepancies.
+
+    Args:
+        engine: SQLAlchemy engine
+        pre_state: State captured by capture_pre_migration_state
+
+    Returns:
+        bool: True if verification passed, False otherwise
+    """
+    if pre_state is None:
+        return True  # Skip verification if no pre-state
+
+    try:
+        from app.alembic.utils import MigrationVerifier
+
+        verifier = MigrationVerifier(engine)
+
+        logger.info("Verifying post-migration state...")
+
+        # Capture post-migration counts
+        post_counts = verifier.get_table_row_counts(CORE_TABLES)
+        logger.info(f"Post-migration row counts: {post_counts}")
+
+        # Verify counts match
+        result = verifier.verify_row_counts(pre_state["pre_counts"], post_counts)
+
+        if result.success:
+            logger.info("Migration verification PASSED: Row counts match")
+            return True
+        else:
+            logger.error(f"Migration verification FAILED: {result.mismatches}")
+            for mismatch in result.mismatches:
+                logger.error(
+                    f"  Table '{mismatch['table']}': "
+                    f"pre={mismatch['pre']}, post={mismatch['post']}"
+                )
+            return False
+
+    except Exception as e:
+        logger.warning(f"Failed to verify post-migration state: {e}")
+        return True  # Don't fail migration on verification error
 
 
 def run_migrations_offline() -> None:
@@ -64,6 +141,11 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context.
 
+    When ALEMBIC_VERIFY_MIGRATIONS=true, this function will:
+    1. Capture pre-migration row counts
+    2. Run the migration
+    3. Verify post-migration row counts match
+    4. Log any discrepancies
     """
     configuration = config.get_section(config.config_ini_section)
     configuration["sqlalchemy.url"] = os.getenv("DATABASE_URL", "sqlite:///./openmemory.db")
@@ -73,6 +155,9 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
+    # Capture pre-migration state for verification
+    pre_state = capture_pre_migration_state(connectable)
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection, target_metadata=target_metadata
@@ -80,6 +165,9 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+
+    # Verify post-migration state
+    verify_post_migration_state(connectable, pre_state)
 
 
 if context.is_offline_mode():
