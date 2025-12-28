@@ -1,0 +1,164 @@
+# Prometheus Alerting Rules for MCP Session Binding (Phase 2)
+#
+# These rules monitor session binding operations and security events.
+# Deploy to your Prometheus/Alertmanager configuration.
+#
+# Required metrics (exported by session_metrics.py):
+# - mcp_session_binding_store_errors_total
+# - mcp_session_bindings_validated_total
+# - mcp_session_cleanup_runs_total
+# - mcp_session_cleanup_last_run_timestamp
+# - mcp_dpop_validations_total
+
+groups:
+  - name: mcp_session_binding_alerts
+    interval: 30s
+    rules:
+      # Alert: High session binding error rate
+      # Triggers when > 1% of session binding operations fail over 5 minutes
+      - alert: MCPSessionBindingErrorRate
+        expr: |
+          (
+            sum(rate(mcp_session_binding_store_errors_total[5m])) /
+            (sum(rate(mcp_session_bindings_created_total[5m])) + sum(rate(mcp_session_bindings_validated_total[5m])) + 0.001)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          service: mcp-session-binding
+        annotations:
+          summary: "MCP session binding error rate is elevated"
+          description: "Session binding error rate is {{ $value | humanizePercentage }} (threshold: 1%). Check Valkey connectivity and store health."
+          runbook_url: "https://docs.example.com/runbooks/mcp-session-binding-errors"
+
+      # Alert: Session hijack attempts detected
+      # Triggers immediately when user_mismatch validation failures occur
+      - alert: MCPSessionHijackAttempts
+        expr: |
+          increase(mcp_session_bindings_validated_total{result="user_mismatch"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: mcp-session-binding
+          security: true
+        annotations:
+          summary: "Potential session hijack attempts detected"
+          description: "{{ $value }} session binding validation failures due to user mismatch in the last 5 minutes. Investigate source IPs and affected sessions immediately."
+          runbook_url: "https://docs.example.com/runbooks/mcp-session-hijack"
+
+      # Alert: Valkey store unreachable
+      # Triggers when Valkey health checks are failing
+      - alert: MCPValkeyUnreachable
+        expr: |
+          increase(mcp_session_binding_store_errors_total{store_type="valkey",operation="health_check"}[5m]) > 2
+        for: 2m
+        labels:
+          severity: critical
+          service: mcp-session-binding
+          dependency: valkey
+        annotations:
+          summary: "MCP Valkey session store unreachable"
+          description: "Valkey health checks are failing. Session bindings may fall back to memory store, breaking multi-worker consistency."
+          runbook_url: "https://docs.example.com/runbooks/mcp-valkey-connectivity"
+
+      # Alert: Cleanup scheduler not running
+      # Triggers when no cleanup cycles have run in 10 minutes
+      - alert: MCPCleanupNotRunning
+        expr: |
+          (time() - mcp_session_cleanup_last_run_timestamp) > 600
+        for: 2m
+        labels:
+          severity: warning
+          service: mcp-session-binding
+        annotations:
+          summary: "MCP session cleanup scheduler not running"
+          description: "No session cleanup cycles have completed in {{ $value | humanizeDuration }}. Memory store may accumulate expired sessions."
+          runbook_url: "https://docs.example.com/runbooks/mcp-cleanup-scheduler"
+
+      # Alert: DPoP validation failures spiking
+      # Triggers when DPoP validation failures exceed a threshold
+      - alert: MCPDPoPValidationFailures
+        expr: |
+          rate(mcp_dpop_validations_total{result=~"invalid|error"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: mcp-session-binding
+          security: true
+        annotations:
+          summary: "Elevated DPoP validation failures"
+          description: "DPoP proof validation is failing at {{ $value | humanize }} per second. May indicate client misconfiguration or attack."
+          runbook_url: "https://docs.example.com/runbooks/mcp-dpop-failures"
+
+      # Alert: Session validation latency high
+      # Triggers when session binding validation takes too long (>100ms p99)
+      - alert: MCPSessionValidationLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(mcp_session_binding_validation_duration_seconds_bucket[5m])) by (le, store_type)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: mcp-session-binding
+          performance: true
+        annotations:
+          summary: "MCP session validation latency is high"
+          description: "P99 session validation latency for {{ $labels.store_type }} store is {{ $value | humanizeDuration }}. May impact request latency."
+          runbook_url: "https://docs.example.com/runbooks/mcp-latency"
+
+      # Alert: Session binding store errors by operation
+      # Tracks specific operation failures
+      - alert: MCPStoreOperationErrors
+        expr: |
+          sum by (store_type, operation) (
+            rate(mcp_session_binding_store_errors_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: mcp-session-binding
+        annotations:
+          summary: "MCP session store {{ $labels.operation }} errors"
+          description: "{{ $labels.store_type }} store is experiencing {{ $labels.operation }} errors at {{ $value | humanize }} per second."
+          runbook_url: "https://docs.example.com/runbooks/mcp-store-errors"
+
+  # Recording rules for dashboard efficiency
+  - name: mcp_session_binding_recording
+    interval: 30s
+    rules:
+      # Pre-calculated error rate for dashboards
+      - record: mcp:session_binding:error_rate_5m
+        expr: |
+          sum(rate(mcp_session_binding_store_errors_total[5m])) /
+          (sum(rate(mcp_session_bindings_created_total[5m])) + sum(rate(mcp_session_bindings_validated_total[5m])) + 0.001)
+
+      # Pre-calculated validation success rate
+      - record: mcp:session_binding:validation_success_rate_5m
+        expr: |
+          sum(rate(mcp_session_bindings_validated_total{result="success"}[5m])) /
+          sum(rate(mcp_session_bindings_validated_total[5m]))
+
+      # Total active sessions (gauge, for memory store only)
+      - record: mcp:session_binding:active_sessions
+        expr: |
+          sum(mcp_session_bindings_active)
+
+      # Session creation rate
+      - record: mcp:session_binding:creation_rate_1m
+        expr: |
+          sum(rate(mcp_session_bindings_created_total[1m]))
+
+      # P50 validation latency
+      - record: mcp:session_binding:validation_latency_p50
+        expr: |
+          histogram_quantile(0.50,
+            sum(rate(mcp_session_binding_validation_duration_seconds_bucket[5m])) by (le)
+          )
+
+      # P99 validation latency
+      - record: mcp:session_binding:validation_latency_p99
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(mcp_session_binding_validation_duration_seconds_bucket[5m])) by (le)
+          )

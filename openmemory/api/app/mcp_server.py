@@ -135,6 +135,85 @@ concept_router = APIRouter(prefix="/concepts")
 # Initialize SSE transport for AXIS tools (with session ID capture)
 sse = SessionAwareSseTransport("/mcp/messages/")
 
+
+# --- MCP Session Health Endpoint (Phase 2) ---
+
+@mcp_router.get("/health")
+async def mcp_session_health():
+    """Health check endpoint for MCP session binding store.
+
+    Checks:
+    - Session binding store connectivity (memory always ok, Valkey ping)
+    - Cleanup scheduler status (if available)
+
+    Returns:
+        JSON response with status and details:
+        - status: "healthy" or "unhealthy"
+        - store_type: "memory" or "valkey"
+        - reason: Error description if unhealthy
+    """
+    from datetime import datetime, timezone
+    import time
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    start_time = time.perf_counter()
+
+    try:
+        store = get_session_binding_store()
+        store_type = getattr(store, 'STORE_TYPE', 'memory')
+
+        # Check store health
+        if hasattr(store, 'health_check'):
+            # Valkey store has health_check method
+            store_healthy = store.health_check()
+        else:
+            # Memory store is always healthy if instantiated
+            store_healthy = True
+
+        # Check cleanup scheduler status
+        try:
+            from app.tasks.session_cleanup import _cleanup_scheduler
+            scheduler_running = _cleanup_scheduler is not None and _cleanup_scheduler._running
+        except Exception:
+            scheduler_running = None  # Unknown status
+
+        latency_ms = (time.perf_counter() - start_time) * 1000
+
+        if store_healthy:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "status": "healthy",
+                    "store_type": store_type,
+                    "scheduler_running": scheduler_running,
+                    "latency_ms": round(latency_ms, 2),
+                    "timestamp": timestamp,
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "unhealthy",
+                    "store_type": store_type,
+                    "reason": "Store health check failed",
+                    "scheduler_running": scheduler_running,
+                    "latency_ms": round(latency_ms, 2),
+                    "timestamp": timestamp,
+                }
+            )
+    except Exception as e:
+        latency_ms = (time.perf_counter() - start_time) * 1000
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "reason": str(e),
+                "latency_ms": round(latency_ms, 2),
+                "timestamp": timestamp,
+            }
+        )
+
 # Initialize SSE transport for Business Concept tools (with session ID capture)
 concept_sse = SessionAwareSseTransport("/concepts/messages/")
 
@@ -181,6 +260,8 @@ def _extract_principal_from_request(request: Request) -> "Principal":
 
     # Validate the JWT token
     claims = validate_jwt(token)
+    # Reject tokens issued in the future (clock skew protection)
+    validate_iat_not_future(claims.iat)
 
     # Build the principal
     principal = Principal(
@@ -190,6 +271,59 @@ def _extract_principal_from_request(request: Request) -> "Principal":
     )
 
     return principal
+
+
+async def _extract_dpop_thumbprint(request: Request, token: str) -> str | None:
+    """
+    Extract and validate DPoP proof from request, returning thumbprint if valid.
+
+    For POST requests bound to a session with DPoP, this validates:
+    - DPoP header is present
+    - Proof has correct htm (HTTP method)
+    - Proof has correct htu (HTTP URI)
+    - Proof signature is valid
+    - Returns the JWK thumbprint for session binding validation
+
+    Returns None if no DPoP header is present.
+
+    Raises:
+        AuthenticationError: If DPoP header is present but invalid
+    """
+    dpop_header = request.headers.get("dpop")
+    if not dpop_header:
+        return None
+
+    try:
+        from .security.dpop import DPoPValidator, get_dpop_cache
+
+        cache = await get_dpop_cache()
+        if not cache:
+            # DPoP cache not configured - skip validation
+            return None
+
+        validator = DPoPValidator(cache)
+
+        # Build the full URL for htu validation
+        http_uri = str(request.url)
+        http_method = request.method
+
+        # Validate the DPoP proof
+        await validator.validate(
+            dpop_proof=dpop_header,
+            http_method=http_method,
+            http_uri=http_uri,
+            access_token=token,
+        )
+
+        # Extract and return the thumbprint
+        return await validator.get_thumbprint(dpop_header)
+    except Exception as e:
+        if isinstance(e, AuthenticationError):
+            raise
+        raise AuthenticationError(
+            message=f"DPoP validation failed: {e}",
+            code="INVALID_DPOP"
+        )
 
 
 def _check_scope(principal, scope: "Scope") -> None:
@@ -3057,6 +3191,24 @@ async def handle_sse(request: Request):
             )
         raise
 
+    # Extract and validate DPoP proof if present (binds session to DPoP key)
+    dpop_thumbprint = None
+    if HAS_SECURITY:
+        try:
+            auth_header = request.headers.get("authorization", "")
+            token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+            dpop_thumbprint = await _extract_dpop_thumbprint(request, token)
+            if dpop_thumbprint:
+                principal.dpop_thumbprint = dpop_thumbprint
+        except Exception as e:
+            if isinstance(e, AuthenticationError):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": e.message, "code": e.code},
+                    headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
+                )
+            raise
+
     # Set context variables from authenticated principal (NOT from path)
     user_token = user_id_var.set(principal.user_id)
     client_name = request.path_params.get("client_name")
@@ -3080,7 +3232,7 @@ async def handle_sse(request: Request):
                     session_id=session_id,
                     user_id=principal.user_id,
                     org_id=principal.org_id,
-                    dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+                    dpop_thumbprint=dpop_thumbprint,
                 )
 
             await mcp._mcp_server.run(
@@ -3115,6 +3267,7 @@ async def handle_post_message(request: Request):
 
     Authentication is required - context vars must be set from authenticated principal.
     Session binding is validated to prevent session hijacking.
+    DPoP validation is performed when session was bound with DPoP.
     """
     # Validate session_id from query params (required for session binding)
     if HAS_SECURITY:
@@ -3137,9 +3290,6 @@ async def handle_post_message(request: Request):
     # Authenticate the request
     try:
         principal = _extract_principal_from_request(request)
-        # Validate iat to reject future-dated tokens
-        if HAS_SECURITY:
-            validate_iat_not_future(principal.claims.iat)
     except Exception as e:
         if HAS_SECURITY and isinstance(e, AuthenticationError):
             return JSONResponse(
@@ -3149,6 +3299,23 @@ async def handle_post_message(request: Request):
             )
         raise
 
+    # Extract and validate DPoP proof if present
+    dpop_thumbprint = None
+    if HAS_SECURITY:
+        try:
+            # Get token for DPoP ath validation
+            auth_header = request.headers.get("authorization", "")
+            token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+            dpop_thumbprint = await _extract_dpop_thumbprint(request, token)
+        except Exception as e:
+            if isinstance(e, AuthenticationError):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": e.message, "code": e.code},
+                    headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
+                )
+            raise
+
     # Validate session binding (after authentication)
     if HAS_SECURITY:
         store = get_session_binding_store()
@@ -3156,7 +3323,7 @@ async def handle_post_message(request: Request):
             session_id,
             principal.user_id,
             principal.org_id,
-            dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+            dpop_thumbprint=dpop_thumbprint,
         ):
             return JSONResponse(
                 status_code=403,
@@ -3219,6 +3386,24 @@ async def handle_concept_sse(request: Request):
             )
         raise
 
+    # Extract and validate DPoP proof if present (binds session to DPoP key)
+    dpop_thumbprint = None
+    if HAS_SECURITY:
+        try:
+            auth_header = request.headers.get("authorization", "")
+            token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+            dpop_thumbprint = await _extract_dpop_thumbprint(request, token)
+            if dpop_thumbprint:
+                principal.dpop_thumbprint = dpop_thumbprint
+        except Exception as e:
+            if isinstance(e, AuthenticationError):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": e.message, "code": e.code},
+                    headers={"WWW-Authenticate": 'Bearer realm="concepts"'},
+                )
+            raise
+
     # Set context variables from authenticated principal (NOT from path)
     user_token = user_id_var.set(principal.user_id)
     client_name = request.path_params.get("client_name")
@@ -3242,7 +3427,7 @@ async def handle_concept_sse(request: Request):
                     session_id=session_id,
                     user_id=principal.user_id,
                     org_id=principal.org_id,
-                    dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+                    dpop_thumbprint=dpop_thumbprint,
                 )
 
             await concept_mcp._mcp_server.run(
@@ -3277,6 +3462,7 @@ async def handle_concept_post_message(request: Request):
 
     Authentication is required - context vars must be set from authenticated principal.
     Session binding is validated to prevent session hijacking.
+    DPoP validation is performed when session was bound with DPoP.
     """
     # Validate session_id from query params (required for session binding)
     if HAS_SECURITY:
@@ -3299,9 +3485,6 @@ async def handle_concept_post_message(request: Request):
     # Authenticate the request
     try:
         principal = _extract_principal_from_request(request)
-        # Validate iat to reject future-dated tokens
-        if HAS_SECURITY:
-            validate_iat_not_future(principal.claims.iat)
     except Exception as e:
         if HAS_SECURITY and isinstance(e, AuthenticationError):
             return JSONResponse(
@@ -3311,6 +3494,23 @@ async def handle_concept_post_message(request: Request):
             )
         raise
 
+    # Extract and validate DPoP proof if present
+    dpop_thumbprint = None
+    if HAS_SECURITY:
+        try:
+            # Get token for DPoP ath validation
+            auth_header = request.headers.get("authorization", "")
+            token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+            dpop_thumbprint = await _extract_dpop_thumbprint(request, token)
+        except Exception as e:
+            if isinstance(e, AuthenticationError):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": e.message, "code": e.code},
+                    headers={"WWW-Authenticate": 'Bearer realm="concepts"'},
+                )
+            raise
+
     # Validate session binding (after authentication)
     if HAS_SECURITY:
         store = get_session_binding_store()
@@ -3318,7 +3518,7 @@ async def handle_concept_post_message(request: Request):
             session_id,
             principal.user_id,
             principal.org_id,
-            dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+            dpop_thumbprint=dpop_thumbprint,
         ):
             return JSONResponse(
                 status_code=403,

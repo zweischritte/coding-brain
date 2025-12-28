@@ -515,3 +515,49 @@ class TestSessionBindingSingleton:
         store2 = get_session_binding_store()
 
         assert store1 is not store2
+
+    def test_get_session_binding_store_defaults_to_memory(self):
+        """get_session_binding_store should default to memory store when env not set."""
+        with patch.dict("os.environ", {}, clear=True):
+            reset_session_binding_store()
+            store = get_session_binding_store()
+
+            assert isinstance(store, MemorySessionBindingStore)
+
+    def test_get_session_binding_store_returns_memory_when_configured(self):
+        """get_session_binding_store should return memory store when MCP_SESSION_STORE=memory."""
+        with patch.dict("os.environ", {"MCP_SESSION_STORE": "memory"}):
+            reset_session_binding_store()
+            store = get_session_binding_store()
+
+            assert isinstance(store, MemorySessionBindingStore)
+
+    def test_get_session_binding_store_returns_valkey_when_configured(self):
+        """get_session_binding_store should return valkey store when MCP_SESSION_STORE=valkey."""
+        from app.security.valkey_session_binding import ValkeySessionBindingStore
+
+        # Mock the valkey connection to succeed
+        with patch.dict("os.environ", {"MCP_SESSION_STORE": "valkey"}):
+            with patch("app.security.session_binding.get_valkey_session_binding_store") as mock_valkey:
+                mock_store = ValkeySessionBindingStore(
+                    client=type("MockClient", (), {"ping": lambda s: True, "get": lambda s, k: None, "setex": lambda s, k, t, v: True, "delete": lambda s, *k: 0})(),
+                    default_ttl_seconds=1800,
+                )
+                mock_valkey.return_value = mock_store
+
+                reset_session_binding_store()
+                store = get_session_binding_store()
+
+                assert isinstance(store, ValkeySessionBindingStore)
+
+    def test_get_session_binding_store_falls_back_to_memory_on_valkey_failure(self):
+        """get_session_binding_store should fall back to memory if valkey unavailable."""
+        with patch.dict("os.environ", {"MCP_SESSION_STORE": "valkey"}):
+            with patch("app.security.session_binding.get_valkey_session_binding_store") as mock_valkey:
+                mock_valkey.return_value = None  # Valkey unavailable
+
+                reset_session_binding_store()
+                store = get_session_binding_store()
+
+                # Should fall back to memory store
+                assert isinstance(store, MemorySessionBindingStore)
