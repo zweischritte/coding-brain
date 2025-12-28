@@ -3,7 +3,7 @@
 Plan Reference: docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md
 Context Reference: docs/SYSTEM-CONTEXT.md
 Start Date: 2025-12-27
-Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 5 ✅ core, Phase 6 ✅)
+Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 5 ✅ core, Phase 6 ✅, Phase 7 ✅)
 
 ## How to Use This Tracker
 - Use strict TDD: write failing tests first, then implement, then refactor.
@@ -13,7 +13,7 @@ Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Pha
 
 ## Summary
 
-Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 + 67 + 56 = 3,327 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 + 67 + 56 + 47 = 3,374 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
@@ -23,6 +23,7 @@ Phase 3 Tests Added: 52 (19 tenant isolation + 33 migration verification)
 Phase 4 Tests Added: 125 (7 tenant_session + 16 ScopedMemoryStore + 2 contract + 17 FeedbackStore + 18 ExperimentStore + 25 ValkeyEpisodicStore + 20 TenantQdrantStore + 20 TenantOpenSearchStore)
 Phase 5 Tests Added: 67 (10 new scopes + 21 feedback router + 28 experiments router + 18 search router - 4 fixed + 4 fixes to existing tests)
 Phase 6 Tests Added: 56 (6 health + 9 logging + 9 tracing + 9 metrics + 11 circuit breakers + 12 rate limiting)
+Phase 7 Tests Added: 47 (31 backup verification + 16 container hardening)
 
 ---
 
@@ -413,11 +414,36 @@ Goal: Backup/restore, verification, scanning, container hardening.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| Backup/restore runbooks | 0 | 0 | Not Started | |
-| Nightly restore verification | 0 | 0 | Not Started | |
-| CI vulnerability scanning | 0 | 0 | Not Started | |
-| Container hardening | 0 | 0 | Not Started | |
-| Blue-green/canary playbook | 0 | 0 | Not Started | |
+| Backup/restore runbooks | N/A | N/A | Complete | pending |
+| Nightly restore verification | 31 | 31 | Complete | pending |
+| CI vulnerability scanning | N/A | N/A | Complete | pending |
+| Container hardening | 16 | 14 (2 skipped) | Complete | pending |
+| Blue-green/canary playbook | N/A | N/A | Complete | pending |
+
+**Phase 7 Complete:**
+
+New files created:
+
+- `docs/RUNBOOK-BACKUP-RESTORE.md` - Comprehensive backup/restore procedures for all 5 data stores
+- `docs/RUNBOOK-DEPLOYMENT.md` - Blue-green and canary deployment playbooks with rollback procedures
+- `.github/workflows/security-scan.yml` - CI vulnerability scanning (Trivy, pip-audit, bandit, Hadolint)
+- `openmemory/api/app/backup/verifier.py` - BackupVerifier class for nightly verification
+- `openmemory/api/app/backup/__init__.py` - Backup module exports
+- `openmemory/api/tests/infrastructure/test_backup_verification.py` - 31 tests for backup verification
+- `openmemory/api/tests/infrastructure/test_container_hardening.py` - 16 tests for container security
+
+Updated files:
+
+- `openmemory/api/Dockerfile` - Hardened with non-root user (appuser:1000), COPY --chown, HEALTHCHECK
+- `openmemory/api/.dockerignore` - Enhanced to exclude secrets, credentials, and dev files
+
+Key features implemented:
+
+- **Backup Runbook**: Procedures for PostgreSQL, Neo4j, Qdrant, OpenSearch, Valkey with verification steps
+- **Backup Verifier**: Checks existence, freshness, size, integrity (gzip/JSON/PGDMP); alerting support
+- **CI Security Scanning**: Trivy container scan, pip-audit dependencies, bandit SAST, Hadolint Dockerfile lint
+- **Container Hardening**: Non-root user, proper file ownership, minimal base image, HEALTHCHECK
+- **Deployment Playbook**: Blue-green and canary strategies, rollback procedures, health verification
 
 ---
 
@@ -468,4 +494,5 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 5 PRD complete | Start Feature 0: Fix test failures | Created `docs/PRD-PHASE5-API-ROUTE-WIRING.md` with 10 success criteria, 6 features, ~100 test specs; explored codebase patterns via 4 parallel sub-agents |
 | 2025-12-27 | Phase 5 COMPLETE | Phase 6: Operability | Fixed 4 pre-existing test failures; added 5 new scopes; implemented Feedback (21 tests), Experiments (28 tests), Search (18 tests) routers; 67 new tests; commit f9056a60 |
 | 2025-12-28 | Phase 6 COMPLETE | Phase 7: Deployment/DR | Health enhancement (6), Logging (9), OTel (9), Metrics (9), Circuit Breakers (11), Rate Limiting (12); 56 new tests; commits faef2d5b→7cff3fdc |
+| 2025-12-28 | Phase 7 COMPLETE | Phase 8: Scale-Out (deferred) | Backup runbook (5 data stores), Backup verifier (31 tests), CI security scan (Trivy/pip-audit/bandit/Hadolint), Container hardening (16 tests), Deployment playbook; 47 new tests; 3,374 total tests |
 

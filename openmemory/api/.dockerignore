@@ -1,23 +1,125 @@
-# Ignore all .env files
+# Production .dockerignore for coding-brain MCP API
+# Phase 7: Security Hardening
+#
+# Excludes sensitive files and unnecessary data from Docker image
+
+# ===== SECURITY: Exclude secrets and credentials =====
 **/.env
 **/.env.*
+**/*.env
+.env.local
+.env.development
+.env.test
+.env.production
 
-# Ignore all database files
+# Private keys and certificates (if any)
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/id_rsa
+**/id_rsa.pub
+**/id_ed25519
+**/id_ed25519.pub
+
+# Credentials files
+**/credentials.json
+**/secrets.yaml
+**/secrets.json
+**/.secrets/
+**/.credentials/
+
+# ===== VERSION CONTROL =====
+.git
+.gitignore
+.gitattributes
+.github/
+
+# ===== DEVELOPMENT FILES =====
+# Python bytecode and caches
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# ===== TESTING =====
+# Tests are excluded from production image
+tests/
+test_*.py
+*_test.py
+conftest.py
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ===== BUILD ARTIFACTS =====
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+
+# ===== DATABASE FILES =====
 **/*.db
 **/*.sqlite
 **/*.sqlite3
+*.rdb
+dump.rdb
 
-# Ignore logs
+# ===== LOGS =====
 **/*.log
+logs/
 
-# Ignore runtime data
+# ===== DOCKER =====
+# Don't include Docker files in image
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# ===== DOCUMENTATION =====
+# Docs not needed in production image
+docs/
+*.md
+!README.md
+LICENSE
+
+# ===== MISC =====
+.DS_Store
+Thumbs.db
+*.bak
+*.backup
+tmp/
+temp/
+
+# ===== CI/CD =====
+.circleci/
+.travis.yml
+Jenkinsfile
+azure-pipelines.yml
+
+# ===== Node (if applicable) =====
 **/node_modules
-**/__pycache__
-**/.pytest_cache
-**/.coverage
 **/coverage
-
-# Ignore Docker runtime files
-**/.dockerignore
-**/Dockerfile
-**/docker-compose*.yml 
