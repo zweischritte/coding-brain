@@ -91,7 +91,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from mcp.server.fastmcp import FastMCP
-from mcp.server.sse import SseServerTransport
+from app.mcp.sse_transport import SessionAwareSseTransport
+from app.security.session_binding import get_session_binding_store
 
 # Load environment variables
 load_dotenv()
@@ -118,7 +119,7 @@ org_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("org_id")
 
 # Import security dependencies for JWT validation
 try:
-    from app.security.jwt import validate_jwt
+    from app.security.jwt import validate_jwt, validate_iat_not_future
     from app.security.types import Principal, AuthenticationError, AuthorizationError, Scope
     HAS_SECURITY = True
 except ImportError:
@@ -131,11 +132,11 @@ mcp_router = APIRouter(prefix="/mcp")
 # Create a separate router for Business Concept endpoints
 concept_router = APIRouter(prefix="/concepts")
 
-# Initialize SSE transport for AXIS tools
-sse = SseServerTransport("/mcp/messages/")
+# Initialize SSE transport for AXIS tools (with session ID capture)
+sse = SessionAwareSseTransport("/mcp/messages/")
 
-# Initialize SSE transport for Business Concept tools
-concept_sse = SseServerTransport("/concepts/messages/")
+# Initialize SSE transport for Business Concept tools (with session ID capture)
+concept_sse = SessionAwareSseTransport("/concepts/messages/")
 
 
 def _extract_principal_from_request(request: Request) -> "Principal":
@@ -223,10 +224,13 @@ def _check_tool_scope(required_scope: str) -> str | None:
         return None  # Security not available, skip check
 
     # Get principal from context var (set by SSE handlers)
-    # If no principal, we're in backwards-compat mode
+    # Fail closed: if no principal, deny access
     principal = principal_var.get(None)
     if not principal:
-        return None  # Backwards compatibility - no auth check
+        return json.dumps({
+            "error": "Authentication required",
+            "code": "MISSING_AUTH",
+        })
 
     # Check scope
     if not principal.has_scope(required_scope):
@@ -3060,6 +3064,7 @@ async def handle_sse(request: Request):
     org_token = org_id_var.set(principal.org_id)
     principal_token = principal_var.set(principal)
 
+    session_id = None
     try:
         # Handle SSE connection
         async with sse.connect_sse(
@@ -3067,12 +3072,27 @@ async def handle_sse(request: Request):
             request.receive,
             request._send,
         ) as (read_stream, write_stream):
+            # Capture session_id and create binding
+            session_id = sse.get_session_id(request.scope)
+            if session_id and HAS_SECURITY:
+                store = get_session_binding_store()
+                store.create(
+                    session_id=session_id,
+                    user_id=principal.user_id,
+                    org_id=principal.org_id,
+                    dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+                )
+
             await mcp._mcp_server.run(
                 read_stream,
                 write_stream,
                 mcp._mcp_server.create_initialization_options(),
             )
     finally:
+        # Clean up session binding on disconnect
+        if session_id and HAS_SECURITY:
+            get_session_binding_store().delete(session_id)
+
         # Clean up context variables
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
@@ -3094,10 +3114,32 @@ async def handle_post_message(request: Request):
     """Handle POST messages for SSE.
 
     Authentication is required - context vars must be set from authenticated principal.
+    Session binding is validated to prevent session hijacking.
     """
+    # Validate session_id from query params (required for session binding)
+    if HAS_SECURITY:
+        session_id_str = request.query_params.get("session_id")
+        if not session_id_str:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Missing session_id", "code": "MISSING_SESSION_ID"},
+            )
+
+        try:
+            from uuid import UUID
+            session_id = UUID(session_id_str)
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid session_id format", "code": "INVALID_SESSION_ID"},
+            )
+
     # Authenticate the request
     try:
         principal = _extract_principal_from_request(request)
+        # Validate iat to reject future-dated tokens
+        if HAS_SECURITY:
+            validate_iat_not_future(principal.claims.iat)
     except Exception as e:
         if HAS_SECURITY and isinstance(e, AuthenticationError):
             return JSONResponse(
@@ -3106,6 +3148,20 @@ async def handle_post_message(request: Request):
                 headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
             )
         raise
+
+    # Validate session binding (after authentication)
+    if HAS_SECURITY:
+        store = get_session_binding_store()
+        if not store.validate(
+            session_id,
+            principal.user_id,
+            principal.org_id,
+            dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Session binding mismatch", "code": "SESSION_BINDING_INVALID"},
+            )
 
     # Set context variables from authenticated principal
     user_token = user_id_var.set(principal.user_id)
@@ -3170,6 +3226,7 @@ async def handle_concept_sse(request: Request):
     org_token = org_id_var.set(principal.org_id)
     principal_token = principal_var.set(principal)
 
+    session_id = None
     try:
         # Handle SSE connection using concept_mcp server
         async with concept_sse.connect_sse(
@@ -3177,12 +3234,27 @@ async def handle_concept_sse(request: Request):
             request.receive,
             request._send,
         ) as (read_stream, write_stream):
+            # Capture session_id and create binding
+            session_id = concept_sse.get_session_id(request.scope)
+            if session_id and HAS_SECURITY:
+                store = get_session_binding_store()
+                store.create(
+                    session_id=session_id,
+                    user_id=principal.user_id,
+                    org_id=principal.org_id,
+                    dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+                )
+
             await concept_mcp._mcp_server.run(
                 read_stream,
                 write_stream,
                 concept_mcp._mcp_server.create_initialization_options(),
             )
     finally:
+        # Clean up session binding on disconnect
+        if session_id and HAS_SECURITY:
+            get_session_binding_store().delete(session_id)
+
         # Clean up context variables
         user_id_var.reset(user_token)
         client_name_var.reset(client_token)
@@ -3204,10 +3276,32 @@ async def handle_concept_post_message(request: Request):
     """Handle POST messages for Business Concepts SSE.
 
     Authentication is required - context vars must be set from authenticated principal.
+    Session binding is validated to prevent session hijacking.
     """
+    # Validate session_id from query params (required for session binding)
+    if HAS_SECURITY:
+        session_id_str = request.query_params.get("session_id")
+        if not session_id_str:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Missing session_id", "code": "MISSING_SESSION_ID"},
+            )
+
+        try:
+            from uuid import UUID
+            session_id = UUID(session_id_str)
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Invalid session_id format", "code": "INVALID_SESSION_ID"},
+            )
+
     # Authenticate the request
     try:
         principal = _extract_principal_from_request(request)
+        # Validate iat to reject future-dated tokens
+        if HAS_SECURITY:
+            validate_iat_not_future(principal.claims.iat)
     except Exception as e:
         if HAS_SECURITY and isinstance(e, AuthenticationError):
             return JSONResponse(
@@ -3216,6 +3310,20 @@ async def handle_concept_post_message(request: Request):
                 headers={"WWW-Authenticate": 'Bearer realm="concepts"'},
             )
         raise
+
+    # Validate session binding (after authentication)
+    if HAS_SECURITY:
+        store = get_session_binding_store()
+        if not store.validate(
+            session_id,
+            principal.user_id,
+            principal.org_id,
+            dpop_thumbprint=getattr(principal, 'dpop_thumbprint', None),
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Session binding mismatch", "code": "SESSION_BINDING_INVALID"},
+            )
 
     # Set context variables from authenticated principal
     user_token = user_id_var.set(principal.user_id)
