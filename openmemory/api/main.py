@@ -9,7 +9,7 @@ from app.database import Base, SessionLocal, engine
 from app.mcp_server import setup_mcp_server
 from app.axis_guidance_server import setup_axis_guidance_server
 from app.models import App, User
-from app.routers import apps_router, backup_router, config_router, entities_router, experiments_router, feedback_router, graph_router, health_router, memories_router, search_router, stats_router
+from app.routers import apps_router, backup_router, config_router, entities_router, experiments_router, feedback_router, gdpr_router, graph_router, health_router, memories_router, search_router, stats_router
 from app.security.middleware import SecurityHeadersMiddleware
 from app.security.exception_handlers import register_security_exception_handlers
 from fastapi import FastAPI
@@ -130,6 +130,7 @@ app.include_router(graph_router)
 app.include_router(feedback_router)
 app.include_router(experiments_router)
 app.include_router(search_router)
+app.include_router(gdpr_router)
 
 # Add pagination support
 add_pagination(app)

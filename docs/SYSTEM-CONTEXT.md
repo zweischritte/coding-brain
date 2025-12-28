@@ -16,7 +16,7 @@ Development is tracked across multiple LLM sessions using:
 
 What has been implemented so far (feature phases 0-8 complete, production readiness in progress)
 
-- Current test count: ~3,271 (see Progress file for breakdown)
+- Current test count: 3,459 (see Progress file for breakdown)
 - Code indexing and CODE_* graph projection using Tree-sitter and SCIP symbols.
 - Tri-hybrid retrieval (semantic + lexical + graph) with RRF fusion and reranker
   integration.
@@ -28,21 +28,22 @@ What has been implemented so far (feature phases 0-8 complete, production readin
 - PR workflow tooling (diff parsing, review suggestions, GitHub MCP).
 - Cross-repository intelligence (registry, symbols, dependencies, impact).
 
-Production readiness completed (Phases 0.5-5)
+Production readiness completed (Phases 0.5-7, 4.5)
 
 - Phase 0.5: Infrastructure (PostgreSQL, Valkey, health checks) - 37 tests
 - Phase 1: Security (JWT, DPoP, RBAC, security headers) - 99 tests (MCP auth deferred)
 - Phase 2: Configuration (Pydantic settings, secret rotation) - 13 tests
 - Phase 3: PostgreSQL migration (tenant isolation, migration utilities) - 52 tests
 - Phase 4: Multi-tenant stores (Feedback, Experiment, Episodic, Qdrant, OpenSearch) - 125 tests
+- Phase 4.5: GDPR compliance (PII inventory, SAR export, cascading delete, audit) - 85 tests
 - Phase 5: API routes (Feedback, Experiments, Search routers) - 67 tests
+- Phase 6: Operability (health, logging, tracing, metrics, circuit breakers, rate limiting) - 56 tests
+- Phase 7: Deployment/DR (backup runbooks, verifier, CI security scan, container hardening) - 47 tests
 
 Current production gaps (see Progress file for latest status)
 
 - MCP SSE auth pending (Phase 1 blocker - deferred)
-- GDPR compliance not started (Phase 4.5)
-- Operability/resilience not started (Phase 6 - circuit breakers, rate limiting)
-- DR/hardening not started (Phase 7 - backups, vulnerability scanning)
+- Scale-out deferred (Phase 8 - hot/cold partitioning, read replicas)
 
 Technology stack
 - Backend: FastAPI with MCP server integration.

@@ -3,7 +3,7 @@
 Plan Reference: docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md
 Context Reference: docs/SYSTEM-CONTEXT.md
 Start Date: 2025-12-27
-Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 5 ✅ core, Phase 6 ✅, Phase 7 ✅)
+Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 4.5 ✅, Phase 5 ✅ core, Phase 6 ✅, Phase 7 ✅)
 
 ## How to Use This Tracker
 - Use strict TDD: write failing tests first, then implement, then refactor.
@@ -13,7 +13,7 @@ Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Pha
 
 ## Summary
 
-Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 + 67 + 56 + 47 = 3,374 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 + 67 + 56 + 47 + 85 = 3,459 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
@@ -21,6 +21,7 @@ Phase 1 Tests Added: 99 (security module core)
 Phase 2 Tests Added: 13 (Pydantic settings)
 Phase 3 Tests Added: 52 (19 tenant isolation + 33 migration verification)
 Phase 4 Tests Added: 125 (7 tenant_session + 16 ScopedMemoryStore + 2 contract + 17 FeedbackStore + 18 ExperimentStore + 25 ValkeyEpisodicStore + 20 TenantQdrantStore + 20 TenantOpenSearchStore)
+Phase 4.5 Tests Added: 85 (15 PII inventory + 18 SAR export + 16 deletion + 11 backup purge + 11 audit + 14 router)
 Phase 5 Tests Added: 67 (10 new scopes + 21 feedback router + 28 experiments router + 18 search router - 4 fixed + 4 fixes to existing tests)
 Phase 6 Tests Added: 56 (6 health + 9 logging + 9 tracing + 9 metrics + 11 circuit breakers + 12 rate limiting)
 Phase 7 Tests Added: 47 (31 backup verification + 16 container hardening)
@@ -299,11 +300,50 @@ Goal: SAR export, cascading delete, backup purge strategy.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| PII inventory per store | 0 | 0 | Not Started | |
-| SAR export orchestrator | 0 | 0 | Not Started | |
-| Cascading delete with audit trail | 0 | 0 | Not Started | |
-| Backup purge strategy (crypto-shred or retention) | 0 | 0 | Not Started | |
-| SAR response format specification | 0 | 0 | Not Started | |
+| PII inventory per store | 15 | 15 | Complete | pending |
+| SAR export orchestrator | 18 | 18 | Complete | pending |
+| Cascading delete with audit trail | 16 | 16 | Complete | pending |
+| Backup purge strategy (retention tracking) | 11 | 11 | Complete | pending |
+| GDPR REST endpoints with scopes | 14 | 14 | Complete | pending |
+| Audit logging for GDPR operations | 11 | 11 | Complete | pending |
+
+**Phase 4.5 Complete:**
+
+New files created:
+
+- `openmemory/api/app/gdpr/__init__.py` - GDPR module exports
+- `openmemory/api/app/gdpr/pii_inventory.py` - PII field inventory for all 5 stores
+- `openmemory/api/app/gdpr/schemas.py` - SARResponse, DeletionResult dataclasses
+- `openmemory/api/app/gdpr/sar_export.py` - SAR export orchestrator for all stores
+- `openmemory/api/app/gdpr/deletion.py` - Cascading user deletion orchestrator
+- `openmemory/api/app/gdpr/backup_purge.py` - Backup purge tracking (retention strategy)
+- `openmemory/api/app/gdpr/audit.py` - GDPR audit logging
+- `openmemory/api/app/routers/gdpr.py` - REST API endpoints for GDPR operations
+
+Test files created:
+
+- `openmemory/api/tests/gdpr/__init__.py`
+- `openmemory/api/tests/gdpr/test_pii_inventory.py` - 15 tests
+- `openmemory/api/tests/gdpr/test_sar_export.py` - 18 tests
+- `openmemory/api/tests/gdpr/test_deletion.py` - 16 tests
+- `openmemory/api/tests/gdpr/test_backup_purge.py` - 11 tests
+- `openmemory/api/tests/gdpr/test_audit_logging.py` - 11 tests
+- `openmemory/api/tests/routers/test_gdpr_router.py` - 14 tests
+
+Updated files:
+
+- `openmemory/api/app/security/types.py` - Added GDPR_READ, GDPR_DELETE scopes
+- `openmemory/api/app/routers/__init__.py` - Added gdpr_router export
+- `openmemory/api/main.py` - Registered GDPR router
+
+Key features implemented:
+
+- **PII Inventory**: 24 PII fields documented across PostgreSQL, Neo4j, Qdrant, OpenSearch, Valkey
+- **SAR Export**: Exports all user data from all 5 stores with JSON response format
+- **Cascading Delete**: Deletes user data in dependency order (Valkey→OpenSearch→Qdrant→Neo4j→PostgreSQL)
+- **Audit Logging**: GDPR operations logged with timestamps, requestor, and results
+- **Backup Purge**: Retention tracking (30-day default) for backup rotation compliance
+- **REST Endpoints**: GET /v1/gdpr/export/{user_id}, DELETE /v1/gdpr/user/{user_id}
 
 ---
 
@@ -495,4 +535,5 @@ Key features implemented:
 | 2025-12-27 | Phase 5 COMPLETE | Phase 6: Operability | Fixed 4 pre-existing test failures; added 5 new scopes; implemented Feedback (21 tests), Experiments (28 tests), Search (18 tests) routers; 67 new tests; commit f9056a60 |
 | 2025-12-28 | Phase 6 COMPLETE | Phase 7: Deployment/DR | Health enhancement (6), Logging (9), OTel (9), Metrics (9), Circuit Breakers (11), Rate Limiting (12); 56 new tests; commits faef2d5b→7cff3fdc |
 | 2025-12-28 | Phase 7 COMPLETE | Phase 8: Scale-Out (deferred) | Backup runbook (5 data stores), Backup verifier (31 tests), CI security scan (Trivy/pip-audit/bandit/Hadolint), Container hardening (16 tests), Deployment playbook; 47 new tests; 3,374 total tests |
+| 2025-12-28 | Phase 4.5 COMPLETE | Phase 8 or MCP auth | GDPR compliance: PII inventory (15 tests), SAR export (18 tests), Cascading delete (16 tests), Backup purge (11 tests), Audit logging (11 tests), GDPR router (14 tests); 85 new tests; 3,459 total tests |
 

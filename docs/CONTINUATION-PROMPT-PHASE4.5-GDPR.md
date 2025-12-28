@@ -2,7 +2,7 @@
 
 **Plan**: `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md`
 **Progress**: `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md`
-**PRD**: `docs/PRD-PHASE4.5-GDPR-COMPLIANCE.md` (to be created)
+**PRD**: `docs/PRD-PHASE4.5-GDPR-COMPLIANCE.md`
 **Style**: STRICT TDD - Write failing tests first, then implement. Use subagents for exploration.
 
 ---
@@ -44,37 +44,46 @@ git commit -m "docs: update Phase 4.5 GDPR session progress"
 
 ## 2. Command Reference
 
+### Tiered Testing Strategy (to save time)
+
+| When                   | What to Run            | Time     | Command                          |
+| ---------------------- | ---------------------- | -------- | -------------------------------- |
+| After each code change | GDPR tests only        | ~5s      | TIER 1 below                     |
+| Before each commit     | GDPR + related modules | ~30s     | TIER 2 below                     |
+| After feature complete | Broader regression     | ~1-2min  | TIER 3 below                     |
+| Before phase complete  | Full regression        | ~2-3min  | TIER 4 below                     |
+
 ```bash
-# Run all tests
-docker compose exec codingbrain-mcp pytest tests/ -v
+# TIER 1: Fast feedback (~5 seconds) - after every change
+docker compose exec codingbrain-mcp pytest tests/gdpr/ -v --tb=short
 
-# Run with coverage
-docker compose exec codingbrain-mcp pytest tests/ --cov=app --cov-report=term-missing
+# TIER 2: Pre-commit (~30 seconds) - before committing
+docker compose exec codingbrain-mcp pytest tests/gdpr/ tests/stores/ tests/routers/test_gdpr_router.py -v --tb=short
 
-# Run specific test file
-docker compose exec codingbrain-mcp pytest tests/gdpr/test_sar_export.py -v
+# TIER 3: Feature complete (~1-2 min) - after finishing a feature
+docker compose exec codingbrain-mcp pytest tests/gdpr/ tests/stores/ tests/security/ tests/routers/ -v --tb=short
 
-# Check health endpoints
+# TIER 4: Full regression (~2-3 min) - required before phase completion
+docker compose exec codingbrain-mcp pytest tests/ -v --tb=short
+
+# Feature-specific tests
+docker compose exec codingbrain-mcp pytest tests/gdpr/test_pii_inventory.py -v      # Feature 1
+docker compose exec codingbrain-mcp pytest tests/gdpr/test_sar_export.py -v         # Feature 2
+docker compose exec codingbrain-mcp pytest tests/gdpr/test_deletion.py -v           # Feature 3
+docker compose exec codingbrain-mcp pytest tests/gdpr/test_backup_purge.py -v       # Feature 4
+docker compose exec codingbrain-mcp pytest tests/gdpr/test_audit_logging.py -v      # Feature 6
+
+# Quick checks
+docker compose exec codingbrain-mcp pytest tests/ --collect-only -q | tail -3       # Test count
+docker compose exec codingbrain-mcp pytest tests/ --lf -v                           # Failed only
+
+# Health endpoints
 curl http://localhost:8865/health/live
 curl http://localhost:8865/health/ready
-curl http://localhost:8865/health/deps
 
-# Database queries for PII audit
-docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "\d+ memories"
+# Database PII audit
 docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "\d+ users"
-
-# Neo4j PII check
-docker compose exec neo4j cypher-shell -u ${NEO4J_USERNAME} -p ${NEO4J_PASSWORD} \
-  "CALL db.schema.nodeTypeProperties()"
-
-# Qdrant collection schema
-curl http://localhost:6433/collections/embeddings
-
-# OpenSearch mapping
-curl http://localhost:9200/memories/_mapping
-
-# Valkey keys pattern
-docker compose exec valkey valkey-cli KEYS "*"
+docker compose exec neo4j cypher-shell -u ${NEO4J_USERNAME} -p ${NEO4J_PASSWORD} "CALL db.schema.nodeTypeProperties()"
 ```
 
 ---
@@ -273,16 +282,15 @@ Execute in this order:
 
 ## 6. Last Session Summary (2025-12-28)
 
-**Completed**: Phase 7 Deployment, DR, and Hardening
+**Completed**: Phase 4.5 PRD creation
 
-- Added 47 new tests across 2 test files
-- Created backup/restore runbook for all 5 data stores
-- Implemented BackupVerifier class with 31 tests
-- Added CI security scanning workflow (Trivy, pip-audit, bandit, Hadolint)
-- Hardened Dockerfile with non-root user, COPY --chown, HEALTHCHECK
-- Created deployment playbook with blue-green and canary procedures
+- Created `docs/PRD-PHASE4.5-GDPR-COMPLIANCE.md` with full specifications
+- Defined 10 success criteria and 10 edge cases
+- Designed 6 features with ~64 test specifications
+- Added tiered testing strategy to reduce test run times
+- Updated `docs/SYSTEM-CONTEXT.md` with current progress (3,374 tests, Phases 0.5-7 complete)
 
-**Result**: Phase 7 complete, 3,374 total tests
+**Result**: PRD ready for implementation, no code changes yet
 
 ---
 

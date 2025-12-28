@@ -76,6 +76,10 @@ class Scope(str, Enum):
     # Search operations (Phase 5)
     SEARCH_READ = "search:read"
 
+    # GDPR operations (Phase 4.5)
+    GDPR_READ = "gdpr:read"      # SAR export
+    GDPR_DELETE = "gdpr:delete"  # User deletion (right to erasure)
+
 
 @dataclass
 class TokenClaims:
