@@ -3,7 +3,7 @@
 Plan Reference: docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md
 Context Reference: docs/SYSTEM-CONTEXT.md
 Start Date: 2025-12-27
-Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Phase 3 ⚠️ Alembic pending)
+Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Phase 3 ✅, Phase 4 ✅, Phase 5 ✅ core, Phase 6 ✅)
 
 ## How to Use This Tracker
 - Use strict TDD: write failing tests first, then implement, then refactor.
@@ -13,7 +13,7 @@ Status: In Progress (Phase 0.5 ✅, Phase 1 ⚠️ MCP pending, Phase 2 ✅, Pha
 
 ## Summary
 
-Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 = 3,204 tests
+Current Test Count: 2,878 + 37 + 99 + 13 + 19 + 33 + 25 + 35 + 65 + 67 + 56 = 3,327 tests
 Estimated New Tests: 920-1,130
 Target Total: 3,761-3,971
 Phase 0.5 Tests Added: 37
@@ -21,6 +21,8 @@ Phase 1 Tests Added: 99 (security module core)
 Phase 2 Tests Added: 13 (Pydantic settings)
 Phase 3 Tests Added: 52 (19 tenant isolation + 33 migration verification)
 Phase 4 Tests Added: 125 (7 tenant_session + 16 ScopedMemoryStore + 2 contract + 17 FeedbackStore + 18 ExperimentStore + 25 ValkeyEpisodicStore + 20 TenantQdrantStore + 20 TenantOpenSearchStore)
+Phase 5 Tests Added: 67 (10 new scopes + 21 feedback router + 28 experiments router + 18 search router - 4 fixed + 4 fixes to existing tests)
+Phase 6 Tests Added: 56 (6 health + 9 logging + 9 tracing + 9 metrics + 11 circuit breakers + 12 rate limiting)
 
 ---
 
@@ -312,15 +314,35 @@ Goal: Expose new stores via REST API with auth and validation.
 
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| Fix MCP SSE auth (Phase 1 blocker) | 0 | 0 | Not Started | |
-| Fix test_router_auth.py failures | 0 | 0 | Not Started | |
-| Add new Scopes (FEEDBACK_*, EXPERIMENTS_*, SEARCH_*) | 0 | 0 | Not Started | |
-| Feedback router (4 endpoints) | 0 | 0 | Not Started | |
-| Experiments router (7 endpoints) | 0 | 0 | Not Started | |
-| Search router - OpenSearch hybrid (3 endpoints) | 0 | 0 | Not Started | |
-| Register routers in main.py | 0 | 0 | Not Started | |
-| Episodic memory routes (lower priority) | 0 | 0 | Not Started | |
-| Cross-repo routes (lower priority) | 0 | 0 | Not Started | |
+| Fix MCP SSE auth (Phase 1 blocker) | 0 | 0 | Deferred | - |
+| Fix test_router_auth.py failures | 4 | 4 | Complete | f9056a60 |
+| Add new Scopes (FEEDBACK_*, EXPERIMENTS_*, SEARCH_*) | 10 | 10 | Complete | f9056a60 |
+| Feedback router (4 endpoints) | 21 | 21 | Complete | f9056a60 |
+| Experiments router (7 endpoints) | 28 | 28 | Complete | f9056a60 |
+| Search router - OpenSearch hybrid (3 endpoints) | 18 | 18 | Complete | f9056a60 |
+| Register routers in main.py | - | - | Complete | f9056a60 |
+| Episodic memory routes (lower priority) | 0 | 0 | Deferred | - |
+| Cross-repo routes (lower priority) | 0 | 0 | Deferred | - |
+
+**Phase 5 Complete (Core Features):**
+
+New files created:
+
+- `openmemory/api/app/routers/feedback.py` - Feedback router with 4 endpoints
+- `openmemory/api/app/routers/experiments.py` - Experiments router with 7 endpoints
+- `openmemory/api/app/routers/search.py` - Search router with 3 endpoints
+- `openmemory/api/tests/routers/test_feedback_router.py` - 21 tests
+- `openmemory/api/tests/routers/test_experiments_router.py` - 28 tests
+- `openmemory/api/tests/routers/test_search_router.py` - 18 tests
+- `openmemory/api/tests/security/test_new_scopes.py` - 10 tests
+
+New scopes added to `app/security/types.py`:
+
+- FEEDBACK_READ, FEEDBACK_WRITE
+- EXPERIMENTS_READ, EXPERIMENTS_WRITE
+- SEARCH_READ
+
+All routers registered in `main.py` and `app/routers/__init__.py`.
 
 ---
 
@@ -328,14 +350,60 @@ Goal: Expose new stores via REST API with auth and validation.
 
 Goal: Health endpoints, circuit breakers, rate limiting, OTel, logging, alerts.
 
+**Continuation Prompt**: `docs/CONTINUATION-PROMPT-PHASE6-OPERABILITY.md`
+**PRD**: `docs/PRD-PHASE6-OPERABILITY-RESILIENCE.md`
+
 | Task | Tests Written | Tests Passing | Status | Commit |
 |---|---:|---:|---|---|
-| /health/live, /health/ready, /health/deps | 0 | 0 | Not Started | |
-| Circuit breakers + degraded mode schema | 0 | 0 | Not Started | |
-| Rate limiting design + implementation | 0 | 0 | Not Started | |
-| OpenTelemetry instrumentation | 0 | 0 | Not Started | |
-| Centralized logging integration | 0 | 0 | Not Started | |
-| Alert thresholds + SLOs | 0 | 0 | Not Started | |
+| Health endpoints enhancement (latency, timestamps) | 6 | 6 | Complete | faef2d5b |
+| Structured JSON logging with correlation | 9 | 9 | Complete | 3b24602f |
+| OpenTelemetry tracing instrumentation | 9 | 9 | Complete | 16fd32d8 |
+| Prometheus metrics (/metrics endpoint) | 9 | 9 | Complete | b4d7c82d |
+| Circuit breakers + degraded mode schema | 11 | 11 | Complete | 46110af7 |
+| Rate limiting (token bucket algorithm) | 12 | 12 | Complete | 7cff3fdc |
+| Alert thresholds + SLOs | 0 | 0 | Deferred | - |
+
+**Phase 6 Complete:**
+
+New files created:
+
+- `openmemory/api/app/observability/logging.py` - Structured JSON logging with CorrelatedJsonFormatter
+- `openmemory/api/app/observability/tracing.py` - OpenTelemetry setup with OTLP exporter
+- `openmemory/api/app/observability/metrics.py` - Prometheus metrics, MetricsMiddleware, /metrics endpoint
+- `openmemory/api/app/resilience/circuit_breaker.py` - ServiceCircuitBreaker with state machine (closed/open/half_open)
+- `openmemory/api/app/security/rate_limit.py` - Token bucket RateLimiter and RateLimitMiddleware
+
+Test files created:
+
+- `openmemory/api/tests/observability/test_structured_logging.py` - 9 tests
+- `openmemory/api/tests/observability/test_otel_instrumentation.py` - 9 tests
+- `openmemory/api/tests/observability/test_metrics.py` - 9 tests
+- `openmemory/api/tests/infrastructure/test_circuit_breakers.py` - 11 tests
+- `openmemory/api/tests/infrastructure/test_rate_limiting.py` - 12 tests
+
+Enhanced files:
+
+- `openmemory/api/app/routers/health.py` - Added latency_ms per check, timestamp in response
+- `openmemory/api/tests/infrastructure/test_health_endpoints.py` - 6 new tests for enhancements
+
+Dependencies added to `requirements.txt`:
+
+- circuitbreaker>=2.0.0
+- opentelemetry-api>=1.20.0
+- opentelemetry-sdk>=1.20.0
+- opentelemetry-instrumentation-fastapi>=0.41b0
+- opentelemetry-exporter-otlp>=1.20.0
+- prometheus-client>=0.19.0
+- python-json-logger>=2.0.7
+
+Key features implemented:
+
+- **Health Endpoints**: Latency measurement per dependency check, timestamp in responses, normalized status values
+- **Structured Logging**: JSON format with correlation IDs, trace context propagation, configurable log levels
+- **OpenTelemetry**: Tracing setup with TracerProvider, OTLP exporter support, span helpers
+- **Prometheus Metrics**: http_requests_total counter, http_request_duration_seconds histogram, dependency_health gauge, circuit_breaker_state gauge
+- **Circuit Breakers**: State machine (closed→open→half_open→closed), failure threshold tracking, DegradedResponse schema, registry pattern
+- **Rate Limiting**: Token bucket algorithm, per-endpoint configuration, X-RateLimit headers, 429 response with Retry-After
 
 ---
 
@@ -366,8 +434,8 @@ Goal: Backup/restore, verification, scanning, container hardening.
 
 | Issue | Raised | Status | Resolution |
 |---|---|---|---|
-| MCP auth tests hang | 2025-12-27 | Open | test_mcp_auth.py takes too long; needs investigation |
-| Pre-existing test failures in test_router_auth.py | 2025-12-27 | Open | 4 tests fail due to wrong endpoint signatures |
+| MCP auth tests hang | 2025-12-27 | Open | test_mcp_auth.py takes too long; SSE auth architecture needs rework |
+| Pre-existing test failures in test_router_auth.py | 2025-12-27 | Resolved | Fixed in f9056a60 - updated tests to match actual API surface |
 
 ---
 
@@ -398,4 +466,6 @@ Goal: Backup/restore, verification, scanning, container hardening.
 | 2025-12-27 | Phase 4 External Stores complete | Phase 4 COMPLETE | ValkeyEpisodicStore (25 tests); TenantQdrantStore (20 tests); TenantOpenSearchStore (20 tests); 125 total store tests; Neo4j deferred to existing graph layer |
 | 2025-12-27 | Phase 5 continuation prompt created | Start Phase 5: MCP auth fix | Created `docs/CONTINUATION-PROMPT-PHASE5-API-ROUTES.md`; Phase 5 exposes stores via REST routes |
 | 2025-12-27 | Phase 5 PRD complete | Start Feature 0: Fix test failures | Created `docs/PRD-PHASE5-API-ROUTE-WIRING.md` with 10 success criteria, 6 features, ~100 test specs; explored codebase patterns via 4 parallel sub-agents |
+| 2025-12-27 | Phase 5 COMPLETE | Phase 6: Operability | Fixed 4 pre-existing test failures; added 5 new scopes; implemented Feedback (21 tests), Experiments (28 tests), Search (18 tests) routers; 67 new tests; commit f9056a60 |
+| 2025-12-28 | Phase 6 COMPLETE | Phase 7: Deployment/DR | Health enhancement (6), Logging (9), OTel (9), Metrics (9), Circuit Breakers (11), Rate Limiting (12); 56 new tests; commits faef2d5b→7cff3fdc |
 
