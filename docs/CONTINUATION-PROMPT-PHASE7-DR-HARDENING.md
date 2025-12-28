@@ -2,6 +2,7 @@
 
 **Plan**: `docs/IMPLEMENTATION-PLAN-PRODUCTION-READINESS-2025-REV2.md`
 **Progress**: `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md`
+**PRD**: `docs/PRD-PHASE7-DR-HARDENING.md`
 **Style**: STRICT TDD - Write failing tests first, then implement. Use subagents for exploration.
 
 ---
@@ -12,8 +13,9 @@
 
 1. Read `docs/SYSTEM-CONTEXT.md` for system overview (if unfamiliar with the codebase)
 2. Read `docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md` for current progress
-3. Check Section 4 (Next Tasks) below for what to work on
-4. Run the test suite to verify baseline: `docker compose exec codingbrain-mcp pytest tests/ -v --tb=short`
+3. Read `docs/PRD-PHASE7-DR-HARDENING.md` for detailed specifications
+4. Check Section 4 (Next Tasks) below for what to work on
+5. Run the test suite to verify baseline: `docker compose exec codingbrain-mcp pytest tests/ -v --tb=short`
 
 ### At Session End - MANDATORY
 
@@ -22,11 +24,11 @@
    - Update Phase 7 task status table
    - Add entry to Daily Log with date, work completed, and notes
 2. Update Section 4 (Next Tasks) with remaining work
-3. **Create new continuation prompt** for next session (if moving to Phase 8)
+3. **If Phase 7 complete**: Create `docs/CONTINUATION-PROMPT-PHASE8-SCALEOUT.md` for next phase
 4. Commit all changes:
 
 ```bash
-git add docs/CONTINUATION-PROMPT-PHASE7-DR-HARDENING.md docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md
+git add docs/CONTINUATION-PROMPT-PHASE7-DR-HARDENING.md docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md docs/PRD-PHASE7-DR-HARDENING.md
 git commit -m "docs: update Phase 7 session progress"
 ```
 
@@ -49,52 +51,115 @@ docker compose exec codingbrain-mcp pytest tests/ -v
 # Run with coverage
 docker compose exec codingbrain-mcp pytest tests/ --cov=app --cov-report=term-missing
 
+# Run specific test file
+docker compose exec codingbrain-mcp pytest tests/infrastructure/test_backup_verification.py -v
+
 # Check health endpoints
-curl http://localhost:8765/health/live
-curl http://localhost:8765/health/ready
-curl http://localhost:8765/health/deps
+curl http://localhost:8865/health/live
+curl http://localhost:8865/health/ready
+curl http://localhost:8865/health/deps
 
 # Database backup (PostgreSQL)
-docker compose exec postgres pg_dump -U postgres openmemory > backup.sql
+docker compose exec postgres pg_dump -U ${POSTGRES_USER} ${POSTGRES_DB} -Fc > backup.dump
 
 # Database restore (PostgreSQL)
-docker compose exec -T postgres psql -U postgres openmemory < backup.sql
+docker compose exec -T postgres pg_restore -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c < backup.dump
 
-# Docker vulnerability scanning
-docker scan codingbrain-mcp:latest
+# Neo4j backup
+docker compose exec neo4j neo4j-admin database dump neo4j --to-path=/data/
 
-# Trivy scanning
-trivy image codingbrain-mcp:latest
+# Qdrant snapshot
+curl -X POST "http://localhost:6433/collections/{collection}/snapshots"
+
+# OpenSearch snapshot
+curl -X PUT "localhost:9200/_snapshot/backups/snapshot_1?wait_for_completion=true"
+
+# Valkey backup
+docker compose exec valkey valkey-cli BGSAVE
+
+# Docker vulnerability scanning (local)
+docker scan codingbrain/mcp:latest
+trivy image codingbrain/mcp:latest
 ```
 
 ---
 
-## 3. TDD Execution Pattern
+## 3. Architecture Patterns
 
-For EACH feature, follow this exact pattern:
+### Backup Verification Pattern
 
-```text
-1. CREATE TEST FILE
-   └── Write failing tests based on feature specifications
+```python
+# scripts/verify_backup.py
+class BackupVerifier:
+    def check_exists(self, path: str) -> bool:
+        """Return True if backup file exists."""
+        return Path(path).exists()
 
-2. RUN TESTS (expect failures)
-   └── docker compose exec codingbrain-mcp pytest tests/[new_test_file].py -v
+    def check_freshness(self, path: str, max_age_hours: int = 24) -> bool:
+        """Return True if backup modified within max_age_hours."""
+        mtime = Path(path).stat().st_mtime
+        age_hours = (time.time() - mtime) / 3600
+        return age_hours <= max_age_hours
 
-3. IMPLEMENT MINIMUM CODE
-   └── Only enough to make tests pass
+    def validate_integrity(self, path: str, backup_type: str) -> bool:
+        """Validate backup format based on type."""
+        # PostgreSQL: check pg_restore --list works
+        # Neo4j: check dump file header
+        # Qdrant: verify JSON structure
+        pass
 
-4. RUN TESTS AGAIN
-   └── Verify all new tests pass
+    def send_alert(self, error: str) -> None:
+        """Send alert on verification failure."""
+        # Integrate with alerting system (email, Slack, PagerDuty)
+        pass
+```
 
-5. RUN FULL SUITE
-   └── docker compose exec codingbrain-mcp pytest tests/ -v
-   └── Ensure no regressions
+### CI Security Scanning Pattern
 
-6. COMMIT ON GREEN
-   └── git add -A && git commit -m "feat(scope): description"
+```yaml
+# .github/workflows/security-scan.yml
+jobs:
+  trivy-scan:
+    steps:
+      - uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'codingbrain/mcp:${{ github.sha }}'
+          format: 'sarif'
+          severity: 'CRITICAL,HIGH'
 
-7. UPDATE PROGRESS
-   └── Update progress file
+  dependency-scan:
+    steps:
+      - run: pip install pip-audit
+      - run: pip-audit --requirement requirements.txt
+
+  sast-scan:
+    steps:
+      - run: pip install bandit
+      - run: bandit -r app/ -f sarif -o bandit-results.sarif
+```
+
+### Container Hardening Pattern
+
+```dockerfile
+# Dockerfile with security hardening
+FROM python:3.12-slim
+
+# Create non-root user
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+WORKDIR /app
+
+# Copy with ownership
+COPY --chown=appuser:appgroup requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=appuser:appgroup . .
+
+# Switch to non-root user
+USER appuser
+
+EXPOSE 8765
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8765"]
 ```
 
 ---
@@ -116,33 +181,32 @@ Execute in this order:
 
 ### Step 2: Nightly Restore Verification Script
 
-- [ ] Create `scripts/verify-backup.sh` or `scripts/verify_backup.py`
+- [ ] Create `scripts/verify_backup.py`
+- [ ] Write tests first: `openmemory/api/tests/infrastructure/test_backup_verification.py`
 - [ ] Implement backup existence check
 - [ ] Implement backup size/freshness validation
 - [ ] Implement restore test to ephemeral environment
 - [ ] Add data integrity verification (row counts, checksums)
 - [ ] Add alerting on verification failure
-- [ ] Write tests for verification logic
 - [ ] Commit: `feat(backup): add nightly restore verification script`
 
 ### Step 3: CI Vulnerability Scanning
 
 - [ ] Add Trivy scanner to CI workflow (`.github/workflows/security-scan.yml`)
 - [ ] Configure severity thresholds (CRITICAL, HIGH blocking)
-- [ ] Add dependency scanning (pip-audit, safety)
+- [ ] Add dependency scanning (pip-audit)
 - [ ] Add SAST scanning (bandit for Python)
-- [ ] Configure scan caching for performance
+- [ ] Configure SARIF output for GitHub Security tab
 - [ ] Document scan results interpretation
 - [ ] Commit: `ci: add vulnerability scanning workflow`
 
 ### Step 4: Container Hardening
 
-- [ ] Audit Dockerfile for security best practices
+- [ ] Audit `openmemory/api/Dockerfile` for security best practices
 - [ ] Use non-root user in container
 - [ ] Remove unnecessary packages and tools
-- [ ] Add read-only root filesystem where possible
-- [ ] Drop unnecessary Linux capabilities
-- [ ] Add security context constraints
+- [ ] Add .dockerignore to exclude secrets
+- [ ] Drop unnecessary Linux capabilities in docker-compose
 - [ ] Document hardening decisions
 - [ ] Commit: `security: harden container image`
 
@@ -154,7 +218,6 @@ Execute in this order:
 - [ ] Add rollback procedures
 - [ ] Document health check verification between stages
 - [ ] Add database migration coordination
-- [ ] Document feature flag integration (if applicable)
 - [ ] Commit: `docs: add deployment playbook`
 
 ---
@@ -202,7 +265,7 @@ Execute in this order:
 **Docker configuration:**
 
 - `openmemory/docker-compose.yml` - Service definitions
-- `openmemory/api/Dockerfile` - Container build
+- `openmemory/api/Dockerfile` - Container build (to be hardened)
 
 ---
 
@@ -244,7 +307,36 @@ Phase 7 is complete when ALL are checked:
 
 When Phase 7 is complete:
 
-1. Update Progress file - mark Phase 7 as complete
-2. Create `docs/CONTINUATION-PROMPT-PHASE8-SCALEOUT.md` for next phase (if needed)
-3. Commit all documentation together
-4. Phase 8 covers: Hot/cold graph partitioning, read replicas + routing (currently deferred)
+1. **Verify completion:**
+   - All checkboxes in Section 4 are checked
+   - All tests passing: `docker compose exec codingbrain-mcp pytest tests/ -v --tb=short`
+   - Security scan workflow runs successfully
+
+2. **Update Progress file:**
+   - Mark Phase 7 as ✅ in header
+   - Fill in all commit hashes
+   - Add final Daily Log entry
+
+3. **Create next continuation prompt:**
+   - Copy template to `docs/CONTINUATION-PROMPT-PHASE8-SCALEOUT.md`
+   - Phase 8 covers: Hot/cold graph partitioning, read replicas + routing (currently deferred)
+
+4. **Commit together:**
+
+```bash
+git add docs/CONTINUATION-PROMPT-PHASE7-DR-HARDENING.md docs/CONTINUATION-PROMPT-PHASE8-SCALEOUT.md docs/IMPLEMENTATION-PROGRESS-PROD-READINESS.md
+git commit -m "$(cat <<'EOF'
+docs: complete Phase 7 DR and Hardening
+
+- Backup/restore runbooks for all 5 data stores
+- Nightly verification script with alerting
+- CI vulnerability scanning workflow
+- Container hardening with non-root user
+- Deployment playbooks for blue-green/canary
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+```
