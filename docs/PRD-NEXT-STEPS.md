@@ -22,17 +22,27 @@ This PRD is self-contained and includes repo references, tool interfaces, and de
 | `/metrics` endpoint | COMPLETED | pending | Added to `main.py` |
 | Metrics integration tests | COMPLETED | pending | `tests/infrastructure/test_metrics_integration.py` |
 | docker-compose AUTO_MIGRATE | COMPLETED | pending | Added `AUTO_MIGRATE=true` to codingbrain-mcp service |
-| Code tools router (REST) | PENDING | - | Next phase |
-| Code tools MCP registration | PENDING | - | Next phase |
+| Code tools router (REST) | COMPLETED | pending | `app/routers/code.py` at `/api/v1/code/*` |
+| Code tools MCP registration | COMPLETED | pending | Added 5 tools to `app/mcp_server.py` |
+| Code tools tests (TDD) | COMPLETED | pending | `tests/routers/test_code_router.py` (38 tests) |
+| CodeToolkit factory | COMPLETED | pending | `app/code_toolkit.py` |
+| Code schemas | COMPLETED | pending | Added to `app/schemas.py` |
 
 ### Files Modified
 - [app/database.py](../openmemory/api/app/database.py) - Added `auto_migrate_on_startup()`, `is_postgres_database()`, `should_auto_migrate()`, `run_alembic_upgrade()`
-- [main.py](../openmemory/api/main.py) - Added MetricsMiddleware, `/metrics` endpoint, auto_migrate call
+- [main.py](../openmemory/api/main.py) - Added MetricsMiddleware, `/metrics` endpoint, auto_migrate call, code_router
 - [docker-compose.yml](../openmemory/docker-compose.yml) - Added `AUTO_MIGRATE=true` for dev environment
+- [app/routers/__init__.py](../openmemory/api/app/routers/__init__.py) - Added code_router export
+- [app/schemas.py](../openmemory/api/app/schemas.py) - Added code intelligence schemas
+- [app/mcp_server.py](../openmemory/api/app/mcp_server.py) - Added code-intel MCP tools (search_code_hybrid, explain_code, find_callers, find_callees, impact_analysis)
 
 ### Files Created
 - [tests/infrastructure/test_auto_migrate.py](../openmemory/api/tests/infrastructure/test_auto_migrate.py) - TDD tests for AUTO_MIGRATE
 - [tests/infrastructure/test_metrics_integration.py](../openmemory/api/tests/infrastructure/test_metrics_integration.py) - Tests for metrics integration
+- [app/routers/code.py](../openmemory/api/app/routers/code.py) - Code intelligence REST router with 8 endpoints
+- [app/code_toolkit.py](../openmemory/api/app/code_toolkit.py) - Lazy initialization factory for code-intel dependencies
+- [tests/routers/test_code_router.py](../openmemory/api/tests/routers/test_code_router.py) - TDD tests for code router (38 tests)
+- [tests/mcp/test_code_tools_mcp.py](../openmemory/api/tests/mcp/test_code_tools_mcp.py) - TDD tests for MCP code tools
 
 ---
 

@@ -1,5 +1,6 @@
 from .apps import router as apps_router
 from .backup import router as backup_router
+from .code import router as code_router
 from .config import router as config_router
 from .entities import router as entities_router
 from .experiments import router as experiments_router
@@ -24,4 +25,5 @@ __all__ = [
     "experiments_router",
     "search_router",
     "gdpr_router",
+    "code_router",
 ]

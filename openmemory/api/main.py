@@ -7,9 +7,9 @@ from uuid import uuid4
 from app.config import DEFAULT_APP_ID, USER_ID
 from app.database import Base, SessionLocal, auto_migrate_on_startup, engine
 from app.mcp_server import setup_mcp_server
-from app.axis_guidance_server import setup_axis_guidance_server
+from app.guidance_server import setup_guidance_server
 from app.models import App, User
-from app.routers import apps_router, backup_router, config_router, entities_router, experiments_router, feedback_router, gdpr_router, graph_router, health_router, memories_router, search_router, stats_router
+from app.routers import apps_router, backup_router, code_router, config_router, entities_router, experiments_router, feedback_router, gdpr_router, graph_router, health_router, memories_router, search_router, stats_router
 from app.security.middleware import SecurityHeadersMiddleware
 from app.security.exception_handlers import register_security_exception_handlers
 from app.observability.metrics import MetricsMiddleware
@@ -124,7 +124,7 @@ create_default_app()
 
 # Setup MCP servers
 setup_mcp_server(app)
-setup_axis_guidance_server(app)
+setup_guidance_server(app)
 
 
 # Prometheus metrics endpoint (no auth required)
@@ -155,6 +155,7 @@ app.include_router(feedback_router)
 app.include_router(experiments_router)
 app.include_router(search_router)
 app.include_router(gdpr_router)
+app.include_router(code_router)  # Code intelligence endpoints
 
 # Add pagination support
 add_pagination(app)

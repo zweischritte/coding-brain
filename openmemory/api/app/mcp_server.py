@@ -2540,6 +2540,435 @@ async def graph_biography_timeline(
 
 
 # =============================================================================
+# CODE INTELLIGENCE TOOLS
+# =============================================================================
+
+
+def get_code_toolkit():
+    """Lazy-load code toolkit to avoid import-time failures."""
+    from app.code_toolkit import get_code_toolkit as _get_toolkit
+    return _get_toolkit()
+
+
+def _create_code_meta(request_id: str = None, degraded: bool = False, missing: list = None, error: str = None) -> dict:
+    """Create metadata dict for code tool responses."""
+    return {
+        "request_id": request_id or str(uuid.uuid4()),
+        "degraded_mode": degraded,
+        "missing_sources": missing or [],
+        "error": error,
+    }
+
+
+@mcp.tool(description="""Search code using tri-hybrid retrieval (lexical + semantic + graph).
+
+Combines lexical, semantic, and graph-based search for comprehensive code discovery.
+
+Required parameters:
+- query: Search query text (required)
+
+Optional parameters:
+- repo_id: Filter by repository ID
+- language: Filter by programming language
+- limit: Maximum results (default: 10, max: 100)
+
+Returns:
+- results[]: Array of code hits with symbol info, scores, and snippets
+- meta: Response metadata including degraded_mode indicator
+
+Examples:
+- search_code_hybrid(query="database connection pooling")
+- search_code_hybrid(query="authentication handler", language="python", limit=20)
+""")
+async def search_code_hybrid(
+    query: str,
+    repo_id: str = None,
+    language: str = None,
+    limit: int = 10,
+) -> str:
+    """Search code using tri-hybrid retrieval."""
+    # Check scope
+    scope_error = _check_tool_scope("search:read")
+    if scope_error:
+        return scope_error
+
+    toolkit = get_code_toolkit()
+
+    # Check if search backend is available
+    if not toolkit.is_available("opensearch") and not toolkit.is_available("trihybrid"):
+        return json.dumps({
+            "results": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=["opensearch"],
+                error="Search backend unavailable",
+            ),
+        })
+
+    if not toolkit.search_tool:
+        return json.dumps({
+            "results": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("search_tool"),
+            ),
+        })
+
+    try:
+        from tools.search_code_hybrid import SearchCodeHybridInput
+        import dataclasses
+
+        input_data = SearchCodeHybridInput(
+            query=query,
+            repo_id=repo_id,
+            language=language,
+            limit=min(max(1, limit or 10), 100),
+        )
+
+        result = toolkit.search_tool.search(input_data)
+        return json.dumps(dataclasses.asdict(result), default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in search_code_hybrid: {e}")
+        return json.dumps({
+            "results": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=str(e),
+            ),
+        })
+
+
+@mcp.tool(description="""Explain a code symbol with full context.
+
+Get detailed explanation of a code symbol including callers, callees, and usages.
+
+Required parameters:
+- symbol_id: ID of the symbol to explain (required)
+
+Optional parameters:
+- depth: Analysis depth (default: 2, max: 5)
+- include_callers: Include functions that call this symbol (default: true)
+- include_callees: Include functions called by this symbol (default: true)
+
+Returns:
+- explanation: Symbol details with call graph context
+- meta: Response metadata
+
+Examples:
+- explain_code(symbol_id="sym-abc123")
+- explain_code(symbol_id="sym-abc123", depth=3)
+""")
+async def explain_code(
+    symbol_id: str,
+    depth: int = 2,
+    include_callers: bool = True,
+    include_callees: bool = True,
+) -> str:
+    """Explain a code symbol with context."""
+    # Check scopes - needs both search:read and graph:read
+    scope_error = _check_tool_scope("search:read")
+    if scope_error:
+        return scope_error
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.is_available("neo4j"):
+        return json.dumps({
+            "explanation": None,
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=["neo4j"],
+                error="Graph backend unavailable",
+            ),
+        })
+
+    if not toolkit.explain_tool:
+        return json.dumps({
+            "explanation": None,
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("explain_tool"),
+            ),
+        })
+
+    try:
+        from tools.explain_code import ExplainCodeConfig
+        import dataclasses
+
+        config = ExplainCodeConfig(
+            depth=min(max(1, depth or 2), 5),
+            include_callers=include_callers,
+            include_callees=include_callees,
+        )
+
+        result = toolkit.explain_tool.explain(symbol_id, config)
+        return json.dumps({
+            "explanation": dataclasses.asdict(result) if result else None,
+            "meta": _create_code_meta(),
+        }, default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in explain_code: {e}")
+        return json.dumps({
+            "explanation": None,
+            "meta": _create_code_meta(
+                degraded=True,
+                error=str(e),
+            ),
+        })
+
+
+@mcp.tool(description="""Find functions that call a given symbol.
+
+Traverse the call graph to find all callers of a symbol.
+
+Required parameters:
+- repo_id: Repository ID (required)
+- symbol_name OR symbol_id: The symbol to find callers for (one required)
+
+Optional parameters:
+- depth: Traversal depth (default: 2, max: 5)
+
+Returns:
+- nodes[]: Graph nodes (functions/methods)
+- edges[]: Graph edges (CALLS relationships)
+- meta: Response metadata
+
+Examples:
+- find_callers(repo_id="repo-123", symbol_name="main")
+- find_callers(repo_id="repo-123", symbol_id="sym-abc", depth=3)
+""")
+async def find_callers(
+    repo_id: str,
+    symbol_name: str = None,
+    symbol_id: str = None,
+    depth: int = 2,
+) -> str:
+    """Find functions that call a given symbol."""
+    # Check scope
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    if not symbol_name and not symbol_id:
+        return json.dumps({"error": "Either symbol_name or symbol_id is required"})
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.is_available("neo4j"):
+        return json.dumps({
+            "nodes": [],
+            "edges": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=["neo4j"],
+                error="Graph backend unavailable",
+            ),
+        })
+
+    if not toolkit.callers_tool:
+        return json.dumps({
+            "nodes": [],
+            "edges": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("callers_tool"),
+            ),
+        })
+
+    try:
+        from tools.call_graph import CallGraphInput
+        import dataclasses
+
+        input_data = CallGraphInput(
+            repo_id=repo_id,
+            symbol_id=symbol_id,
+            symbol_name=symbol_name,
+            depth=min(max(1, depth or 2), 5),
+        )
+
+        result = toolkit.callers_tool.find(input_data)
+        return json.dumps(dataclasses.asdict(result), default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in find_callers: {e}")
+        return json.dumps({
+            "nodes": [],
+            "edges": [],
+            "meta": _create_code_meta(degraded=True, error=str(e)),
+        })
+
+
+@mcp.tool(description="""Find functions called by a given symbol.
+
+Traverse the call graph to find all functions that a symbol calls.
+
+Required parameters:
+- repo_id: Repository ID (required)
+- symbol_name OR symbol_id: The symbol to find callees for (one required)
+
+Optional parameters:
+- depth: Traversal depth (default: 2, max: 5)
+
+Returns:
+- nodes[]: Graph nodes (functions/methods)
+- edges[]: Graph edges (CALLS relationships)
+- meta: Response metadata
+
+Examples:
+- find_callees(repo_id="repo-123", symbol_name="main")
+- find_callees(repo_id="repo-123", symbol_id="sym-abc", depth=3)
+""")
+async def find_callees(
+    repo_id: str,
+    symbol_name: str = None,
+    symbol_id: str = None,
+    depth: int = 2,
+) -> str:
+    """Find functions called by a given symbol."""
+    # Check scope
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    if not symbol_name and not symbol_id:
+        return json.dumps({"error": "Either symbol_name or symbol_id is required"})
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.is_available("neo4j"):
+        return json.dumps({
+            "nodes": [],
+            "edges": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=["neo4j"],
+                error="Graph backend unavailable",
+            ),
+        })
+
+    if not toolkit.callees_tool:
+        return json.dumps({
+            "nodes": [],
+            "edges": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("callees_tool"),
+            ),
+        })
+
+    try:
+        from tools.call_graph import CallGraphInput
+        import dataclasses
+
+        input_data = CallGraphInput(
+            repo_id=repo_id,
+            symbol_id=symbol_id,
+            symbol_name=symbol_name,
+            depth=min(max(1, depth or 2), 5),
+        )
+
+        result = toolkit.callees_tool.find(input_data)
+        return json.dumps(dataclasses.asdict(result), default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in find_callees: {e}")
+        return json.dumps({
+            "nodes": [],
+            "edges": [],
+            "meta": _create_code_meta(degraded=True, error=str(e)),
+        })
+
+
+@mcp.tool(description="""Analyze the impact of code changes.
+
+Determine which files and symbols are affected by code changes.
+
+Required parameters:
+- repo_id: Repository ID (required)
+
+Optional parameters:
+- changed_files: List of changed file paths
+- symbol_id: Changed symbol ID
+- max_depth: Maximum traversal depth (default: 3, max: 10)
+- include_cross_language: Include cross-language dependencies (default: false)
+
+Returns:
+- affected_files[]: List of affected files with impact scores
+- meta: Response metadata
+
+Examples:
+- impact_analysis(repo_id="repo-123", changed_files=["src/utils.py"])
+- impact_analysis(repo_id="repo-123", symbol_id="sym-abc", max_depth=5)
+""")
+async def impact_analysis(
+    repo_id: str,
+    changed_files: list = None,
+    symbol_id: str = None,
+    max_depth: int = 3,
+    include_cross_language: bool = False,
+) -> str:
+    """Analyze the impact of code changes."""
+    # Check scope
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.is_available("neo4j"):
+        return json.dumps({
+            "affected_files": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=["neo4j"],
+                error="Graph backend unavailable",
+            ),
+        })
+
+    if not toolkit.impact_tool:
+        return json.dumps({
+            "affected_files": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("impact_tool"),
+            ),
+        })
+
+    try:
+        from tools.impact_analysis import ImpactInput
+        import dataclasses
+
+        input_data = ImpactInput(
+            repo_id=repo_id,
+            changed_files=changed_files or [],
+            symbol_id=symbol_id,
+            include_cross_language=include_cross_language,
+            max_depth=min(max(1, max_depth or 3), 10),
+        )
+
+        result = toolkit.impact_tool.analyze(input_data)
+        return json.dumps(dataclasses.asdict(result), default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in impact_analysis: {e}")
+        return json.dumps({
+            "affected_files": [],
+            "meta": _create_code_meta(degraded=True, error=str(e)),
+        })
+
+
+# =============================================================================
 # BUSINESS CONCEPT TOOLS (Separate MCP endpoint - /concepts/claude/sse/{user_id})
 # =============================================================================
 
