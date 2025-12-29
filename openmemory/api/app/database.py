@@ -1,8 +1,10 @@
+import logging
 import os
 import uuid
 from contextlib import contextmanager
 from functools import lru_cache
-from typing import Generator, Union
+from pathlib import Path
+from typing import Generator, Optional, Union
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -11,6 +13,18 @@ from sqlalchemy.pool import QueuePool
 
 # load .env file
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# Alembic imports (lazy loaded to avoid circular imports)
+try:
+    from alembic import command as alembic_command
+    from alembic.config import Config as alembic_Config
+    ALEMBIC_AVAILABLE = True
+except ImportError:
+    alembic_command = None
+    alembic_Config = None
+    ALEMBIC_AVAILABLE = False
 
 
 def get_database_url() -> str:
@@ -76,6 +90,92 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def is_postgres_database(database_url: Optional[str] = None) -> bool:
+    """
+    Check if the database URL is for PostgreSQL.
+
+    Args:
+        database_url: Database URL to check. If None, uses the current DATABASE_URL.
+
+    Returns:
+        True if PostgreSQL, False otherwise (SQLite, etc.)
+    """
+    if database_url is None:
+        database_url = DATABASE_URL
+
+    if not database_url:
+        return False
+
+    return database_url.startswith("postgresql")
+
+
+def should_auto_migrate() -> bool:
+    """
+    Check if AUTO_MIGRATE is enabled via environment variable.
+
+    Returns:
+        True if AUTO_MIGRATE is set to a truthy value.
+    """
+    auto_migrate = os.getenv("AUTO_MIGRATE", "false").lower()
+    return auto_migrate in ("true", "1", "yes")
+
+
+def run_alembic_upgrade() -> None:
+    """
+    Run Alembic migrations to upgrade database to head.
+
+    This function is safe to call - it logs errors without crashing
+    the application.
+    """
+    if not ALEMBIC_AVAILABLE:
+        logger.warning("Alembic is not available - skipping migrations")
+        return
+
+    try:
+        # Find alembic.ini relative to this file
+        # This file is at: openmemory/api/app/database.py
+        # alembic.ini is at: openmemory/api/alembic.ini
+        current_dir = Path(__file__).resolve().parent.parent
+        alembic_ini_path = current_dir / "alembic.ini"
+
+        if not alembic_ini_path.exists():
+            logger.error(f"alembic.ini not found at {alembic_ini_path}")
+            return
+
+        logger.info(f"Running Alembic migrations from {alembic_ini_path}")
+        config = alembic_Config(str(alembic_ini_path))
+
+        # Set the script location relative to the config file
+        config.set_main_option("script_location", str(current_dir / "alembic"))
+
+        alembic_command.upgrade(config, "head")
+        logger.info("Alembic migrations completed successfully")
+
+    except Exception as e:
+        logger.error(f"Alembic migration failed: {e}")
+
+
+def auto_migrate_on_startup() -> None:
+    """
+    Run database migrations on startup if AUTO_MIGRATE is enabled.
+
+    This function:
+    - Only runs if AUTO_MIGRATE=true
+    - Only runs for PostgreSQL databases (not SQLite)
+    - Logs the action and any errors
+    """
+    if not should_auto_migrate():
+        logger.debug("AUTO_MIGRATE is disabled - skipping migrations")
+        return
+
+    if not is_postgres_database():
+        logger.info("AUTO_MIGRATE skipped: SQLite does not support Alembic migrations")
+        return
+
+    logger.info("AUTO_MIGRATE enabled - running database migrations")
+    run_alembic_upgrade()
 
 
 @contextmanager

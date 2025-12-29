@@ -5,16 +5,18 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from app.config import DEFAULT_APP_ID, USER_ID
-from app.database import Base, SessionLocal, engine
+from app.database import Base, SessionLocal, auto_migrate_on_startup, engine
 from app.mcp_server import setup_mcp_server
 from app.axis_guidance_server import setup_axis_guidance_server
 from app.models import App, User
 from app.routers import apps_router, backup_router, config_router, entities_router, experiments_router, feedback_router, gdpr_router, graph_router, health_router, memories_router, search_router, stats_router
 from app.security.middleware import SecurityHeadersMiddleware
 from app.security.exception_handlers import register_security_exception_handlers
-from fastapi import FastAPI
+from app.observability.metrics import MetricsMiddleware
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,9 @@ app = FastAPI(title="OpenMemory API", lifespan=lifespan)
 # Security headers middleware (applied to all responses)
 app.add_middleware(SecurityHeadersMiddleware)
 
+# Metrics middleware for Prometheus (request count, duration)
+app.add_middleware(MetricsMiddleware)
+
 # CORS middleware - restrict origins in production
 allowed_origins = os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
@@ -59,7 +64,10 @@ app.add_middleware(
 # Register security exception handlers (401/403 responses)
 register_security_exception_handlers(app)
 
-# Create all tables
+# Run auto-migration if enabled (PostgreSQL only)
+auto_migrate_on_startup()
+
+# Create all tables (fallback for SQLite, no-op if tables already exist from migrations)
 Base.metadata.create_all(bind=engine)
 
 # Check for USER_ID and create default user if needed
@@ -117,6 +125,22 @@ create_default_app()
 # Setup MCP servers
 setup_mcp_server(app)
 setup_axis_guidance_server(app)
+
+
+# Prometheus metrics endpoint (no auth required)
+@app.get("/metrics", tags=["observability"])
+async def metrics():
+    """
+    Prometheus metrics endpoint.
+
+    Returns metrics in Prometheus text format for scraping.
+    No authentication required.
+    """
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST
+    )
+
 
 # Include routers
 app.include_router(health_router)  # Health checks first for quick probe responses
