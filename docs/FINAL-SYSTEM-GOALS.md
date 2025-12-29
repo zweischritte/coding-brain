@@ -1,116 +1,73 @@
-# Full System Goals
+# System Goals (Current, Codebase-Aligned)
 
-Date: 2025-12-26
 Audience: New readers with no prior context
-Purpose: Describe the end-state goals of the Intelligent Development Assistant System
-Scope: The complete feature set when fully implemented and running in production
-Note: Legacy capabilities that are not part of the current roadmap are out of scope for this document.
-
----
-
-## 0. System Context (For New Readers)
-
-This system is a production-grade development assistant for software teams. It combines:
-- Persistent, scoped memory to retain team conventions, decisions, and preferences.
-- Code intelligence built from semantic embeddings, lexical indexes, and a structural code graph.
-- An MCP (Model Context Protocol) server that exposes tools to IDEs and clients with consistent auth and permissions.
-
-The system is designed for both local-first deployments and enterprise environments with strict security and compliance requirements.
+Purpose: Capture the goals of the Coding Brain system as reflected by the current codebase
+Scope: Implemented capabilities plus near-term, code-adjacent gaps
 
 ---
 
 ## 1. User Value Goals
-
-- Provide useful results within 30 seconds of opening a repository, even before full indexing completes.
-- Maintain consistent behavior across IDEs and clients via MCP, with shared context and permissions.
-- Deliver accurate impact analysis across files, services, and API boundaries with confidence indicators.
-- Enable fast, context-aware explanations and recommendations aligned to team conventions.
+- Provide fast, high-signal memory recall with structured metadata and graph context.
+- Offer consistent access via REST and MCP so IDEs and agents share the same context.
+- Make setup and local execution predictable with a single docker-compose stack.
 
 ---
 
-## 2. Code Intelligence Goals
-
-- Build a CODE_* graph (functions, classes, modules, files) with calls, imports, inheritance, and data flow.
-- Support cross-language linking for REST, GraphQL, gRPC, and messaging boundaries.
-- Provide tri-hybrid retrieval (semantic, lexical, graph) with RRF fusion and reranking.
-- Support partial graph queries during bootstrap with explicit coverage and degraded mode metadata.
+## 2. Memory and Context Goals
+- Store structured memories (category, scope, artifacts, entities, tags, evidence).
+- Enforce multi-tenant isolation (org- and user-scoped access).
+- Project memory metadata into a Neo4j graph for aggregation and relation queries.
+- Maintain similarity edges, tag co-occurrence, and typed entity relations.
+- Support optional business concept extraction and semantic search in a separate graph.
 
 ---
 
-## 3. Memory and Context Goals
-
-- Enforce scoped memory (session, user, team, project, org, enterprise) with deterministic precedence.
-- Provide episodic memory for session context and cross-tool reference resolution.
-- Store and retrieve ADRs and link them to code changes and PRs.
-- Capture and reuse project conventions and team patterns in responses.
+## 3. Code Intelligence Goals
+- Build a CODE_* graph from source code using Tree-sitter and SCIP symbols.
+- Detect API boundaries and link clients to endpoints.
+- Provide tri-hybrid retrieval (lexical + vector + graph) with optional reranking.
+- Maintain library tools for explain-code, call graph, impact analysis, ADR automation,
+  test generation, and PR analysis.
 
 ---
 
 ## 4. Retrieval Quality and Feedback Goals
-
-- Emit implicit feedback for every retrieval and accept explicit feedback via MCP tools.
-- Provide dashboards for acceptance rate, reranker lift, and source contribution.
-- Support A/B testing for retrieval settings and safe rollback for regressions.
-- Run automated RRF weight tuning on feedback windows.
+- Capture feedback events and aggregate metrics for retrieval quality.
+- Support A/B experiments to compare retrieval configurations.
+- Keep retrieval decisions explainable by exposing source contributions and ranks.
 
 ---
 
-## 5. Developer Workflow Goals
-
-- Explain code at multiple detail levels with context from graph and memory.
-- Generate tests aligned to team patterns and graph-informed mock requirements.
-- Analyze PRs with impact analysis, convention checks, and ADR relevance.
-- Suggest review comments and integrate with GitHub MCP workflows.
-
----
-
-## 6. Performance and Latency Goals
-
-- Inline completion P95 <= 200ms target with speculative prefetch and warm caches.
-- Chat TTFT P95 <= 1s.
-- Retrieval P95 <= 120ms; graph queries P95 <= 500ms.
-- Maintain high cache hit rates and degrade gracefully when dependencies fail.
+## 5. Security and Compliance Goals
+- Enforce JWT validation and scope-based RBAC on all REST and MCP endpoints.
+- Support DPoP token binding with replay prevention.
+- Bind MCP SSE sessions to authenticated principals to prevent hijacking.
+- Provide GDPR SAR export and deletion endpoints with audit logging.
 
 ---
 
-## 7. Security and Compliance Goals
-
-- Enforce OAuth 2.1, DPoP token binding, RBAC, and scope validation on every request.
-- Run tiered secret scanning with quarantine and incident workflows.
-- Maintain full audit logging with tamper-evident chains.
-- Provide GDPR SAR export and cascading delete with backup purge tracking.
-- Enforce geo residency controls and deny cross-region access.
+## 6. Operability and Resilience Goals
+- Provide health probes for liveness, readiness, and dependency checks.
+- Implement circuit breaker utilities for external dependencies.
+- Provide backup/export tooling and documented runbooks.
 
 ---
 
-## 8. Operability and Resilience Goals
-
-- Use circuit breakers and fallback modes across vector, graph, lexical, and rerank systems.
-- Pin production service versions and avoid floating container tags.
-- Provide backup, restore, and disaster recovery procedures for all stores.
-- Support hot/cold graph partitioning and read replicas at scale.
+## 7. Observability Goals
+- Offer Prometheus metrics helpers and tracing hooks for key subsystems.
+- Keep security events and session activity auditable.
+- Provide dashboard templates for metrics consumption.
 
 ---
 
-## 9. Observability and Governance Goals
-
-- Capture OpenTelemetry traces, structured logs, and SLO burn-rate alerts.
-- Track latency, error rates, and indexing progress per repo.
-- Maintain quality and cost dashboards for embeddings and reranking.
-- Provide audit logs for access, admin actions, and model selection.
+## 8. Developer Experience Goals
+- Allow live configuration of LLMs, embedders, and vector stores via `/api/v1/config`.
+- Provide a CLI skeleton for search, memory, indexing, and graph actions.
+- Provide graph visualization export utilities (JSON, DOT, Mermaid).
 
 ---
 
-## 10. Developer Experience Goals
-
-- Provide a CLI to access MCP tools, indexing actions, and diagnostics.
-- Provide a query playground for tuning retrieval parameters and comparing runs.
-- Provide ready-to-deploy dashboard templates for ops and quality monitoring.
-
----
-
-## 11. Future Expansion Goals (If Delivered)
-
-- Build a repository dependency graph and cross-repo impact analysis.
-- Support multi-repo search and system-wide recommendations.
-- Detect cross-repo patterns and shared implementation conventions.
+## 9. Near-Term Gaps (Explicit)
+- Wire code-intelligence tools into MCP/REST so they are externally callable.
+- Mount the Prometheus `/metrics` app into the main API by default.
+- Expand REST hybrid search to include on-the-fly vector embeddings.

@@ -1,145 +1,151 @@
 # Coding Brain / OpenMemory System Guide
 
-This document is a comprehensive, developer-focused README for the Coding Brain (OpenMemory fork) system. It explains the major features, architecture, and how to run the full system locally or in a company server environment.
+This document is a developer-focused overview of the Coding Brain system (an OpenMemory fork) as it exists in this repo. It covers what is implemented, how the services fit together, and how to run the stack locally.
 
 ---
 
-## Overview
+## What Coding Brain Is
 
-Coding Brain is a production-grade memory system for AI assistants and agents. It combines:
-- A FastAPI backend for memory and graph operations
-- An MCP (Model Context Protocol) server for tool access (SSE transport)
-- A web UI for browsing and testing memories
-- Multiple data stores (PostgreSQL, Valkey, Qdrant, Neo4j, OpenSearch)
-- Security (JWT + RBAC + optional DPoP) and multi-tenant support
+Coding Brain is a memory and code-intelligence backend for development assistants. It exposes:
+- REST APIs for memory, search, graph, feedback, experiments, and ops flows
+- MCP servers over SSE for memory tools, business concepts, and AXIS guidance
+- A Next.js UI for browsing memories
 
-The system is designed to work for:
-- Local developer machines (Docker-based)
-- A shared internal server reachable by developers
-- MCP clients (Copilot-style, Gemini, local models, CLI tools)
+It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and Valkey.
 
 ---
 
-## Major Features
+## Major Capabilities (Current)
 
-### 1) Memory API (FastAPI)
-- CRUD for memories (add/search/update/delete)
-- Structured memory schema with tags/metadata
-- Memory status tracking and access logs
-- Per-user and per-app data scoping
+### Memory and Knowledge
+- Structured memory schema with categories, scopes, artifacts, entities, tags, and evidence
+- CRUD, state changes, and access logging in PostgreSQL
+- Vector search via Mem0 (default: Qdrant)
+- Neo4j metadata graph (OM_*), similarity edges, typed relations, tag co-occurrence
+- Optional business concept extraction with a separate concept graph and vector store
 
-### 2) MCP Server (SSE)
-- MCP tools for memory operations
-- SSE transport for MCP clients
-- Session-bound authentication to prevent session hijacking
-- Separate MCP server for business concepts (optional feature)
+### Search and Retrieval
+- REST search endpoints backed by OpenSearch (lexical + optional vector)
+- Metadata-based re-ranking for memory search results
+- Graph traversal helpers for related memories and entity networks
 
-### 3) Security & Multi-Tenancy
-- JWT validation (issuer/audience/exp/iat)
-- OAuth-style scopes (RBAC)
-- Optional DPoP verification for token binding
-- org_id scoping for tenant separation
-- Session binding for MCP SSE (session_id ↔ principal)
+### Code Intelligence Modules
+- Tree-sitter + SCIP indexing pipeline and CODE_* graph projection to Neo4j
+- Tri-hybrid retrieval (lexical + vector + graph) and optional reranker
+- Libraries for explain-code, call-graph, impact analysis, ADR automation, test generation, PR analysis
+  (present in codebase, not wired to MCP/REST by default)
 
-### 4) Graph + Search
-- Neo4j graph operations for entities and relationships
-- OpenSearch for full-text and hybrid search
-- Qdrant for vector similarity search
+### Security, Ops, Observability
+- JWT validation with scope-based RBAC
+- Optional DPoP token binding
+- MCP SSE session binding with memory or Valkey stores
+- Health probes, circuit breakers, rate limiting, audit logging
+- Backup/export and GDPR endpoints
+- Prometheus metric helpers (mountable if you add the metrics app)
 
-### 5) Observability & Operations
-- Health endpoints for API and session store
-- Prometheus metrics (HTTP + session binding)
-- Security audit logging for auth/session events
-
-### 6) UI
-- Web UI for memory review and exploration
-- Configurable API endpoint and user ID
+### AXIS Guidance
+- Separate MCP SSE endpoint for serving AXIS protocol guides on demand
 
 ---
 
 ## Architecture (High Level)
-
-- **API/MCP**: FastAPI + MCP server (`openmemory/api`)
-- **UI**: Next.js app (`openmemory/ui`)
-- **PostgreSQL**: relational store + metadata
-- **Valkey**: caching + session binding
-- **Qdrant**: vector store for memory embeddings
-- **Neo4j**: graph for relationships and entities
-- **OpenSearch**: full-text search
+- API/MCP: `openmemory/api` (FastAPI)
+- UI: `openmemory/ui` (Next.js)
+- PostgreSQL: memory metadata, users, apps, feedback, experiments, config
+- Qdrant: memory embeddings (and optional business concepts)
+- OpenSearch: lexical/hybrid search index for memories
+- Neo4j: OM_* memory metadata graph, CODE_* code graph, concept graph
+- Valkey: session binding and DPoP replay cache
 
 ---
 
 ## Ports (Default Docker Compose)
 
 From `openmemory/docker-compose.yml`:
-- API/MCP: `http://localhost:8865`
+- API/MCP: `http://localhost:8865` (container port 8765)
 - UI: `http://localhost:3433`
-- Postgres: `localhost:5532`
+- PostgreSQL: `localhost:5532`
 - Valkey: `localhost:6479`
-- Qdrant: `localhost:6433`
+- Qdrant HTTP: `localhost:6433` (gRPC: 6434)
 - Neo4j Browser: `http://localhost:7574`
 - Neo4j Bolt: `localhost:7787`
-- OpenSearch: `http://localhost:9200`
+- OpenSearch: `http://localhost:9200` (metrics: 9600)
 
 ---
 
-## Quickstart (Docker, Recommended)
+## Quickstart (Docker, Full Stack)
 
-### 1) Prerequisites
-- Docker + Docker Compose v2
-- OpenAI API key (for embeddings / LLM features)
-
-### 2) Configure environment
-From the repo root:
-
+1) Configure environment
 ```bash
 cd openmemory
 cp .env.example .env
-make env  # copies api/.env and ui/.env
+make env   # copies api/.env.example and ui/.env.example
 ```
+Edit `openmemory/.env` and set required secrets:
+- `JWT_SECRET_KEY` (32+ chars)
+- `POSTGRES_PASSWORD`
+- `NEO4J_PASSWORD`
+- `OPENAI_API_KEY`
+- `OPENSEARCH_INITIAL_ADMIN_PASSWORD`
 
-Then edit:
-- `openmemory/.env` (required secrets: JWT_SECRET_KEY, POSTGRES_PASSWORD, NEO4J_PASSWORD, OPENAI_API_KEY, etc.)
-- `openmemory/api/.env` (OPENAI_API_KEY and USER for API development)
-- `openmemory/ui/.env` (NEXT_PUBLIC_API_URL and NEXT_PUBLIC_USER_ID)
+Optional: adjust `USER`, `NEXT_PUBLIC_API_URL`, and CORS settings.
 
-### 3) Build and run
-
+2) Build and run
 ```bash
 make build
 make up
 ```
 
-### 4) Verify
+3) Verify
 - API docs: `http://localhost:8865/docs`
 - UI: `http://localhost:3433`
-- MCP SSE endpoint: `http://localhost:8865/mcp/<client>/sse/<user_id>`
+- Health: `http://localhost:8865/health/live`
+- MCP SSE: `http://localhost:8865/mcp/<client>/sse/<user_id>`
 
 ---
 
-## MCP Client Setup
+## MCP Endpoints
+- Memory MCP: `/mcp/<client>/sse/<user_id>`
+- Business Concepts MCP: `/concepts/<client>/sse/<user_id>` (requires `BUSINESS_CONCEPTS_ENABLED=true`)
+- AXIS Guidance MCP: `/axis/<client>/sse/<user_id>`
 
-Use the OpenMemory MCP installer:
+SSE uses a `session_id` query parameter for POSTs. All MCP calls require
+`Authorization: Bearer <JWT>` and optional `DPoP` headers.
 
+Install for a local MCP client:
 ```bash
-npx @openmemory/install local http://localhost:8865/mcp/<client-name>/sse/<user-id> --client <client-name>
+npx @openmemory/install local http://localhost:8865/mcp/<client>/sse/<user_id> --client <client>
 ```
 
-Notes:
-- Clients must send `Authorization: Bearer <token>` on **GET and POST**.
-- If you enable DPoP, clients must also send `DPoP` headers.
+---
+
+## REST API Surface (Selected)
+
+Base: `http://localhost:8865/api/v1`
+
+- `memories` - CRUD and listing
+- `search` - lexical and hybrid search
+- `graph` - aggregations, entity networks, tag co-occurrence
+- `entities` - entity metadata and centrality
+- `feedback` - retrieval feedback and metrics
+- `experiments` - A/B tests for retrieval settings
+- `backup` - export/import
+- `gdpr` - SAR export and deletion
+- `config` - Mem0 configuration (LLM/embedder/vector store)
+- `apps`, `stats` - app management and aggregates
 
 ---
 
-## Local Development (API + UI)
+## Local Development
 
 ### API only
 ```bash
 cd openmemory/api
 cp .env.example .env
-# fill OPENAI_API_KEY, USER, and any required settings
 uvicorn main:app --host 0.0.0.0 --port 8765 --reload
 ```
+If PostgreSQL is not configured, the API falls back to `openmemory.db` SQLite
+for local dev.
 
 ### UI only
 ```bash
@@ -148,78 +154,32 @@ pnpm install
 pnpm dev
 ```
 
-### Hybrid
-Run the API in Docker and UI locally:
-```bash
-cd openmemory
-make build
-make up
-cd ui
-pnpm install
-pnpm dev
-```
-
----
-
-## Environment Variables (Essentials)
-
-From `openmemory/.env.example`:
-- **JWT_SECRET_KEY** (min 32 chars)
-- **POSTGRES_PASSWORD**
-- **NEO4J_PASSWORD**
-- **OPENAI_API_KEY**
-
-Optional (recommended):
-- **JWT_ISSUER**, **JWT_AUDIENCE**
-- **VALKEY_HOST/PORT**
-- **QDRANT_HOST/PORT**
-- **OPENSEARCH_INITIAL_ADMIN_PASSWORD**
-- **CORS_ALLOWED_ORIGINS**
-
----
-
-## Security Notes
-
-- **JWT + RBAC**: MCP tool access requires scope checks.
-- **Session Binding**: `session_id` is bound to authenticated principal.
-- **DPoP**: Optional proof-of-possession support.
-- **Multi-tenant**: `org_id` in JWT claims is used for tenant scoping.
-
----
-
-## Health & Observability
-
-- API health: `/health/live` (global)
-- MCP session health: `/mcp/health`
-- Prometheus metrics: `/metrics` (if enabled)
-
 ---
 
 ## Troubleshooting
-
-- **401/403 on MCP POST**: Ensure Authorization header is sent on POST.
-- **Valkey connection errors**: Verify `VALKEY_HOST` and `VALKEY_PORT`.
-- **Neo4j auth failures**: Check `NEO4J_USERNAME` and `NEO4J_PASSWORD`.
-- **UI not loading**: Confirm `NEXT_PUBLIC_API_URL` points to `http://localhost:8865`.
+- `401/403` on REST or MCP: check JWT issuer/audience/secret and required scopes.
+- MCP POST errors: ensure `session_id` is included in the POST URL.
+- Valkey errors: verify `VALKEY_HOST` and `VALKEY_PORT` or set `MCP_SESSION_STORE=memory`.
+- Neo4j auth failures: check `NEO4J_USERNAME` and `NEO4J_PASSWORD`.
+- UI not loading: confirm `NEXT_PUBLIC_API_URL` points to `http://localhost:8865`.
 
 ---
 
-## What’s in the Repo
+## What Is In This Repo
 
 Key directories:
-- `openmemory/api/` — FastAPI backend + MCP server
-- `openmemory/ui/` — Next.js UI
-- `openmemory/docker-compose.yml` — Full system stack
-- `openmemory/run.sh` — One-command setup (vector store variants)
-- `openmemory/compose/` — Compose templates for vector store selection
-- `openmemory/api/app/` — main API logic, security, tools
+- `openmemory/api` - FastAPI backend and MCP servers
+- `openmemory/ui` - Next.js UI
+- `openmemory/docker-compose.yml` - full stack
+- `openmemory/run.sh` - simplified bootstrap for memory-only installs
+- `openmemory/api/indexing` - code indexing and CODE_* graph projection
+- `openmemory/api/retrieval` - tri-hybrid retrieval and reranking
+- `openmemory/api/tools` - code intelligence tooling modules
+- `openmemory/api/cross_repo` - cross-repo registry and analysis
 
 ---
 
 ## Next Steps
-
-- Configure JWT issuance for your auth system
-- Decide whether to require DPoP in production
-- Add a real Valkey instance for multi-worker deployment
-- Integrate your preferred MCP clients
-
+- Hook the code-intelligence tools into MCP/REST if you want them exposed
+- Wire the Prometheus `/metrics` app into the main API if you need scraping
+- Tune OpenSearch and Qdrant settings per workload
