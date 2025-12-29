@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import axios from 'axios';
+import api from '@/lib/api';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
 import { setApps, setTotalApps } from '@/store/profileSlice';
@@ -41,7 +41,7 @@ export const useStats = (): UseMemoriesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<APIStatsResponse>(
+      const response = await api.get<APIStatsResponse>(
         `${URL}/api/v1/stats?user_id=${user_id}`
       );
       dispatch(setTotalMemories(response.data.total_memories));

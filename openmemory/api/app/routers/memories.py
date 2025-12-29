@@ -32,7 +32,7 @@ from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 from pydantic import BaseModel, Field
 from sqlalchemy import func, String, cast, text
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
 
@@ -154,14 +154,10 @@ async def list_memories(
         to_datetime = datetime.fromtimestamp(to_date, tz=UTC)
         query = query.filter(Memory.created_at <= to_datetime)
 
-    # Add joins for app and categories after filtering
-    query = query.outerjoin(App, Memory.app_id == App.id)
-    query = query.outerjoin(Memory.categories)
-
     # Apply category filter if provided
     if categories:
         category_list = [c.strip() for c in categories.split(",")]
-        query = query.filter(Category.name.in_(category_list))
+        query = query.filter(Memory.categories.any(Category.name.in_(category_list)))
 
     # Apply sorting if specified
     if sort_column:
@@ -169,11 +165,11 @@ async def list_memories(
         if sort_field:
             query = query.order_by(sort_field.desc()) if sort_direction == "desc" else query.order_by(sort_field.asc())
 
-    # Add eager loading for app and categories
+    # Add eager loading for app and categories without join duplication
     query = query.options(
-        joinedload(Memory.app),
-        joinedload(Memory.categories)
-    ).distinct(Memory.id)
+        selectinload(Memory.app),
+        selectinload(Memory.categories)
+    )
 
     # Get paginated results with transformer
     return sqlalchemy_paginate(
@@ -835,14 +831,9 @@ async def filter_memories(
     if request.sources:
         query = query.filter(cast(Memory.metadata_["source"], String).in_(request.sources))
 
-    # Add joins for app and categories
-    query = query.outerjoin(App, Memory.app_id == App.id)
-
     # Apply category filter
     if request.category_ids:
-        query = query.join(Memory.categories).filter(Category.id.in_(request.category_ids))
-    else:
-        query = query.outerjoin(Memory.categories)
+        query = query.filter(Memory.categories.any(Category.id.in_(request.category_ids)))
 
     # Apply date filters
     if request.from_date:
@@ -869,6 +860,8 @@ async def filter_memories(
             raise HTTPException(status_code=400, detail="Invalid sort column")
 
         sort_field = sort_mapping[request.sort_column]
+        if request.sort_column == 'app_name':
+            query = query.outerjoin(App, Memory.app_id == App.id)
         if sort_direction == 'desc':
             query = query.order_by(sort_field.desc())
         else:
@@ -877,10 +870,11 @@ async def filter_memories(
         # Default sorting
         query = query.order_by(Memory.created_at.desc())
 
-    # Add eager loading for categories and make the query distinct
+    # Add eager loading for app and categories without join duplication
     query = query.options(
-        joinedload(Memory.categories)
-    ).distinct(Memory.id)
+        selectinload(Memory.app),
+        selectinload(Memory.categories)
+    )
 
     # Use fastapi-pagination's paginate function
     return sqlalchemy_paginate(

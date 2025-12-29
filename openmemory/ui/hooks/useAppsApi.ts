@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import axios from 'axios';
+import api from '@/lib/api';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
 import {
@@ -92,7 +92,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
       if (sort_by) queryParams.append('sort_by', sort_by);
       if (sort_direction) queryParams.append('sort_direction', sort_direction);
 
-      const response = await axios.get<ApiResponse>(
+      const response = await api.get<ApiResponse>(
         `${URL}/api/v1/apps/?${queryParams.toString()}`
       );
 
@@ -115,7 +115,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     setIsLoading(true);
     dispatch(setSelectedAppLoading());
     try {
-      const response = await axios.get<AppDetails>(
+      const response = await api.get<AppDetails>(
         `${URL}/api/v1/apps/${appId}`
       );
       dispatch(setSelectedAppDetails(response.data));
@@ -133,7 +133,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     setIsLoading(true);
     dispatch(setCreatedMemoriesLoading());
     try {
-      const response = await axios.get<MemoriesResponse>(
+      const response = await api.get<MemoriesResponse>(
         `${URL}/api/v1/apps/${appId}/memories?page=${page}&page_size=${pageSize}`
       );
       dispatch(setCreatedMemoriesSuccess({
@@ -154,7 +154,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
     setIsLoading(true);
     dispatch(setAccessedMemoriesLoading());
     try {
-      const response = await axios.get<AccessedMemoriesResponse>(
+      const response = await api.get<AccessedMemoriesResponse>(
         `${URL}/api/v1/apps/${appId}/accessed?page=${page}&page_size=${pageSize}`
       );
       dispatch(setAccessedMemoriesSuccess({
@@ -174,7 +174,7 @@ export const useAppsApi = (): UseAppsApiReturn => {
   const updateAppDetails = async (appId: string, details: { is_active: boolean }) => {
     setIsLoading(true);
     try {
-      const response = await axios.put(
+      const response = await api.put(
         `${URL}/api/v1/apps/${appId}?is_active=${details.is_active}`
       );
       setIsLoading(false);

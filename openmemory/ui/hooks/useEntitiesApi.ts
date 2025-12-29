@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import axios from 'axios';
+import api from '@/lib/api';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store/store';
 import {
@@ -93,7 +93,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<EntityListResponse>(
+      const response = await api.get<EntityListResponse>(
         `${URL}/api/v1/entities?user_id=${user_id}&limit=${limit}&min_memories=${minMemories}`
       );
       setIsLoading(false);
@@ -115,7 +115,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<EntityDetailResponse>(
+      const response = await api.get<EntityDetailResponse>(
         `${URL}/api/v1/entities/${encodeURIComponent(entityName)}?user_id=${user_id}`
       );
       setIsLoading(false);
@@ -136,7 +136,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<EntityNetwork>(
+      const response = await api.get<EntityNetwork>(
         `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/network?user_id=${user_id}&min_count=${minCount}&limit=${limit}`
       );
       setIsLoading(false);
@@ -162,7 +162,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       if (params?.direction) queryParams.append('direction', params.direction);
       if (params?.limit) queryParams.append('limit', params.limit.toString());
 
-      const response = await axios.get<EntityRelationsResponse>(
+      const response = await api.get<EntityRelationsResponse>(
         `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/relations?${queryParams.toString()}`
       );
       setIsLoading(false);
@@ -182,7 +182,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<EntityMemoriesResponse>(
+      const response = await api.get<EntityMemoriesResponse>(
         `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/memories?user_id=${user_id}&limit=${limit}`
       );
       setIsLoading(false);
@@ -201,7 +201,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<{ entities: CentralityEntity[] }>(
+      const response = await api.get<{ entities: CentralityEntity[] }>(
         `${URL}/api/v1/entities/analytics/centrality?user_id=${user_id}&limit=${limit}`
       );
       setIsLoading(false);
@@ -222,7 +222,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<PathResponse>(
+      const response = await api.get<PathResponse>(
         `${URL}/api/v1/entities/path/${encodeURIComponent(entityA)}/${encodeURIComponent(entityB)}?user_id=${user_id}&max_hops=${maxHops}`
       );
       setIsLoading(false);
@@ -239,7 +239,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<{ duplicates: DuplicateGroup[] }>(
+      const response = await api.get<{ duplicates: DuplicateGroup[] }>(
         `${URL}/api/v1/entities/normalization/duplicates?user_id=${user_id}`
       );
       setIsLoading(false);
@@ -260,7 +260,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.post(
+      const response = await api.post(
         `${URL}/api/v1/entities/normalization/merge`,
         {
           user_id,

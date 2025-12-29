@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import axios from 'axios';
+import api from '@/lib/api';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
 import {
@@ -37,7 +37,7 @@ export const useConfig = (): UseConfigApiReturn => {
     dispatch(setConfigLoading());
     
     try {
-      const response = await axios.get(`${URL}/api/v1/config`);
+      const response = await api.get(`${URL}/api/v1/config`);
       dispatch(setConfigSuccess(response.data));
       setIsLoading(false);
     } catch (err: any) {
@@ -54,7 +54,7 @@ export const useConfig = (): UseConfigApiReturn => {
     setError(null);
     
     try {
-      const response = await axios.put(`${URL}/api/v1/config`, config);
+      const response = await api.put(`${URL}/api/v1/config`, config);
       dispatch(setConfigSuccess(response.data));
       setIsLoading(false);
       return response.data;
@@ -72,7 +72,7 @@ export const useConfig = (): UseConfigApiReturn => {
     setError(null);
     
     try {
-      const response = await axios.post(`${URL}/api/v1/config/reset`);
+      const response = await api.post(`${URL}/api/v1/config/reset`);
       dispatch(setConfigSuccess(response.data));
       setIsLoading(false);
       return response.data;
@@ -90,7 +90,7 @@ export const useConfig = (): UseConfigApiReturn => {
     setError(null);
     
     try {
-      const response = await axios.put(`${URL}/api/v1/config/mem0/llm`, llmConfig);
+      const response = await api.put(`${URL}/api/v1/config/mem0/llm`, llmConfig);
       dispatch(updateLLM(response.data));
       setIsLoading(false);
       return response.data;
@@ -107,7 +107,7 @@ export const useConfig = (): UseConfigApiReturn => {
     setError(null);
     
     try {
-      const response = await axios.put(`${URL}/api/v1/config/mem0/embedder`, embedderConfig);
+      const response = await api.put(`${URL}/api/v1/config/mem0/embedder`, embedderConfig);
       dispatch(updateEmbedder(response.data));
       setIsLoading(false);
       return response.data;

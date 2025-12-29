@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import axios from 'axios';
+import api from '@/lib/api';
 import { useSelector } from 'react-redux';
 import { RootState } from '@/store/store';
 import {
@@ -81,7 +81,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<GraphStats>(
+      const response = await api.get<GraphStats>(
         `${URL}/api/v1/graph/stats?user_id=${user_id}`
       );
       setIsLoading(false);
@@ -98,7 +98,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<GraphHealthResponse>(
+      const response = await api.get<GraphHealthResponse>(
         `${URL}/api/v1/graph/health`
       );
       setIsLoading(false);
@@ -123,7 +123,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<AggregateResponse>(
+      const response = await api.get<AggregateResponse>(
         `${URL}/api/v1/graph/aggregate/${dimension}?user_id=${user_id}&limit=${limit}`
       );
       setIsLoading(false);
@@ -143,7 +143,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get<TagCooccurrenceResponse>(
+      const response = await api.get<TagCooccurrenceResponse>(
         `${URL}/api/v1/graph/tags/cooccurrence?user_id=${user_id}&limit=${limit}&min_count=${minCount}`
       );
       setIsLoading(false);
@@ -164,7 +164,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get(
+      const response = await api.get(
         `${URL}/api/v1/graph/tags/${encodeURIComponent(tagKey)}/related?user_id=${user_id}&min_count=${minCount}&limit=${limit}`
       );
       setIsLoading(false);
@@ -194,7 +194,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       if (params?.endYear) queryParams.append('end_year', params.endYear.toString());
       if (params?.limit) queryParams.append('limit', params.limit.toString());
 
-      const response = await axios.get<TimelineResponse>(
+      const response = await api.get<TimelineResponse>(
         `${URL}/api/v1/graph/timeline?${queryParams.toString()}`
       );
       setIsLoading(false);
@@ -214,7 +214,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get(
+      const response = await api.get(
         `${URL}/api/v1/graph/search/memories?query=${encodeURIComponent(query)}&user_id=${user_id}&limit=${limit}`
       );
       setIsLoading(false);
@@ -234,7 +234,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await axios.get(
+      const response = await api.get(
         `${URL}/api/v1/graph/search/entities?query=${encodeURIComponent(query)}&user_id=${user_id}&limit=${limit}`
       );
       setIsLoading(false);

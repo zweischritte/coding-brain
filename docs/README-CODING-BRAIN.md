@@ -89,6 +89,8 @@ Edit `openmemory/.env` and set required secrets:
 - `OPENSEARCH_INITIAL_ADMIN_PASSWORD`
 
 Optional: adjust `USER`, `NEXT_PUBLIC_API_URL`, and CORS settings.
+For the UI, set `NEXT_PUBLIC_API_TOKEN` to a JWT whose `sub` matches `USER`
+and includes the scopes you need (see Troubleshooting).
 
 2) Build and run
 ```bash
@@ -153,11 +155,16 @@ cd openmemory/ui
 pnpm install
 pnpm dev
 ```
+If you are calling a secured API, add `NEXT_PUBLIC_API_TOKEN` to
+`openmemory/ui/.env.local` (and keep `NEXT_PUBLIC_USER_ID` aligned with the token `sub`).
 
 ---
 
 ## Troubleshooting
 - `401/403` on REST or MCP: check JWT issuer/audience/secret and required scopes.
+- UI shows empty lists or 403s: ensure `NEXT_PUBLIC_API_TOKEN` includes
+  `memories:read`, `apps:read`, `stats:read`, `entities:read`, and `graph:read`
+  (plus `memories:write/delete` or `apps:write` if you edit data).
 - MCP POST errors: ensure `session_id` is included in the POST URL.
 - Valkey errors: verify `VALKEY_HOST` and `VALKEY_PORT` or set `MCP_SESSION_STORE=memory`.
 - Neo4j auth failures: check `NEO4J_USERNAME` and `NEO4J_PASSWORD`.
