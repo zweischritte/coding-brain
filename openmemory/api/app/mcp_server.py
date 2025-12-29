@@ -24,7 +24,7 @@ from pathlib import Path
 
 from app.database import SessionLocal
 from app.models import Memory, MemoryAccessLog, MemoryState, MemoryStatusHistory
-from sqlalchemy import and_, or_, cast, String
+from sqlalchemy import and_, or_
 from app.utils.structured_memory import (
     build_structured_memory,
     validate_update_fields,
@@ -373,7 +373,7 @@ def _apply_access_entity_filter(query, principal: "Principal", user):
     from app.security.access import build_access_entity_patterns
 
     exact_matches, like_patterns = build_access_entity_patterns(principal)
-    access_entity_col = cast(Memory.metadata_["access_entity"], String)
+    access_entity_col = Memory.metadata_["access_entity"].as_string()
     legacy_owner_filter = and_(
         or_(Memory.metadata_.is_(None), access_entity_col.is_(None)),
         Memory.user_id == user.id,

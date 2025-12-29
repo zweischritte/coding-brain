@@ -142,7 +142,7 @@ def _check_memory_access(principal: Principal, memory: Memory) -> bool:
 
 def _apply_access_entity_filter(query, principal: Principal, user: User):
     exact_matches, like_patterns = build_access_entity_patterns(principal)
-    access_entity_col = cast(Memory.metadata_["access_entity"], String)
+    access_entity_col = Memory.metadata_["access_entity"].as_string()
     legacy_owner_filter = and_(
         or_(Memory.metadata_.is_(None), access_entity_col.is_(None)),
         Memory.user_id == user.id,
