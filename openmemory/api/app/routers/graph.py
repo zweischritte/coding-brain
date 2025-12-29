@@ -15,11 +15,59 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User
+from app.models import User, Memory
 from app.security.dependencies import require_scopes
 from app.security.types import Principal, Scope
+from app.security.access import resolve_access_entities, can_read_access_entity
 
 router = APIRouter(prefix="/api/v1/graph", tags=["graph"])
+
+
+def _get_allowed_memory_ids(principal: Principal, db: Session) -> Optional[List[str]]:
+    """
+    Get list of memory IDs the principal has access to based on access_entity.
+
+    For multi-user routing, this queries memories where access_entity matches
+    the principal's grants. Returns None if no filtering is needed (e.g., legacy
+    single-user mode where user owns all their memories).
+
+    Args:
+        principal: The authenticated principal
+        db: Database session
+
+    Returns:
+        List of memory ID strings, or None if no filtering needed
+    """
+    # Get user's explicit access entities
+    access_entities = resolve_access_entities(principal)
+
+    # Query memories that the principal has access to
+    # For efficiency, we look for memories with access_entity in the user's grants
+    # OR memories without access_entity that belong to the user
+    user = db.query(User).filter(User.user_id == principal.user_id).first()
+    if not user:
+        return []
+
+    allowed_ids = set()
+
+    # Get all memories accessible via access_entity grants
+    memories_with_access = db.query(Memory).filter(
+        Memory.state != 'deleted'
+    ).all()
+
+    for memory in memories_with_access:
+        memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+
+        if memory_access_entity:
+            # Check if principal can access this access_entity
+            if can_read_access_entity(principal, memory_access_entity):
+                allowed_ids.add(str(memory.id))
+        else:
+            # Legacy memory without access_entity - only owner has access
+            if memory.user_id == user.id:
+                allowed_ids.add(str(memory.id))
+
+    return list(allowed_ids) if allowed_ids else None
 
 
 # =============================================================================
@@ -101,9 +149,13 @@ async def aggregate_by_dimension(
             detail=f"Invalid dimension. Must be one of: {', '.join(valid_dimensions)}"
         )
 
+    # Get allowed memory IDs based on access_entity grants
+    allowed_memory_ids = _get_allowed_memory_ids(principal, db)
+
     results = aggregate_memories_in_graph(
         user_id=principal.user_id,
         group_by=dimension,
+        allowed_memory_ids=allowed_memory_ids,
         limit=limit,
     )
 
@@ -129,8 +181,12 @@ async def get_tag_cooccurrence(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Get allowed memory IDs based on access_entity grants
+    allowed_memory_ids = _get_allowed_memory_ids(principal, db)
+
     pairs = tag_cooccurrence_in_graph(
         user_id=principal.user_id,
+        allowed_memory_ids=allowed_memory_ids,
         limit=limit,
         min_count=min_count,
     )
@@ -185,9 +241,13 @@ async def fulltext_search_memories(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Get allowed memory IDs based on access_entity grants
+    allowed_memory_ids = _get_allowed_memory_ids(principal, db)
+
     results = fulltext_search_memories_in_graph(
         search_text=query,
         user_id=principal.user_id,
+        allowed_memory_ids=allowed_memory_ids,
         limit=limit,
     )
 

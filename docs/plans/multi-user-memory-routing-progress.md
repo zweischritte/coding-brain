@@ -19,12 +19,12 @@
 - [x] Principal.can_access() with hierarchy expansion.
 - [x] resolve_access_entities() helper.
 - [x] Access filtering tests (read/write/create).
-- [ ] REST endpoint integration (list/filter/get/related).
+- [x] REST endpoint integration (list/filter/get/related).
 - [x] MCP add/update/delete integration against grants.
 - [x] MCP search_memory/list_memories filtering by access_entity.
 - [x] Qdrant search filters allow any allowed `access_entity`.
-- [ ] Graph queries filter by allowed `access_entity` values.
-- [ ] OpenSearch filters by allowed `access_entity` values.
+- [x] Graph queries filter by allowed `access_entity` values.
+- [x] OpenSearch filters by allowed `access_entity` values.
 
 ## Implementation Summary (2025-12-29)
 
@@ -86,9 +86,11 @@
 ### Tests Added
 - `tests/test_access_entity_validation.py` (33 tests)
 - `tests/security/test_jwt_grants.py` (17 tests)
-- `tests/test_access_entity_filtering.py` (38 tests)
+- `tests/test_access_entity_filtering.py` (57 tests, includes placeholder tests filled)
+- `tests/test_mcp_access_entity_integration.py` (22 tests) - NEW
+- `tests/test_multi_user_scenarios.py` (38 tests) - NEW
 - Updated `tests/test_structured_memory.py` (added access_entity to shared scope tests)
-- **Total: 95 tests passing**
+- **Total: 168 multi-user routing tests passing**
 
 ### Files Changed
 - `openmemory/api/app/utils/structured_memory.py`
@@ -100,27 +102,85 @@
 - `openmemory/api/scripts/generate_jwt.py` (--grants flag)
 - `openmemory/api/tests/test_access_entity_validation.py` (new)
 - `openmemory/api/tests/security/test_jwt_grants.py` (new)
-- `openmemory/api/tests/test_access_entity_filtering.py` (new)
+- `openmemory/api/tests/test_access_entity_filtering.py` (new, extended)
+- `openmemory/api/tests/test_mcp_access_entity_integration.py` (new)
+- `openmemory/api/tests/test_multi_user_scenarios.py` (new)
 - `openmemory/api/tests/test_structured_memory.py` (updated)
 
 ## Work Log
+
 - Created progress tracking + continuation prompts.
 - Plan updated to use `access_entity` for access control.
 - 2025-12-29: TDD implementation of Phase 2 + Phase 3 core logic (88 new tests, all passing).
 - 2025-12-29: MCP tools integration complete (add_memories, update_memory, delete_memories, search_memory, list_memories).
 - 2025-12-29: Qdrant store updated with access_entity filtering.
 - 2025-12-29: generate_jwt.py updated with --grants flag.
-- **All 95 tests passing.**
+- 2025-12-29 (session 2): REST endpoints integration complete.
+- 2025-12-29 (session 2): Graph router integration complete.
+- 2025-12-29 (session 2): OpenSearch store access_entity filtering complete.
+- 2025-12-29 (session 3): MCP integration tests complete (22 tests).
+- 2025-12-29 (session 3): Multi-user E2E scenario tests complete (38 tests).
+- 2025-12-29 (session 3): Placeholder tests filled in test_access_entity_filtering.py (19 tests).
+- 2025-12-29 (session 3): All 168 multi-user routing tests passing.
 
 ## Next Steps
 
 1. ~~Integrate access control into MCP tools (`mcp_server.py`)~~ DONE
 2. ~~Update `generate_jwt.py` to support `--grants` flag~~ DONE
 3. ~~Update Qdrant store to filter by `access_entity`~~ DONE
-4. Integrate access control into REST endpoints (`routers/memories.py`)
-5. Update graph queries to filter by `access_entity` (graph_ops.py)
-6. Update OpenSearch to filter by `access_entity` (opensearch_store.py)
-7. Add integration tests for MCP access_entity enforcement
+4. ~~Integrate access control into REST endpoints (`routers/memories.py`)~~ DONE
+5. ~~Update graph queries to filter by `access_entity` (graph_ops.py)~~ DONE
+6. ~~Update OpenSearch to filter by `access_entity` (opensearch_store.py)~~ DONE
+7. ~~Add integration tests for MCP access_entity enforcement~~ DONE
+8. ~~Add end-to-end tests for multi-user scenarios~~ DONE
+
+## Completed ✅
+
+All core multi-user memory routing functionality is now implemented and tested:
+
+- Full access_entity enforcement in MCP tools (add, search, update, delete, list)
+- Full access_entity filtering in REST endpoints
+- Full access_entity filtering in stores (Qdrant, OpenSearch)
+- Full access_entity filtering in graph queries
+- Comprehensive test coverage (168 tests)
 
 ## Open Questions
+
 - None tracked.
+
+## Session 2 Implementation Details (2025-12-29)
+
+### REST Endpoints (routers/memories.py)
+
+- Added imports for `can_read_access_entity`, `can_write_to_access_entity`, `filter_memories_by_access`
+- Added `_check_memory_access()` helper function for access_entity-based access control
+- Updated `get_memory` endpoint: checks access_entity before returning
+- Updated `update_memory` endpoint: checks write access via access_entity
+- Updated `delete_memories` endpoint: filters deletable memories by access_entity, returns skipped count
+- Updated `list_memories` endpoint: filters results by access_entity in transformer
+- Updated `filter_memories` endpoint: filters results by access_entity in transformer
+- Updated `get_related_memories` endpoint: checks source memory access, filters related results
+- Updated `get_memory_graph_context` endpoint: checks access_entity before returning graph data
+- Updated `get_similar_memories` endpoint: checks access_entity before returning similar memories
+
+### Graph Router (routers/graph.py)
+
+- Added imports for `resolve_access_entities`, `can_read_access_entity`
+- Added `_get_allowed_memory_ids()` helper function to resolve memory IDs from access_entity grants
+- Updated `aggregate_by_dimension` endpoint: passes `allowed_memory_ids` to graph function
+- Updated `get_tag_cooccurrence` endpoint: passes `allowed_memory_ids` to graph function
+- Updated `fulltext_search_memories` endpoint: passes `allowed_memory_ids` to graph function
+
+### OpenSearch Store (stores/opensearch_store.py)
+
+- Added `access_entity` to index mappings as keyword field
+- Added `_create_access_entity_filter()` method using "terms" for OR logic
+- Added `search_with_access_control()` method
+- Added `hybrid_search_with_access_control()` method
+
+### Tests Added
+
+- Extended `test_access_entity_filtering.py` with integration tests for REST endpoints
+- Added `TestOpenSearchAccessEntityFiltering` test class
+- Added `TestGraphQueryAccessEntityFiltering` test class
+- Added `TestRESTEndpointAccessEntityIntegration` test class

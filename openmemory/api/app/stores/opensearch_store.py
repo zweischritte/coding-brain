@@ -133,6 +133,7 @@ class TenantOpenSearchStore:
                             "artifact_ref": {"type": "keyword"},
                             "entity": {"type": "keyword"},
                             "source": {"type": "keyword"},
+                            "access_entity": {"type": "keyword"},  # Multi-user memory routing
                             "embedding": {
                                 "type": "knn_vector",
                                 "dimension": self.config.embedding_dim,
@@ -182,6 +183,37 @@ class TenantOpenSearchStore:
     def _create_org_filter(self) -> Dict[str, Any]:
         """Create a filter clause for org_id."""
         return {"term": {"org_id": self.org_id}}
+
+    def _create_access_entity_filter(
+        self,
+        access_entities: Optional[List[str]] = None,
+        additional_filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Create a filter with org_id + access_entity-based access control.
+
+        Access entities support OR logic: a memory is accessible if its access_entity
+        matches ANY of the provided access_entities.
+
+        Args:
+            access_entities: List of access_entity values the principal can access
+            additional_filters: Optional additional filter conditions
+
+        Returns:
+            List of filter clauses for boolean query
+        """
+        filter_clauses = [self._create_org_filter()]
+
+        # Add access_entity filter using "terms" (OR logic - matches any value in list)
+        if access_entities:
+            filter_clauses.append({"terms": {"access_entity": access_entities}})
+
+        # Add additional filters
+        if additional_filters:
+            for key, value in additional_filters.items():
+                filter_clauses.append({"term": {key: value}})
+
+        return filter_clauses
 
     def index(
         self,
@@ -384,6 +416,119 @@ class TenantOpenSearchStore:
             return result.get("hits", {}).get("hits", [])
         except Exception as e:
             logger.error(f"Hybrid search failed: {e}")
+            return []
+
+    def search_with_access_control(
+        self,
+        query_text: str,
+        access_entities: List[str],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for documents with access_entity-based access control.
+
+        Only returns memories where the access_entity matches one of the provided
+        access_entities (OR logic).
+
+        Args:
+            query_text: The search query
+            access_entities: List of access_entity values the principal can access
+            limit: Maximum number of results
+            filters: Optional additional filters
+
+        Returns:
+            List of matching documents, filtered by access_entity
+        """
+        filter_clauses = self._create_access_entity_filter(access_entities, filters)
+
+        body = {
+            "size": limit,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"match": {"content": query_text}}
+                    ] if query_text else [{"match_all": {}}],
+                    "filter": filter_clauses,
+                }
+            }
+        }
+
+        try:
+            result = self.client.search(index=self.alias_name, body=body)
+            return result.get("hits", {}).get("hits", [])
+        except Exception as e:
+            logger.error(f"Search with access control failed: {e}")
+            return []
+
+    def hybrid_search_with_access_control(
+        self,
+        query_text: str,
+        query_vector: List[float],
+        access_entities: List[str],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid search combining lexical and vector search with access control.
+
+        Only returns memories where the access_entity matches one of the provided
+        access_entities (OR logic).
+
+        Args:
+            query_text: The text query
+            query_vector: The embedding vector
+            access_entities: List of access_entity values the principal can access
+            limit: Maximum number of results
+            filters: Optional additional filters
+
+        Returns:
+            List of matching documents with combined scores, filtered by access_entity
+        """
+        filter_clauses = self._create_access_entity_filter(access_entities, filters)
+
+        # Hybrid query combining lexical and kNN
+        body = {
+            "size": limit,
+            "query": {
+                "bool": {
+                    "should": [
+                        # Lexical component
+                        {
+                            "match": {
+                                "content": {
+                                    "query": query_text,
+                                    "boost": self.config.lexical_weight,
+                                }
+                            }
+                        },
+                        # Vector component (script_score for kNN)
+                        {
+                            "script_score": {
+                                "query": {"match_all": {}},
+                                "script": {
+                                    "source": "knn_score",
+                                    "lang": "knn",
+                                    "params": {
+                                        "field": "embedding",
+                                        "query_value": query_vector,
+                                        "space_type": self.config.similarity,
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "filter": filter_clauses,
+                    "minimum_should_match": 1,
+                }
+            }
+        }
+
+        try:
+            result = self.client.search(index=self.alias_name, body=body)
+            return result.get("hits", {}).get("hits", [])
+        except Exception as e:
+            logger.error(f"Hybrid search with access control failed: {e}")
             return []
 
     def count(self, filters: Optional[Dict[str, Any]] = None) -> int:

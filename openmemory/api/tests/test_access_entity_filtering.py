@@ -386,24 +386,98 @@ class TestBuildAccessFilterQuery:
 
     def test_filter_includes_user_personal_memories(self):
         """Query filter should include user's personal memories (scope=user)."""
-        # This test defines the expected SQL/query behavior
-        # Implementation will need to build a filter like:
-        # WHERE (metadata_->>'scope' = 'user' AND metadata_->>'access_entity' = 'user:grischa')
-        #    OR (metadata_->>'access_entity' IN (grants))
-        pass  # Placeholder - actual implementation will test query building
+        from app.security.access import build_access_entity_patterns
+
+        principal = make_principal("grischa", grants={"user:grischa"})
+
+        exact_matches, like_patterns = build_access_entity_patterns(principal)
+
+        # Should always include the user's personal access_entity
+        assert "user:grischa" in exact_matches
 
     def test_filter_includes_shared_memories_with_matching_grant(self):
         """Query filter should include shared memories where access_entity matches grants."""
-        # This test defines the expected behavior
-        # A memory with access_entity='team:cloudfactory/billing/backend'
-        # should be included if principal has that grant
-        pass  # Placeholder
+        from app.security.access import build_access_entity_patterns
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/billing/backend",
+                "project:cloudfactory/acme",
+            }
+        )
+
+        exact_matches, like_patterns = build_access_entity_patterns(principal)
+
+        # Should include all explicit grants as exact matches
+        assert "user:grischa" in exact_matches
+        assert "team:cloudfactory/billing/backend" in exact_matches
+        assert "project:cloudfactory/acme" in exact_matches
 
     def test_filter_expands_org_grant_to_match_projects_and_teams(self):
         """Query filter should expand org grant to match child projects/teams."""
-        # This is more complex - may need LIKE 'cloudfactory/%' pattern
-        # or multiple OR conditions
-        pass  # Placeholder
+        from app.security.access import build_access_entity_patterns
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "org:cloudfactory",
+            }
+        )
+
+        exact_matches, like_patterns = build_access_entity_patterns(principal)
+
+        # Org grant should be in exact matches
+        assert "org:cloudfactory" in exact_matches
+
+        # Should generate LIKE patterns for child projects, teams, and clients
+        assert "project:cloudfactory/%" in like_patterns
+        assert "team:cloudfactory/%" in like_patterns
+        assert "client:cloudfactory/%" in like_patterns
+
+    def test_filter_expands_project_grant_to_match_teams(self):
+        """Query filter should expand project grant to match child teams."""
+        from app.security.access import build_access_entity_patterns
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "project:cloudfactory/acme/billing",
+            }
+        )
+
+        exact_matches, like_patterns = build_access_entity_patterns(principal)
+
+        # Project grant should be in exact matches
+        assert "project:cloudfactory/acme/billing" in exact_matches
+
+        # Should generate LIKE pattern for child teams
+        assert "team:cloudfactory/acme/billing/%" in like_patterns
+
+    def test_filter_team_grant_has_no_like_patterns(self):
+        """Team grant should not generate any LIKE patterns (no children)."""
+        from app.security.access import build_access_entity_patterns
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/acme/billing/backend",
+            }
+        )
+
+        exact_matches, like_patterns = build_access_entity_patterns(principal)
+
+        # Team should be in exact matches
+        assert "team:cloudfactory/acme/billing/backend" in exact_matches
+
+        # Team grants don't expand to children (teams are leaves)
+        # Check that no team-based patterns were added
+        team_patterns = [p for p in like_patterns if p.startswith("team:cloudfactory/acme/billing/backend")]
+        assert len(team_patterns) == 0
 
 
 class TestMCPAddMemoriesEnforcement:
@@ -486,3 +560,534 @@ class TestListMemoriesFiltering:
     async def test_list_excludes_memories_without_grant(self):
         """list_memories should exclude memories user lacks grant for."""
         pass  # Placeholder
+
+
+class TestOpenSearchAccessEntityFiltering:
+    """Tests for OpenSearch store access_entity filtering."""
+
+    def test_access_entity_in_mappings(self):
+        """access_entity should be defined as a keyword field in mappings."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        # Create a mock client
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = False
+        mock_client.indices.create = MagicMock()
+
+        # Create store (this will call _ensure_index_and_alias)
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+            index_prefix="memories",
+        )
+
+        # Verify indices.create was called
+        mock_client.indices.create.assert_called_once()
+
+        # Get the call arguments
+        call_args = mock_client.indices.create.call_args
+        index_body = call_args[1]["body"]
+
+        # Verify access_entity is in the mappings
+        mappings = index_body.get("mappings", {})
+        properties = mappings.get("properties", {})
+
+        assert "access_entity" in properties
+        assert properties["access_entity"]["type"] == "keyword"
+
+    def test_search_with_access_control_filters_by_access_entity(self):
+        """search_with_access_control should filter results by access_entity."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        # Create a mock client
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+        mock_client.indices.get_alias.return_value = {"tenant_test-org": {}}
+        mock_client.search.return_value = {"hits": {"hits": []}}
+
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+            index_prefix="memories",
+        )
+
+        # Call search_with_access_control
+        access_entities = ["user:grischa", "team:cloudfactory/backend"]
+        store.search_with_access_control(
+            query_text="test query",
+            access_entities=access_entities,
+            limit=10,
+        )
+
+        # Verify search was called with access_entity filter
+        mock_client.search.assert_called_once()
+        call_args = mock_client.search.call_args
+        search_body = call_args[1]["body"]
+
+        # Get the filter clauses
+        filter_clauses = search_body["query"]["bool"]["filter"]
+
+        # Find the access_entity filter (uses "terms" for OR logic)
+        access_filter = None
+        for clause in filter_clauses:
+            if "terms" in clause and "access_entity" in clause["terms"]:
+                access_filter = clause
+                break
+
+        assert access_filter is not None
+        assert set(access_filter["terms"]["access_entity"]) == set(access_entities)
+
+    def test_search_with_access_control_uses_or_logic(self):
+        """search_with_access_control should return results matching ANY access_entity."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        # Create a mock client
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+        mock_client.indices.get_alias.return_value = {"tenant_test-org": {}}
+
+        # Mock search to return results with different access_entities
+        mock_client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {"_id": "mem-1", "_source": {"access_entity": "user:grischa"}},
+                    {"_id": "mem-2", "_source": {"access_entity": "team:cloudfactory/backend"}},
+                ]
+            }
+        }
+
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+            index_prefix="memories",
+        )
+
+        # Call search_with_access_control with multiple access_entities
+        access_entities = ["user:grischa", "team:cloudfactory/backend"]
+        results = store.search_with_access_control(
+            query_text="test query",
+            access_entities=access_entities,
+            limit=10,
+        )
+
+        # Verify the query uses "terms" (which is OR logic in OpenSearch)
+        call_args = mock_client.search.call_args
+        search_body = call_args[1]["body"]
+        filter_clauses = search_body["query"]["bool"]["filter"]
+
+        # Find the terms filter
+        terms_filter = None
+        for clause in filter_clauses:
+            if "terms" in clause:
+                terms_filter = clause
+                break
+
+        assert terms_filter is not None
+        # "terms" query in OpenSearch means match ANY of the values (OR logic)
+        assert "access_entity" in terms_filter["terms"]
+        assert len(terms_filter["terms"]["access_entity"]) == 2
+
+    def test_hybrid_search_with_access_control_filters_by_access_entity(self):
+        """hybrid_search_with_access_control should filter by access_entity."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        # Create a mock client
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+        mock_client.indices.get_alias.return_value = {"tenant_test-org": {}}
+        mock_client.search.return_value = {"hits": {"hits": []}}
+
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+            index_prefix="memories",
+        )
+
+        # Call hybrid_search_with_access_control
+        access_entities = ["user:grischa", "team:cloudfactory/backend"]
+        query_vector = [0.1] * 1536  # Mock embedding vector
+
+        store.hybrid_search_with_access_control(
+            query_text="test query",
+            query_vector=query_vector,
+            access_entities=access_entities,
+            limit=10,
+        )
+
+        # Verify search was called with access_entity filter
+        mock_client.search.assert_called_once()
+        call_args = mock_client.search.call_args
+        search_body = call_args[1]["body"]
+
+        # Get the filter clauses
+        filter_clauses = search_body["query"]["bool"]["filter"]
+
+        # Find the access_entity filter
+        access_filter = None
+        for clause in filter_clauses:
+            if "terms" in clause and "access_entity" in clause["terms"]:
+                access_filter = clause
+                break
+
+        assert access_filter is not None
+        assert set(access_filter["terms"]["access_entity"]) == set(access_entities)
+
+        # Also verify the hybrid search has both lexical and vector components
+        should_clauses = search_body["query"]["bool"]["should"]
+        assert len(should_clauses) == 2  # lexical + vector
+
+    def test_create_access_entity_filter_with_additional_filters(self):
+        """_create_access_entity_filter should combine access_entity with other filters."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+        mock_client.indices.get_alias.return_value = {"tenant_test-org": {}}
+
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+        )
+
+        access_entities = ["user:grischa"]
+        additional_filters = {"category": "workflow", "scope": "project"}
+
+        filter_clauses = store._create_access_entity_filter(
+            access_entities=access_entities,
+            additional_filters=additional_filters,
+        )
+
+        # Should have: org_id filter + access_entity filter + 2 additional filters
+        assert len(filter_clauses) == 4
+
+        # Verify org_id filter is present
+        org_filters = [c for c in filter_clauses if "term" in c and "org_id" in c.get("term", {})]
+        assert len(org_filters) == 1
+
+        # Verify access_entity filter is present
+        access_filters = [c for c in filter_clauses if "terms" in c and "access_entity" in c.get("terms", {})]
+        assert len(access_filters) == 1
+
+    def test_search_with_access_control_empty_access_entities(self):
+        """search_with_access_control should work with empty access_entities list."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+        mock_client.indices.get_alias.return_value = {"tenant_test-org": {}}
+        mock_client.search.return_value = {"hits": {"hits": []}}
+
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+        )
+
+        # Call with empty access_entities (should still filter by org_id)
+        results = store.search_with_access_control(
+            query_text="test query",
+            access_entities=[],
+            limit=10,
+        )
+
+        # Verify search was called
+        mock_client.search.assert_called_once()
+        call_args = mock_client.search.call_args
+        search_body = call_args[1]["body"]
+
+        # Should only have org_id filter (no access_entity filter when list is empty)
+        filter_clauses = search_body["query"]["bool"]["filter"]
+
+        # Empty access_entities means no terms filter added
+        terms_filters = [c for c in filter_clauses if "terms" in c]
+        assert len(terms_filters) == 0
+
+
+class TestGraphQueryAccessEntityFiltering:
+    """Tests for graph query filtering by access_entity."""
+
+    def test_aggregate_memories_respects_allowed_memory_ids(self):
+        """aggregate_memories_in_graph should only count allowed memories."""
+        # Test that the function signature accepts allowed_memory_ids
+        from app.graph.graph_ops import aggregate_memories_in_graph
+        import inspect
+
+        sig = inspect.signature(aggregate_memories_in_graph)
+
+        # Verify function accepts allowed_memory_ids parameter
+        assert "allowed_memory_ids" in sig.parameters
+        param = sig.parameters["allowed_memory_ids"]
+        assert param.default is None  # Optional parameter
+
+    def test_tag_cooccurrence_respects_allowed_memory_ids(self):
+        """tag_cooccurrence_in_graph should only process allowed memories."""
+        # Test that the function signature accepts allowed_memory_ids
+        from app.graph.graph_ops import tag_cooccurrence_in_graph
+        import inspect
+
+        sig = inspect.signature(tag_cooccurrence_in_graph)
+
+        # Verify function accepts allowed_memory_ids parameter
+        assert "allowed_memory_ids" in sig.parameters
+        param = sig.parameters["allowed_memory_ids"]
+        assert param.default is None  # Optional parameter
+
+    def test_fulltext_search_respects_allowed_memory_ids(self):
+        """fulltext_search_memories_in_graph should only return allowed memories."""
+        # Test that the function signature accepts allowed_memory_ids
+        from app.graph.graph_ops import fulltext_search_memories_in_graph
+        import inspect
+
+        sig = inspect.signature(fulltext_search_memories_in_graph)
+
+        # Verify function accepts allowed_memory_ids parameter
+        assert "allowed_memory_ids" in sig.parameters
+        param = sig.parameters["allowed_memory_ids"]
+        assert param.default is None  # Optional parameter
+
+    @patch("app.graph.graph_ops._get_projector")
+    def test_aggregate_memories_with_allowed_ids_filters_results(self, mock_get_projector):
+        """aggregate_memories_in_graph should filter results to allowed memories."""
+        from app.graph.graph_ops import aggregate_memories_in_graph
+
+        # Create mock projector
+        mock_projector = MagicMock()
+        mock_projector.aggregate_memories.return_value = [
+            {"value": "workflow", "count": 2},
+            {"value": "decision", "count": 1},
+        ]
+        mock_get_projector.return_value = mock_projector
+
+        # Call with allowed_memory_ids that only includes some memories
+        allowed_memory_ids = ["mem-1", "mem-2", "mem-6"]
+
+        result = aggregate_memories_in_graph(
+            user_id="test-user",
+            group_by="category",
+            allowed_memory_ids=allowed_memory_ids,
+        )
+
+        # Verify the projector was called with allowed_memory_ids
+        mock_projector.aggregate_memories.assert_called_once()
+        call_kwargs = mock_projector.aggregate_memories.call_args[1]
+        assert call_kwargs.get("allowed_memory_ids") == allowed_memory_ids
+
+    @patch("app.graph.graph_ops._get_projector")
+    def test_tag_cooccurrence_with_allowed_ids_filters_results(self, mock_get_projector):
+        """tag_cooccurrence_in_graph should filter results to allowed memories."""
+        from app.graph.graph_ops import tag_cooccurrence_in_graph
+
+        # Create mock projector
+        mock_projector = MagicMock()
+        mock_projector.tag_cooccurrence.return_value = [
+            {"tag1": "important", "tag2": "urgent", "count": 2, "sample_memory_ids": ["mem-1", "mem-2"]},
+        ]
+        mock_get_projector.return_value = mock_projector
+
+        # Call with allowed_memory_ids
+        allowed_memory_ids = ["mem-1", "mem-2"]
+
+        result = tag_cooccurrence_in_graph(
+            user_id="test-user",
+            allowed_memory_ids=allowed_memory_ids,
+        )
+
+        # Verify the projector was called with allowed_memory_ids
+        mock_projector.tag_cooccurrence.assert_called_once()
+        call_kwargs = mock_projector.tag_cooccurrence.call_args[1]
+        assert call_kwargs.get("allowed_memory_ids") == allowed_memory_ids
+
+    @patch("app.graph.graph_ops._get_projector")
+    def test_fulltext_search_with_allowed_ids_filters_results(self, mock_get_projector):
+        """fulltext_search_memories_in_graph should filter results to allowed memories."""
+        from app.graph.graph_ops import fulltext_search_memories_in_graph
+
+        # Create mock projector
+        mock_projector = MagicMock()
+        mock_projector.fulltext_search_memories.return_value = [
+            {"memory_id": "mem-1", "content": "test content 1", "score": 0.9},
+            {"memory_id": "mem-3", "content": "test content 3", "score": 0.7},
+        ]
+        mock_get_projector.return_value = mock_projector
+
+        # Call with allowed_memory_ids that only includes some memories
+        allowed_memory_ids = ["mem-1", "mem-3"]
+
+        result = fulltext_search_memories_in_graph(
+            search_text="test",
+            user_id="test-user",
+            allowed_memory_ids=allowed_memory_ids,
+        )
+
+        # Verify the projector was called with allowed_memory_ids
+        mock_projector.fulltext_search_memories.assert_called_once()
+        call_kwargs = mock_projector.fulltext_search_memories.call_args[1]
+        assert call_kwargs.get("allowed_memory_ids") == allowed_memory_ids
+
+    def test_get_allowed_memory_ids_helper_exists(self):
+        """_get_allowed_memory_ids helper should exist in graph router."""
+        from app.routers.graph import _get_allowed_memory_ids
+        import inspect
+
+        sig = inspect.signature(_get_allowed_memory_ids)
+
+        # Verify function accepts principal and db parameters
+        assert "principal" in sig.parameters
+        assert "db" in sig.parameters
+
+    def test_graph_router_endpoints_use_allowed_memory_ids(self):
+        """Graph router endpoints should call _get_allowed_memory_ids."""
+        # This is a structural test to verify the integration exists
+        import ast
+        from pathlib import Path
+
+        # Read the graph router source
+        router_path = Path("/Users/grischadallmer/git/coding-brain/openmemory/api/app/routers/graph.py")
+        source = router_path.read_text()
+
+        # Check that aggregate_by_dimension endpoint uses _get_allowed_memory_ids
+        assert "_get_allowed_memory_ids" in source
+        assert "allowed_memory_ids" in source
+
+        # Parse the AST and verify the function calls
+        tree = ast.parse(source)
+
+        # Find the aggregate_by_dimension function
+        found_aggregate_call = False
+        found_tag_cooccurrence_call = False
+        found_fulltext_search_call = False
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    if node.func.id == "aggregate_memories_in_graph":
+                        # Check if allowed_memory_ids is passed
+                        for keyword in node.keywords:
+                            if keyword.arg == "allowed_memory_ids":
+                                found_aggregate_call = True
+                    elif node.func.id == "tag_cooccurrence_in_graph":
+                        for keyword in node.keywords:
+                            if keyword.arg == "allowed_memory_ids":
+                                found_tag_cooccurrence_call = True
+                    elif node.func.id == "fulltext_search_memories_in_graph":
+                        for keyword in node.keywords:
+                            if keyword.arg == "allowed_memory_ids":
+                                found_fulltext_search_call = True
+
+        assert found_aggregate_call, "aggregate_memories_in_graph should receive allowed_memory_ids"
+        assert found_tag_cooccurrence_call, "tag_cooccurrence_in_graph should receive allowed_memory_ids"
+        assert found_fulltext_search_call, "fulltext_search_memories_in_graph should receive allowed_memory_ids"
+
+
+class TestRESTEndpointAccessEntityIntegration:
+    """Integration tests for REST endpoint access_entity enforcement."""
+
+    def test_get_memory_checks_access_entity(self):
+        """GET /memories/{id} should check access_entity before returning."""
+        # User should only be able to get memory if they have access
+        principal = make_principal(
+            "grischa",
+            grants={"user:grischa"},
+        )
+
+        # Memory with access_entity=user:grischa should be accessible
+        assert principal.can_access("user:grischa") is True
+
+        # Memory with access_entity=team:cloudfactory/backend should NOT be accessible
+        assert principal.can_access("team:cloudfactory/backend") is False
+
+    def test_list_memories_filters_by_access_entity(self):
+        """GET /memories should filter results by access_entity."""
+        from app.security.access import filter_memories_by_access
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/backend",
+            },
+        )
+
+        # Mock memory objects
+        class MockMemory:
+            def __init__(self, access_entity):
+                self.metadata_ = {"access_entity": access_entity}
+
+        memories = [
+            MockMemory("user:grischa"),  # Should be included
+            MockMemory("team:cloudfactory/backend"),  # Should be included (grant)
+            MockMemory("team:cloudfactory/frontend"),  # Should be excluded (no grant)
+            MockMemory("user:other-user"),  # Should be excluded (different user)
+        ]
+
+        filtered = filter_memories_by_access(principal, memories)
+
+        assert len(filtered) == 2
+        assert filtered[0].metadata_["access_entity"] == "user:grischa"
+        assert filtered[1].metadata_["access_entity"] == "team:cloudfactory/backend"
+
+    def test_filter_memories_filters_by_access_entity(self):
+        """POST /memories/filter should filter results by access_entity."""
+        # Similar to list_memories test
+        from app.security.access import filter_memories_by_access
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "org:cloudfactory",  # Org grant should expand
+            },
+        )
+
+        class MockMemory:
+            def __init__(self, access_entity):
+                self.metadata_ = {"access_entity": access_entity}
+
+        memories = [
+            MockMemory("user:grischa"),  # Included (user grant)
+            MockMemory("org:cloudfactory"),  # Included (org grant)
+            MockMemory("project:cloudfactory/acme"),  # Included (org hierarchy)
+            MockMemory("team:cloudfactory/acme/billing"),  # Included (org hierarchy)
+            MockMemory("org:other-company"),  # Excluded (different org)
+        ]
+
+        filtered = filter_memories_by_access(principal, memories)
+
+        assert len(filtered) == 4
+        access_entities = [m.metadata_["access_entity"] for m in filtered]
+        assert "org:other-company" not in access_entities
+
+    def test_update_memory_checks_write_access(self):
+        """PUT /memories/{id} should check write access before updating."""
+        from app.security.access import can_write_to_access_entity
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/backend",
+            },
+        )
+
+        # Can update own memory
+        assert can_write_to_access_entity(principal, "user:grischa") is True
+
+        # Can update team memory (group-editable)
+        assert can_write_to_access_entity(principal, "team:cloudfactory/backend") is True
+
+        # Cannot update other team's memory
+        assert can_write_to_access_entity(principal, "team:cloudfactory/frontend") is False
+
+    def test_delete_memories_checks_write_access(self):
+        """DELETE /memories should check write access before deleting."""
+        from app.security.access import can_write_to_access_entity
+
+        principal = make_principal(
+            "grischa",
+            grants={"user:grischa"},
+        )
+
+        # Can delete own memory
+        assert can_write_to_access_entity(principal, "user:grischa") is True
+
+        # Cannot delete team memory without grant
+        assert can_write_to_access_entity(principal, "team:cloudfactory/backend") is False

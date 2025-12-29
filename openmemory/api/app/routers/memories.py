@@ -18,6 +18,11 @@ from app.models import (
 from app.schemas import MemoryResponse
 from app.security.dependencies import get_current_principal, require_scopes
 from app.security.types import Principal, Scope
+from app.security.access import (
+    can_read_access_entity,
+    can_write_to_access_entity,
+    filter_memories_by_access,
+)
 from app.utils.structured_memory import (
     StructuredMemoryError,
     apply_metadata_updates,
@@ -107,6 +112,32 @@ def get_accessible_memory_ids(db: Session, app_id: UUID) -> Set[UUID]:
     return allowed_memory_ids
 
 
+def _check_memory_access(principal: Principal, memory: Memory) -> bool:
+    """
+    Check if principal has access to a memory based on access_entity.
+
+    Args:
+        principal: The authenticated principal
+        memory: The memory to check access for
+
+    Returns:
+        True if principal can access the memory
+    """
+    # Check access_entity-based access control
+    memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+    if memory_access_entity:
+        return can_read_access_entity(principal, memory_access_entity)
+    else:
+        # Legacy memory without access_entity - only owner can access
+        # We need to compare the string user_id from principal with the memory owner
+        # This requires looking up the User to get their user_id field
+        # Since we don't have the db context here, we use a workaround
+        # by checking if the memory.user has user_id matching principal.user_id
+        if memory.user and memory.user.user_id == principal.user_id:
+            return True
+        return False
+
+
 # List all memories with filtering
 @router.get("/", response_model=Page[MemoryResponse])
 async def list_memories(
@@ -165,13 +196,14 @@ async def list_memories(
         if sort_field:
             query = query.order_by(sort_field.desc()) if sort_direction == "desc" else query.order_by(sort_field.asc())
 
-    # Add eager loading for app and categories without join duplication
+    # Add eager loading for app, categories, and user (for access control check)
     query = query.options(
         selectinload(Memory.app),
-        selectinload(Memory.categories)
+        selectinload(Memory.categories),
+        selectinload(Memory.user)
     )
 
-    # Get paginated results with transformer
+    # Get paginated results with transformer that includes access_entity filtering
     return sqlalchemy_paginate(
         query,
         params,
@@ -187,7 +219,7 @@ async def list_memories(
                 metadata_=memory.metadata_
             )
             for memory in items
-            if check_memory_access_permissions(db, memory, app_id)
+            if check_memory_access_permissions(db, memory, app_id) and _check_memory_access(principal, memory)
         ]
     )
 
@@ -352,10 +384,21 @@ async def get_memory(
     db: Session = Depends(get_db)
 ):
     memory = get_memory_or_404(db, memory_id)
-    # Verify user owns this memory
+    # Verify user owns this memory or has access via access_entity
     user = db.query(User).filter(User.user_id == principal.user_id).first()
-    if not user or memory.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Memory not found")
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Check access_entity-based access control
+    memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+    if memory_access_entity:
+        # Multi-user routing: check if principal has access to the access_entity
+        if not can_read_access_entity(principal, memory_access_entity):
+            raise HTTPException(status_code=404, detail="Memory not found")
+    else:
+        # Legacy behavior: only owner can access
+        if memory.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     # Extract structured metadata for frontend
     metadata = {}
@@ -418,15 +461,43 @@ async def delete_memories(
         )
 
     # Delete from vector store then mark as deleted in database
+    deleted_count = 0
+    skipped_count = 0
+
     for memory_id in request.memory_ids:
+        # Get memory and check access
+        memory = db.query(Memory).filter(Memory.id == memory_id).first()
+        if not memory:
+            skipped_count += 1
+            continue
+
+        # Check access_entity-based write access control
+        memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+        if memory_access_entity:
+            # Multi-user routing: check if principal has write access to the access_entity
+            if not can_write_to_access_entity(principal, memory_access_entity):
+                logging.warning(f"User {principal.user_id} lacks permission to delete memory {memory_id}")
+                skipped_count += 1
+                continue
+        else:
+            # Legacy behavior: only owner can delete
+            if memory.user_id != user.id:
+                skipped_count += 1
+                continue
+
         try:
             memory_client.delete(str(memory_id))
         except Exception as delete_error:
             logging.warning(f"Failed to delete memory {memory_id} from vector store: {delete_error}")
 
         update_memory_state(db, memory_id, MemoryState.deleted, user.id)
+        deleted_count += 1
 
-    return {"message": f"Successfully deleted {len(request.memory_ids)} memories"}
+    return {
+        "message": f"Successfully deleted {deleted_count} memories",
+        "deleted": deleted_count,
+        "skipped": skipped_count,
+    }
 
 
 # Archive memories
@@ -587,9 +658,17 @@ async def update_memory(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     memory = get_memory_or_404(db, memory_id)
-    # Verify user owns this memory
-    if memory.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Memory not found")
+
+    # Check access_entity-based write access control
+    memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+    if memory_access_entity:
+        # Multi-user routing: check if principal has write access to the access_entity
+        if not can_write_to_access_entity(principal, memory_access_entity):
+            raise HTTPException(status_code=403, detail="Insufficient permissions to update this memory")
+    else:
+        # Legacy behavior: only owner can update
+        if memory.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     sync_warnings: List[str] = []
     content_updated = request.memory_content is not None
@@ -870,13 +949,14 @@ async def filter_memories(
         # Default sorting
         query = query.order_by(Memory.created_at.desc())
 
-    # Add eager loading for app and categories without join duplication
+    # Add eager loading for app, categories, and user (for access control check)
     query = query.options(
         selectinload(Memory.app),
-        selectinload(Memory.categories)
+        selectinload(Memory.categories),
+        selectinload(Memory.user)
     )
 
-    # Use fastapi-pagination's paginate function
+    # Use fastapi-pagination's paginate function with access_entity filtering
     return sqlalchemy_paginate(
         query,
         Params(page=request.page, size=request.size),
@@ -892,6 +972,7 @@ async def filter_memories(
                 metadata_=memory.metadata_
             )
             for memory in items
+            if _check_memory_access(principal, memory)
         ]
     )
 
@@ -910,10 +991,17 @@ async def get_related_memories(
 
     # Get the source memory
     memory = get_memory_or_404(db, memory_id)
-    # Verify ownership
-    if memory.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Memory not found")
-    
+
+    # Check access_entity-based access control for source memory
+    memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+    if memory_access_entity:
+        if not can_read_access_entity(principal, memory_access_entity):
+            raise HTTPException(status_code=404, detail="Memory not found")
+    else:
+        # Legacy behavior: only owner can access
+        if memory.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Memory not found")
+
     # Extract category IDs from the source memory
     category_ids = [category.id for category in memory.categories]
     
@@ -929,15 +1017,16 @@ async def get_related_memories(
         Category.id.in_(category_ids)
     ).options(
         joinedload(Memory.categories),
-        joinedload(Memory.app)
+        joinedload(Memory.app),
+        joinedload(Memory.user)  # For access control check
     ).order_by(
         func.count(Category.id).desc(),
         Memory.created_at.desc()
     ).group_by(Memory.id)
-    
+
     # ⚡ Force page size to be 5
     params = Params(page=params.page, size=5)
-    
+
     return sqlalchemy_paginate(
         query,
         params,
@@ -953,6 +1042,7 @@ async def get_related_memories(
                 metadata_=memory.metadata_
             )
             for memory in items
+            if _check_memory_access(principal, memory)
         ]
     )
 
@@ -973,18 +1063,24 @@ async def get_memory_graph_context(
         get_memory_subgraph_from_graph,
     )
 
-    # Verify memory exists and belongs to user
+    # Verify memory exists and user has access
     user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    memory = db.query(Memory).filter(
-        Memory.id == memory_id,
-        Memory.user_id == user.id
-    ).first()
-
+    memory = db.query(Memory).filter(Memory.id == memory_id).first()
     if not memory:
         raise HTTPException(status_code=404, detail="Memory not found")
+
+    # Check access_entity-based access control
+    memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+    if memory_access_entity:
+        if not can_read_access_entity(principal, memory_access_entity):
+            raise HTTPException(status_code=404, detail="Memory not found")
+    else:
+        # Legacy behavior: only owner can access
+        if memory.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     # Get similar memories via OM_SIMILAR edges
     similar = get_similar_memories_from_graph(
@@ -1024,13 +1120,19 @@ async def get_similar_memories(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    memory = db.query(Memory).filter(
-        Memory.id == memory_id,
-        Memory.user_id == user.id
-    ).first()
-
+    memory = db.query(Memory).filter(Memory.id == memory_id).first()
     if not memory:
         raise HTTPException(status_code=404, detail="Memory not found")
+
+    # Check access_entity-based access control
+    memory_access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+    if memory_access_entity:
+        if not can_read_access_entity(principal, memory_access_entity):
+            raise HTTPException(status_code=404, detail="Memory not found")
+    else:
+        # Legacy behavior: only owner can access
+        if memory.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     similar = get_similar_memories_from_graph(
         memory_id=str(memory_id),
