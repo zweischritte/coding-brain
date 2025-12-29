@@ -212,7 +212,13 @@ class SearchCodeHybridTool:
         embedding: list[float] = []
         if cfg.embed_query and self.embedding_service:
             try:
-                embedding = self.embedding_service.embed(input_data.query)
+                result = self.embedding_service.embed(input_data.query)
+                if isinstance(result, list):
+                    embedding = result
+                elif hasattr(result, "embedding"):
+                    embedding = list(result.embedding)
+                else:
+                    embedding = list(result)
             except Exception as e:
                 logger.warning(f"Embedding failed, falling back to lexical: {e}")
                 # Fall back to lexical-only

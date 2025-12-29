@@ -734,6 +734,7 @@ class BootstrapManager:
         config: Optional[BootstrapConfig] = None,
         state_store: Optional[BootstrapStateStore] = None,
         scorer: Optional[FilePriorityScorer] = None,
+        indexer: Optional[Any] = None,
     ):
         self.root_path = root_path
         self.config = config or BootstrapConfig()
@@ -743,6 +744,7 @@ class BootstrapManager:
             warm_threshold=self.config.warm_threshold,
             recency_days=self.config.recency_days,
         )
+        self.indexer = indexer
 
         # Load existing state or create new
         self._state: Optional[BootstrapState] = None
@@ -903,6 +905,10 @@ class BootstrapManager:
         This is a placeholder for actual indexing logic.
         Override or extend for real implementation.
         """
+        if self.indexer is not None:
+            self.indexer.index_file(path)
+            return
+
         # Read file to verify it's accessible
         _ = path.read_bytes()
 

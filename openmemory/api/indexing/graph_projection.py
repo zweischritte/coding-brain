@@ -190,6 +190,7 @@ class FileNodeBuilder:
         self._language: Optional[Language] = None
         self._size: Optional[int] = None
         self._content_hash: Optional[str] = None
+        self._repo_id: Optional[str] = None
 
     def path(self, path: Path) -> "FileNodeBuilder":
         """Set file path."""
@@ -211,6 +212,11 @@ class FileNodeBuilder:
         self._content_hash = hash_value
         return self
 
+    def repo_id(self, repo_id: str) -> "FileNodeBuilder":
+        """Set repository ID."""
+        self._repo_id = repo_id
+        return self
+
     def build(self) -> CodeNode:
         """Build the file node."""
         if self._path is None:
@@ -230,6 +236,9 @@ class FileNodeBuilder:
         if self._content_hash:
             properties["content_hash"] = self._content_hash
 
+        if self._repo_id:
+            properties["repo_id"] = self._repo_id
+
         return CodeNode(
             node_type=CodeNodeType.FILE,
             id=str(self._path),
@@ -244,6 +253,7 @@ class SymbolNodeBuilder:
         self._symbol: Optional[Symbol] = None
         self._scip_id: Optional[SCIPSymbolID] = None
         self._file_path: Optional[Path] = None
+        self._repo_id: Optional[str] = None
 
     def from_symbol(self, symbol: Symbol) -> "SymbolNodeBuilder":
         """Initialize from parsed symbol."""
@@ -258,6 +268,11 @@ class SymbolNodeBuilder:
     def file_path(self, path: Path) -> "SymbolNodeBuilder":
         """Set source file path."""
         self._file_path = path
+        return self
+
+    def repo_id(self, repo_id: str) -> "SymbolNodeBuilder":
+        """Set repository ID."""
+        self._repo_id = repo_id
         return self
 
     def build(self) -> CodeNode:
@@ -285,6 +300,9 @@ class SymbolNodeBuilder:
 
         if self._file_path:
             properties["file_path"] = str(self._file_path)
+
+        if self._repo_id:
+            properties["repo_id"] = self._repo_id
 
         return CodeNode(
             node_type=CodeNodeType.SYMBOL,
@@ -749,6 +767,7 @@ class GraphProjection:
         language: Language,
         size: Optional[int] = None,
         content_hash: Optional[str] = None,
+        repo_id: Optional[str] = None,
     ) -> CodeNode:
         """Create a CODE_FILE node."""
         builder = FileNodeBuilder().path(path).language(language)
@@ -757,6 +776,8 @@ class GraphProjection:
             builder.size(size)
         if content_hash:
             builder.content_hash(content_hash)
+        if repo_id:
+            builder.repo_id(repo_id)
 
         node = builder.build()
         self.driver.add_node(node)
@@ -767,15 +788,19 @@ class GraphProjection:
         symbol: Symbol,
         scip_id: SCIPSymbolID,
         file_path: Path,
+        repo_id: Optional[str] = None,
     ) -> CodeNode:
         """Create a CODE_SYMBOL node."""
-        node = (
+        builder = (
             SymbolNodeBuilder()
             .from_symbol(symbol)
             .scip_id(scip_id)
             .file_path(file_path)
-            .build()
         )
+        if repo_id:
+            builder.repo_id(repo_id)
+
+        node = builder.build()
         self.driver.add_node(node)
         return node
 

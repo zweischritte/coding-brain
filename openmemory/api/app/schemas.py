@@ -319,6 +319,17 @@ class PRAnalysisRequest(BaseModel):
     head_branch: Optional[str] = None
 
 
+class CodeIndexRequest(BaseModel):
+    """Request body for code indexing endpoint."""
+
+    repo_id: str
+    root_path: str
+    index_name: Optional[str] = "code"
+    reset: bool = False
+    max_files: Optional[int] = None
+    include_api_boundaries: bool = True
+
+
 class PRRisk(BaseModel):
     """A risk identified in a PR."""
 
@@ -336,4 +347,17 @@ class PRAnalysisResponse(BaseModel):
     risks: List[PRRisk] = Field(default_factory=list)
     suggested_reviewers: List[str] = Field(default_factory=list)
     complexity_score: float = 0.0
+    meta: CodeResponseMeta
+
+
+class CodeIndexResponse(BaseModel):
+    """Response body for code indexing endpoint."""
+
+    repo_id: str
+    files_indexed: int
+    files_failed: int
+    symbols_indexed: int
+    documents_indexed: int
+    call_edges_indexed: int
+    duration_ms: float
     meta: CodeResponseMeta

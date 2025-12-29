@@ -30,10 +30,10 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - Graph traversal helpers for related memories and entity networks
 
 ### Code Intelligence Modules
-- Tree-sitter + SCIP indexing pipeline and CODE_* graph projection to Neo4j
-- Tri-hybrid retrieval (lexical + vector + graph) and optional reranker
-- Libraries for explain-code, call-graph, impact analysis, ADR automation, test generation, PR analysis
-  (present in codebase, not wired to MCP/REST by default)
+- Tree-sitter + SCIP indexing pipeline with CODE_* graph projection to Neo4j
+- Tri-hybrid retrieval (lexical + vector + graph) powering code search
+- Code tools (explain-code, call-graph, impact analysis, ADR automation, test generation, PR analysis)
+  are exposed via REST and MCP once indexing has been run
 
 ### Security, Ops, Observability
 - JWT validation with scope-based RBAC
@@ -106,6 +106,30 @@ make up
 
 ---
 
+## Code Indexing (Required for Code Tools)
+
+The code tools depend on CODE_* graph + OpenSearch documents. Trigger indexing
+after the stack is up:
+
+REST:
+```bash
+curl -X POST http://localhost:8865/api/v1/code/index \
+  -H "Authorization: Bearer <your-jwt-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_id": "my-repo",
+    "root_path": "/path/to/repo",
+    "reset": true
+  }'
+```
+
+MCP:
+```text
+index_codebase(repo_id="my-repo", root_path="/path/to/repo", reset=true)
+```
+
+---
+
 ## MCP Endpoints
 - Memory MCP: `/mcp/<client>/sse/<user_id>`
 - Business Concepts MCP: `/concepts/<client>/sse/<user_id>` (requires `BUSINESS_CONCEPTS_ENABLED=true`)
@@ -151,6 +175,7 @@ Base: `http://localhost:8865/api/v1`
 - `search` - lexical and hybrid search
 - `graph` - aggregations, entity networks, tag co-occurrence
 - `entities` - entity metadata and centrality
+- `code` - code-intel endpoints (search, explain, callers/callees, impact, ADR, test generation, PR analysis, indexing)
 - `feedback` - retrieval feedback and metrics
 - `experiments` - A/B tests for retrieval settings
 - `backup` - export/import
@@ -209,6 +234,6 @@ Key directories:
 ---
 
 ## Next Steps
-- Hook the code-intelligence tools into MCP/REST if you want them exposed
+- Add a background worker or cron for continuous code indexing
 - Wire the Prometheus `/metrics` app into the main API if you need scraping
 - Tune OpenSearch and Qdrant settings per workload

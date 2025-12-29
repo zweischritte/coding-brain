@@ -12,11 +12,13 @@ Scope mapping (from PRD):
 - adr_automation: search:read + graph:read
 - test_generation: search:read + graph:read
 - pr_analysis: search:read + graph:read
+- index_codebase: graph:write
 """
 
 import dataclasses
 import logging
 import uuid
+from pathlib import Path
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +32,7 @@ from app.schemas import (
     ADRRequest,
     TestGenerationRequest,
     PRAnalysisRequest,
+    CodeIndexRequest,
     # Responses
     CodeSearchResponse,
     ExplainCodeResponse,
@@ -38,6 +41,7 @@ from app.schemas import (
     ADRResponse,
     TestGenerationResponse,
     PRAnalysisResponse,
+    CodeIndexResponse,
     # Common
     CodeResponseMeta,
 )
@@ -592,47 +596,73 @@ async def pr_analysis(
     """Analyze a pull request."""
     toolkit = get_code_toolkit()
 
-    # PR analysis may use multiple tools
-    # For now, return degraded if no tools available
-    if not toolkit.search_tool and not toolkit.impact_tool:
-        return PRAnalysisResponse(
-            summary="",
-            risks=[],
-            suggested_reviewers=[],
-            complexity_score=0.0,
-            meta=_create_degraded_meta(
-                missing_sources=toolkit.get_missing_sources(),
-                error="Required tools not available",
-            ),
-        )
-
     try:
-        # PR analysis may use a dedicated tool or combine others
-        # Implement based on tools/pr_workflow/pr_analysis.py
-        from tools.pr_workflow.pr_analysis import PRAnalyzer
+        from tools.pr_workflow.pr_analysis import (
+            PRAnalysisInput,
+            create_pr_analysis_tool,
+        )
 
-        analyzer = PRAnalyzer(
-            search_tool=toolkit.search_tool,
+        tool = create_pr_analysis_tool(
+            graph_driver=toolkit.neo4j_driver,
+            retriever=toolkit.trihybrid_retriever,
             impact_tool=toolkit.impact_tool,
+            adr_tool=toolkit.adr_tool,
         )
 
-        result = analyzer.analyze(
-            repo_id=request.repo_id,
-            diff=request.diff,
-            pr_number=request.pr_number,
-            title=request.title,
-            body=request.body,
-            base_branch=request.base_branch,
-            head_branch=request.head_branch,
+        result = tool.analyze(
+            PRAnalysisInput(
+                repo_id=request.repo_id,
+                diff=request.diff,
+                pr_number=request.pr_number,
+                title=request.title,
+                body=request.body,
+                base_branch=request.base_branch,
+                head_branch=request.head_branch,
+            )
         )
-        result_dict = _safe_asdict(result) if result else {}
+
+        summary_parts = [
+            f"{result.summary.files_changed} files changed (+{result.summary.additions}/-{result.summary.deletions})",
+        ]
+        if result.summary.languages:
+            summary_parts.append(f"languages: {', '.join(result.summary.languages)}")
+        if result.summary.main_areas:
+            summary_parts.append(f"areas: {', '.join(result.summary.main_areas)}")
+        if result.summary.affected_files:
+            summary_parts.append(f"affected: {', '.join(result.summary.affected_files)}")
+        if result.summary.suggested_adr:
+            summary_parts.append("ADR suggested")
+
+        risks = [
+            {
+                "category": issue.category,
+                "severity": issue.severity.value,
+                "description": issue.message,
+                "affected_files": [issue.file_path] if issue.file_path else [],
+                "suggestion": issue.suggestion,
+            }
+            for issue in result.issues
+        ]
+
+        missing_sources = []
+        if not toolkit.is_available("neo4j"):
+            missing_sources.append("neo4j")
+        if not toolkit.is_available("opensearch"):
+            missing_sources.append("opensearch")
+
+        meta = _create_meta()
+        if missing_sources:
+            meta = _create_degraded_meta(
+                missing_sources=missing_sources,
+                error="Some backends unavailable",
+            )
 
         return PRAnalysisResponse(
-            summary=result_dict.get("summary", ""),
-            risks=result_dict.get("risks", []),
-            suggested_reviewers=result_dict.get("suggested_reviewers", []),
-            complexity_score=result_dict.get("complexity_score", 0.0),
-            meta=_create_meta(),
+            summary=" | ".join(summary_parts),
+            risks=risks,
+            suggested_reviewers=[],
+            complexity_score=result.summary.complexity_score,
+            meta=meta,
         )
 
     except ImportError:
@@ -659,3 +689,82 @@ async def pr_analysis(
                 error=str(e),
             ),
         )
+
+
+# =============================================================================
+# Code Indexing (graph:write)
+# =============================================================================
+
+
+@router.post(
+    "/index",
+    response_model=CodeIndexResponse,
+    summary="Index a code repository",
+    description="Parse a local repository and populate CODE_* graph + OpenSearch.",
+)
+async def index_codebase(
+    request: CodeIndexRequest,
+    _: None = Depends(require_scopes(Scope.GRAPH_WRITE)),
+) -> CodeIndexResponse:
+    """Index a repository into the code graph and search index."""
+    toolkit = get_code_toolkit()
+
+    root_path = Path(request.root_path)
+    if not root_path.exists() or not root_path.is_dir():
+        raise HTTPException(status_code=404, detail="root_path not found")
+
+    if not toolkit.is_available("neo4j"):
+        return CodeIndexResponse(
+            repo_id=request.repo_id,
+            files_indexed=0,
+            files_failed=0,
+            symbols_indexed=0,
+            documents_indexed=0,
+            call_edges_indexed=0,
+            duration_ms=0.0,
+            meta=_create_degraded_meta(
+                missing_sources=["neo4j"],
+                error="Graph backend unavailable",
+            ),
+        )
+
+    missing_sources = []
+    if not toolkit.is_available("opensearch"):
+        missing_sources.append("opensearch")
+    if not toolkit.is_available("embedding"):
+        missing_sources.append("embedding")
+
+    from indexing.code_indexer import CodeIndexingService
+
+    indexer = CodeIndexingService(
+        root_path=root_path,
+        repo_id=request.repo_id,
+        graph_driver=toolkit.neo4j_driver,
+        opensearch_client=toolkit.opensearch_client if toolkit.is_available("opensearch") else None,
+        embedding_service=toolkit.embedding_service if toolkit.is_available("embedding") else None,
+        index_name=request.index_name or "code",
+        include_api_boundaries=request.include_api_boundaries,
+    )
+
+    summary = indexer.index_repository(
+        max_files=request.max_files,
+        reset=request.reset,
+    )
+
+    meta = _create_meta()
+    if missing_sources:
+        meta = _create_degraded_meta(
+            missing_sources=missing_sources,
+            error="Some backends unavailable",
+        )
+
+    return CodeIndexResponse(
+        repo_id=summary.repo_id,
+        files_indexed=summary.files_indexed,
+        files_failed=summary.files_failed,
+        symbols_indexed=summary.symbols_indexed,
+        documents_indexed=summary.documents_indexed,
+        call_edges_indexed=summary.call_edges_indexed,
+        duration_ms=summary.duration_ms,
+        meta=meta,
+    )

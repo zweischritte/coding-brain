@@ -365,6 +365,14 @@ class ImpactAnalysisTool:
 
             # Find symbols in this file
             file_node = self.graph_driver.get_node(file_path)
+            if not file_node and hasattr(self.graph_driver, "find_file_id"):
+                fallback_id = self.graph_driver.find_file_id(
+                    file_path,
+                    repo_id=getattr(input_data, "repo_id", None),
+                )
+                if fallback_id:
+                    file_node = self.graph_driver.get_node(fallback_id)
+
             if not file_node:
                 continue
 

@@ -112,6 +112,17 @@ from openmemory.api.indexing.graph_projection import (
     create_graph_projection,
 )
 
+from openmemory.api.indexing.code_graph_driver import (
+    CodeGraphDriver,
+    create_code_graph_driver,
+)
+
+from openmemory.api.indexing.code_indexer import (
+    CodeIndexingService,
+    CodeIndexSummary,
+    FileIndexStats,
+)
+
 from openmemory.api.indexing.bootstrap import (
     # Core types
     FilePriority,
@@ -251,6 +262,13 @@ __all__ = [
     "ConstraintViolationError",
     "TransactionError",
     "create_graph_projection",
+    # Neo4j-backed code graph driver
+    "CodeGraphDriver",
+    "create_code_graph_driver",
+    # Code indexing service
+    "CodeIndexingService",
+    "CodeIndexSummary",
+    "FileIndexStats",
     # Bootstrap
     "FilePriority",
     "PriorityTier",

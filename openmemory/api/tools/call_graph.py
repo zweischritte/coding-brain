@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from openmemory.api.indexing.graph_projection import CodeEdgeType
+from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType
 
 logger = logging.getLogger(__name__)
 
@@ -257,8 +257,27 @@ class FindCallersTool:
         if input_data.symbol_id:
             return input_data.symbol_id
 
-        # TODO: Implement symbol name lookup
-        raise InvalidInputError("symbol_name lookup not yet implemented")
+        if input_data.symbol_name:
+            if hasattr(self.graph_driver, "find_symbol_id"):
+                symbol_id = self.graph_driver.find_symbol_id(
+                    input_data.symbol_name,
+                    repo_id=input_data.repo_id,
+                )
+                if symbol_id:
+                    return symbol_id
+
+            if hasattr(self.graph_driver, "query_nodes_by_type"):
+                nodes = self.graph_driver.query_nodes_by_type(CodeNodeType.SYMBOL)
+                for node in nodes:
+                    if node.properties.get("name") != input_data.symbol_name:
+                        continue
+                    if input_data.repo_id and node.properties.get("repo_id") != input_data.repo_id:
+                        continue
+                    return node.id
+
+        raise SymbolNotFoundError(
+            f"Symbol not found: {input_data.symbol_name}"
+        )
 
     def _traverse_callers(
         self,
@@ -456,8 +475,27 @@ class FindCalleesTool:
         if input_data.symbol_id:
             return input_data.symbol_id
 
-        # TODO: Implement symbol name lookup
-        raise InvalidInputError("symbol_name lookup not yet implemented")
+        if input_data.symbol_name:
+            if hasattr(self.graph_driver, "find_symbol_id"):
+                symbol_id = self.graph_driver.find_symbol_id(
+                    input_data.symbol_name,
+                    repo_id=input_data.repo_id,
+                )
+                if symbol_id:
+                    return symbol_id
+
+            if hasattr(self.graph_driver, "query_nodes_by_type"):
+                nodes = self.graph_driver.query_nodes_by_type(CodeNodeType.SYMBOL)
+                for node in nodes:
+                    if node.properties.get("name") != input_data.symbol_name:
+                        continue
+                    if input_data.repo_id and node.properties.get("repo_id") != input_data.repo_id:
+                        continue
+                    return node.id
+
+        raise SymbolNotFoundError(
+            f"Symbol not found: {input_data.symbol_name}"
+        )
 
     def _traverse_callees(
         self,

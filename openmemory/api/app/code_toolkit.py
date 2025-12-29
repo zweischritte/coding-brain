@@ -141,6 +141,7 @@ def _init_neo4j(toolkit: CodeToolkit) -> None:
             is_neo4j_configured,
             is_neo4j_healthy,
         )
+        from indexing.code_graph_driver import create_code_graph_driver
 
         if not is_neo4j_configured():
             toolkit._available_services["neo4j"] = False
@@ -148,7 +149,8 @@ def _init_neo4j(toolkit: CodeToolkit) -> None:
             logger.info("Neo4j not configured - graph features disabled")
             return
 
-        toolkit.neo4j_driver = get_neo4j_driver()
+        raw_driver = get_neo4j_driver()
+        toolkit.neo4j_driver = create_code_graph_driver(raw_driver)
 
         if toolkit.neo4j_driver and is_neo4j_healthy():
             toolkit._available_services["neo4j"] = True

@@ -20,6 +20,7 @@ import datetime
 import json
 import logging
 import uuid
+from pathlib import Path
 
 from app.database import SessionLocal
 from app.models import Memory, MemoryAccessLog, MemoryState, MemoryStatusHistory
@@ -2558,6 +2559,122 @@ def _create_code_meta(request_id: str = None, degraded: bool = False, missing: l
         "missing_sources": missing or [],
         "error": error,
     }
+
+
+@mcp.tool(description="""Index a local codebase into the CODE_* graph and search index.
+
+Required parameters:
+- repo_id: Repository ID (required)
+- root_path: Filesystem path to the repository root (required)
+
+Optional parameters:
+- index_name: OpenSearch index name (default: "code")
+- reset: Clear existing repo data before indexing (default: false)
+- max_files: Maximum number of files to index
+- include_api_boundaries: Enable API boundary detection (default: true)
+
+Returns:
+- repo_id: Repository ID
+- files_indexed: Files successfully indexed
+- files_failed: Files that failed indexing
+- symbols_indexed: Symbols added to the graph
+- documents_indexed: Documents added to OpenSearch
+- call_edges_indexed: CALLS edges inferred
+- duration_ms: Total indexing time
+- meta: Response metadata
+""")
+async def index_codebase(
+    repo_id: str,
+    root_path: str,
+    index_name: str = "code",
+    reset: bool = False,
+    max_files: int = None,
+    include_api_boundaries: bool = True,
+) -> str:
+    """Index a local repository for code intelligence."""
+    scope_error = _check_tool_scope("graph:write")
+    if scope_error:
+        return scope_error
+
+    toolkit = get_code_toolkit()
+
+    root = Path(root_path)
+    if not root.exists() or not root.is_dir():
+        return json.dumps({"error": "root_path not found"})
+
+    if not toolkit.is_available("neo4j"):
+        return json.dumps({
+            "repo_id": repo_id,
+            "files_indexed": 0,
+            "files_failed": 0,
+            "symbols_indexed": 0,
+            "documents_indexed": 0,
+            "call_edges_indexed": 0,
+            "duration_ms": 0.0,
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=["neo4j"],
+                error="Graph backend unavailable",
+            ),
+        })
+
+    missing_sources = []
+    if not toolkit.is_available("opensearch"):
+        missing_sources.append("opensearch")
+    if not toolkit.is_available("embedding"):
+        missing_sources.append("embedding")
+
+    try:
+        from indexing.code_indexer import CodeIndexingService
+
+        indexer = CodeIndexingService(
+            root_path=root,
+            repo_id=repo_id,
+            graph_driver=toolkit.neo4j_driver,
+            opensearch_client=toolkit.opensearch_client if toolkit.is_available("opensearch") else None,
+            embedding_service=toolkit.embedding_service if toolkit.is_available("embedding") else None,
+            index_name=index_name or "code",
+            include_api_boundaries=include_api_boundaries,
+        )
+
+        summary = indexer.index_repository(
+            max_files=max_files,
+            reset=reset,
+        )
+
+        meta = _create_code_meta(
+            degraded=bool(missing_sources),
+            missing=missing_sources,
+            error="Some backends unavailable" if missing_sources else None,
+        )
+
+        return json.dumps({
+            "repo_id": summary.repo_id,
+            "files_indexed": summary.files_indexed,
+            "files_failed": summary.files_failed,
+            "symbols_indexed": summary.symbols_indexed,
+            "documents_indexed": summary.documents_indexed,
+            "call_edges_indexed": summary.call_edges_indexed,
+            "duration_ms": summary.duration_ms,
+            "meta": meta,
+        }, default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in index_codebase: {e}")
+        return json.dumps({
+            "repo_id": repo_id,
+            "files_indexed": 0,
+            "files_failed": 0,
+            "symbols_indexed": 0,
+            "documents_indexed": 0,
+            "call_edges_indexed": 0,
+            "duration_ms": 0.0,
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=missing_sources,
+                error=str(e),
+            ),
+        })
 
 
 @mcp.tool(description="""Search code using tri-hybrid retrieval (lexical + semantic + graph).
