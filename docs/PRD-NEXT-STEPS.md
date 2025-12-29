@@ -16,17 +16,18 @@ This PRD is self-contained and includes repo references, tool interfaces, and de
 
 | Feature | Status | Commit | Notes |
 |---------|--------|--------|-------|
-| AUTO_MIGRATE flag | COMPLETED | pending | Added to `app/database.py` |
-| AUTO_MIGRATE tests (TDD) | COMPLETED | pending | `tests/infrastructure/test_auto_migrate.py` |
-| MetricsMiddleware integration | COMPLETED | pending | Added to `main.py` |
-| `/metrics` endpoint | COMPLETED | pending | Added to `main.py` |
-| Metrics integration tests | COMPLETED | pending | `tests/infrastructure/test_metrics_integration.py` |
-| docker-compose AUTO_MIGRATE | COMPLETED | pending | Added `AUTO_MIGRATE=true` to codingbrain-mcp service |
-| Code tools router (REST) | COMPLETED | pending | `app/routers/code.py` at `/api/v1/code/*` |
-| Code tools MCP registration | COMPLETED | pending | Added 5 tools to `app/mcp_server.py` |
-| Code tools tests (TDD) | COMPLETED | pending | `tests/routers/test_code_router.py` (38 tests) |
-| CodeToolkit factory | COMPLETED | pending | `app/code_toolkit.py` |
-| Code schemas | COMPLETED | pending | Added to `app/schemas.py` |
+| AUTO_MIGRATE flag | COMPLETED | ba836eff | Added to `app/database.py` |
+| AUTO_MIGRATE tests (TDD) | COMPLETED | ba836eff | `tests/infrastructure/test_auto_migrate.py` |
+| MetricsMiddleware integration | COMPLETED | ba836eff | Added to `main.py` |
+| `/metrics` endpoint | COMPLETED | ba836eff | Added to `main.py` |
+| Metrics integration tests | COMPLETED | ba836eff | `tests/infrastructure/test_metrics_integration.py` |
+| docker-compose AUTO_MIGRATE | COMPLETED | ba836eff | Added `AUTO_MIGRATE=true` to codingbrain-mcp service |
+| Code tools router (REST) | COMPLETED | 727fad54 | `app/routers/code.py` at `/api/v1/code/*` |
+| Code tools MCP registration | COMPLETED | 727fad54 | Added 5 tools to `app/mcp_server.py` |
+| Code tools tests (TDD) | COMPLETED | 727fad54 | `tests/routers/test_code_router.py` (38 tests) |
+| CodeToolkit factory | COMPLETED | 727fad54 | `app/code_toolkit.py` |
+| Code schemas | COMPLETED | 727fad54 | Added to `app/schemas.py` |
+| Smoke test script | COMPLETED | d9c576dd | `scripts/smoke_test.sh` |
 
 ### Files Modified
 - [app/database.py](../openmemory/api/app/database.py) - Added `auto_migrate_on_startup()`, `is_postgres_database()`, `should_auto_migrate()`, `run_alembic_upgrade()`
@@ -43,6 +44,7 @@ This PRD is self-contained and includes repo references, tool interfaces, and de
 - [app/code_toolkit.py](../openmemory/api/app/code_toolkit.py) - Lazy initialization factory for code-intel dependencies
 - [tests/routers/test_code_router.py](../openmemory/api/tests/routers/test_code_router.py) - TDD tests for code router (38 tests)
 - [tests/mcp/test_code_tools_mcp.py](../openmemory/api/tests/mcp/test_code_tools_mcp.py) - TDD tests for MCP code tools
+- [scripts/smoke_test.sh](../scripts/smoke_test.sh) - API health verification script
 
 ---
 
