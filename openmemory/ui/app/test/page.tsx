@@ -5,22 +5,25 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EditMemoryDialog } from "@/app/memories/components/EditMemoryDialog";
 import { EntityNetworkGraph } from "@/components/EntityNetworkGraph";
-import { Vault, Layer, Vector, Circuit } from "@/components/types";
+import { StructuredCategory, MemoryScope, ArtifactType, SourceType } from "@/components/types";
 
 // Mock data for testing - with proper typing
 const MOCK_MEMORY = {
   id: "test-memory-123",
-  text: "This is a test memory with AXIS metadata",
+  text: "This is a test memory with structured metadata",
   created_at: "2024-01-15T10:30:00Z",
   state: "active",
   categories: ["test", "development"],
   app_name: "test-app",
   metadata: {
-    vault: "SOV" as Vault,
-    layer: "cognitive" as Layer,
-    circuit: 3 as Circuit,
-    vector: "say" as Vector,
-    re: "grischa",
+    category: "architecture" as StructuredCategory,
+    scope: "project" as MemoryScope,
+    artifact_type: "repo" as ArtifactType,
+    artifact_ref: "openmemory/ui/app/test/page.tsx",
+    entity: "grischa",
+    source: "user" as SourceType,
+    evidence: ["TEST-1"],
+    tags: { demo: true },
   },
 };
 
@@ -69,11 +72,11 @@ export default function TestPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-zinc-400 text-sm">
-            Mock Memory Metadata: vault={MOCK_MEMORY.metadata.vault},
-            layer={MOCK_MEMORY.metadata.layer},
-            circuit={MOCK_MEMORY.metadata.circuit},
-            vector={MOCK_MEMORY.metadata.vector},
-            entity={MOCK_MEMORY.metadata.re}
+            Mock Memory Metadata: category={MOCK_MEMORY.metadata.category},
+            scope={MOCK_MEMORY.metadata.scope},
+            artifact_type={MOCK_MEMORY.metadata.artifact_type},
+            artifact_ref={MOCK_MEMORY.metadata.artifact_ref},
+            entity={MOCK_MEMORY.metadata.entity}
           </p>
           <Button onClick={handleOpenEditDialog}>
             Open Edit Dialog with Mock Data

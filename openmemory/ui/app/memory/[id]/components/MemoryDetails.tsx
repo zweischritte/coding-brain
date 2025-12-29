@@ -94,38 +94,60 @@ export function MemoryDetails({ memory_id }: MemoryDetailsProps) {
                 </p>
               </div>
 
-              {/* AXIS Metadata Section */}
-              {(memory?.metadata?.vault || memory?.metadata?.layer || memory?.metadata?.circuit || memory?.metadata?.vector || memory?.metadata?.re) && (
+              {/* Structured Metadata Section */}
+              {(memory?.metadata?.category ||
+                memory?.metadata?.scope ||
+                memory?.metadata?.artifact_type ||
+                memory?.metadata?.artifact_ref ||
+                memory?.metadata?.entity ||
+                memory?.metadata?.source ||
+                memory?.metadata?.evidence ||
+                memory?.metadata?.tags) && (
                 <div className="mt-4 pt-4 border-t border-zinc-800">
-                  <h3 className="text-sm font-semibold text-zinc-400 mb-3">AXIS Metadata</h3>
+                  <h3 className="text-sm font-semibold text-zinc-400 mb-3">Structured Metadata</h3>
                   <div className="flex flex-wrap gap-2">
-                    {memory?.metadata?.vault && (
+                    {memory?.metadata?.category && (
                       <Badge variant="secondary" className="bg-purple-900/30 text-purple-300 border border-purple-700">
-                        Vault: {memory.metadata.vault}
+                        Category: {memory.metadata.category}
                       </Badge>
                     )}
-                    {memory?.metadata?.layer && (
+                    {memory?.metadata?.scope && (
                       <Badge variant="secondary" className="bg-blue-900/30 text-blue-300 border border-blue-700">
-                        Layer: {memory.metadata.layer}
+                        Scope: {memory.metadata.scope}
                       </Badge>
                     )}
-                    {memory?.metadata?.circuit && (
-                      <Badge variant="secondary" className="bg-green-900/30 text-green-300 border border-green-700">
-                        Circuit: {memory.metadata.circuit}
-                      </Badge>
-                    )}
-                    {memory?.metadata?.vector && (
+                    {memory?.metadata?.artifact_type && (
                       <Badge variant="secondary" className="bg-amber-900/30 text-amber-300 border border-amber-700">
-                        Vector: {memory.metadata.vector}
+                        Artifact: {memory.metadata.artifact_type}
                       </Badge>
                     )}
-                    {memory?.metadata?.re && (
-                      <Link href={`/entity/${encodeURIComponent(memory.metadata.re)}`}>
+                    {memory?.metadata?.artifact_ref && (
+                      <Badge variant="secondary" className="bg-amber-900/30 text-amber-300 border border-amber-700">
+                        Ref: {memory.metadata.artifact_ref}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.entity && (
+                      <Link href={`/entity/${encodeURIComponent(memory.metadata.entity)}`}>
                         <Badge variant="secondary" className="bg-primary/20 text-primary border border-primary/50 cursor-pointer hover:bg-primary/30">
                           <User className="h-3 w-3 mr-1" />
-                          {memory.metadata.re}
+                          {memory.metadata.entity}
                         </Badge>
                       </Link>
+                    )}
+                    {memory?.metadata?.source && (
+                      <Badge variant="secondary" className="bg-green-900/30 text-green-300 border border-green-700">
+                        Source: {memory.metadata.source}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.evidence && (
+                      <Badge variant="secondary" className="bg-zinc-800 text-zinc-200 border border-zinc-700">
+                        Evidence: {memory.metadata.evidence.join(", ")}
+                      </Badge>
+                    )}
+                    {memory?.metadata?.tags && Object.keys(memory.metadata.tags).length > 0 && (
+                      <Badge variant="secondary" className="bg-zinc-800 text-zinc-200 border border-zinc-700">
+                        Tags: {Object.keys(memory.metadata.tags).join(", ")}
+                      </Badge>
                     )}
                   </div>
                 </div>

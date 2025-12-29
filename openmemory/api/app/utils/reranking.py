@@ -1,5 +1,5 @@
 """
-AXIS 3.4 Memory Reranking Module
+Memory Reranking Module (Dev Assistant)
 
 Provides metadata-based re-ranking for memory search results.
 Implements boost scoring (soft ranking) and exclusion filtering (hard exclusion).
@@ -33,11 +33,11 @@ class BoostConfig:
     Immutable configuration for boost weights.
 
     Attributes:
-        entity: Boost for matching metadata.re (highest precision)
-        layer: Boost for matching metadata.layer (12 values)
-        vault: Boost for matching metadata.vault (7 values)
-        vector: Boost for matching metadata.vector (3 values)
-        circuit: Boost for matching metadata.circuit (8 values)
+        entity: Boost for matching metadata.entity (highest precision)
+        category: Boost for matching metadata.category
+        scope: Boost for matching metadata.scope
+        artifact_type: Boost for matching metadata.artifact_type
+        artifact_ref: Boost for matching metadata.artifact_ref
         tag: Boost per matching tag
         max_tag_boost: Maximum total boost from tags
         max_recency_boost: Maximum boost from recency
@@ -51,12 +51,12 @@ class BoostConfig:
 
         max_total_boost: Cap on total boost (prevents runaway scores)
     """
-    # Existing metadata weights
+    # Structured metadata weights
     entity: float = 0.5
-    layer: float = 0.3
-    vault: float = 0.2
-    vector: float = 0.15
-    circuit: float = 0.1
+    category: float = 0.3
+    scope: float = 0.2
+    artifact_type: float = 0.2
+    artifact_ref: float = 0.35
     tag: float = 0.1
     max_tag_boost: float = 0.5
     max_recency_boost: float = 0.5
@@ -83,11 +83,11 @@ class SearchContext:
     All fields are optional - only provided values will be used for boosting.
     This is the "soft" context that influences ranking without excluding.
     """
+    category: Optional[str] = None
+    scope: Optional[str] = None
+    artifact_type: Optional[str] = None
+    artifact_ref: Optional[str] = None
     entity: Optional[str] = None
-    layer: Optional[str] = None
-    vault: Optional[str] = None
-    vector: Optional[str] = None
-    circuit: Optional[int] = None
     tags: List[str] = field(default_factory=list)
     recency_weight: float = 0.0
     recency_halflife_days: int = 45
@@ -223,31 +223,23 @@ def compute_metadata_boost(
     # Define match checks: (context_attr, metadata_key, config_attr)
     # This DRY pattern allows easy addition of new boost fields
     string_matches = [
-        ("entity", "re", "entity"),      # context.entity → metadata["re"]
-        ("layer", "layer", "layer"),
-        ("vault", "vault", "vault"),
-        ("vector", "vector", "vector"),
+        ("entity", "entity", "entity"),
+        ("category", "category", "category"),
+        ("scope", "scope", "scope"),
+        ("artifact_type", "artifact_type", "artifact_type"),
+        ("artifact_ref", "artifact_ref", "artifact_ref"),
     ]
 
     for ctx_attr, meta_key, config_attr in string_matches:
         ctx_value = getattr(context, ctx_attr)
         meta_value = metadata.get(meta_key)
+        if meta_key == "entity" and meta_value is None:
+            meta_value = metadata.get("re")
 
         if ctx_value and meta_value and str(meta_value) == str(ctx_value):
             weight = getattr(config, config_attr)
             boost += weight
             breakdown[ctx_attr] = weight
-
-    # Circuit match (int comparison)
-    if context.circuit is not None:
-        meta_circuit = metadata.get("circuit")
-        if meta_circuit is not None:
-            try:
-                if int(meta_circuit) == int(context.circuit):
-                    boost += config.circuit
-                    breakdown["circuit"] = config.circuit
-            except (ValueError, TypeError):
-                pass  # Invalid circuit value, skip boost
 
     return boost, breakdown
 
@@ -444,12 +436,12 @@ def compute_boost(
 
     Example:
         >>> boost, breakdown = compute_boost(
-        ...     metadata={"vault": "FRACTURE_LOG", "layer": "emotional"},
-        ...     stored_tags={"trigger": True},
-        ...     context=SearchContext(vault="FRACTURE_LOG", tags=["trigger"]),
+        ...     metadata={"category": "architecture", "scope": "project"},
+        ...     stored_tags={"migrations": True},
+        ...     context=SearchContext(category="architecture", tags=["migrations"]),
         ... )
         >>> print(f"Total boost: {boost}, breakdown: {breakdown}")
-        Total boost: 0.3, breakdown: {'vault': 0.2, 'tags': {'count': 1, 'boost': 0.1}}
+        Total boost: 0.4, breakdown: {'metadata': {'category': 0.3}, 'tags': {'count': 1, 'boost': 0.1}}
     """
     breakdown: Dict[str, Any] = {}
 

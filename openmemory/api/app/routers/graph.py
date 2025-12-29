@@ -3,7 +3,7 @@ Graph Router for OpenMemory API.
 
 Provides REST endpoints for graph operations:
 - Graph statistics
-- Aggregations (vault, layer, tag distributions)
+- Aggregations (category, scope, tag distributions)
 - Tag co-occurrence
 - Full-text search
 - Biography timeline
@@ -83,7 +83,7 @@ async def aggregate_by_dimension(
 ):
     """Aggregate memories by a dimension.
 
-    Dimension can be: vault, layer, tag, entity, app, vector, circuit, origin, evidence, source, state
+    Dimension can be: category, scope, artifact_type, artifact_ref, tag, entity, app, evidence, source, state
     """
     from app.graph.graph_ops import aggregate_memories_in_graph
 
@@ -92,8 +92,8 @@ async def aggregate_by_dimension(
         raise HTTPException(status_code=404, detail="User not found")
 
     valid_dimensions = [
-        "vault", "layer", "tag", "entity", "app",
-        "vector", "circuit", "origin", "evidence", "source", "state"
+        "category", "scope", "artifact_type", "artifact_ref", "tag",
+        "entity", "app", "evidence", "source", "state"
     ]
     if dimension not in valid_dimensions:
         raise HTTPException(

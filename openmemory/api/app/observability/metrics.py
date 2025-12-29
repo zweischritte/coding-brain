@@ -50,7 +50,7 @@ circuit_breaker_state = Gauge(
 memories_created_total = Counter(
     "memories_created_total",
     "Total memories created",
-    ["org_id", "vault"]
+    ["org_id", "category"]
 )
 
 search_queries_total = Counter(

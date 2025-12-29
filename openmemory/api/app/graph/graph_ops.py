@@ -23,13 +23,12 @@ _projector_initialized = False
 
 _VIA_TO_REL_TYPES: Dict[str, str] = {
     "entity": "OM_ABOUT",
-    "vault": "OM_IN_VAULT",
-    "layer": "OM_IN_LAYER",
-    "vector": "OM_HAS_VECTOR",
-    "circuit": "OM_IN_CIRCUIT",
+    "category": "OM_IN_CATEGORY",
+    "scope": "OM_IN_SCOPE",
+    "artifact_type": "OM_HAS_ARTIFACT_TYPE",
+    "artifact_ref": "OM_REFERENCES_ARTIFACT",
     "tag": "OM_TAGGED",
-    "origin": "OM_DERIVED_FROM",
-    "evidence": "OM_EVIDENCE",
+    "evidence": "OM_HAS_EVIDENCE",
     "app": "OM_WRITTEN_VIA",
 }
 
@@ -39,7 +38,7 @@ def _parse_via_to_rel_types(via: Optional[str]) -> Optional[List[str]]:
     Parse a comma-separated list of traversal dimensions into relationship types.
 
     Accepts either:
-    - dimension names (tag, entity, vault, layer, vector, circuit, origin, evidence, app)
+    - dimension names (tag, entity, category, scope, artifact_type, artifact_ref, evidence, app)
     - explicit relationship types (OM_TAGGED, OM_ABOUT, ...)
 
     Returns:
@@ -451,12 +450,13 @@ def get_memory_subgraph_from_graph(
         "label": "OM_Memory",
         "memory_id": seed["id"],
         "content": seed.get("content"),
-        "vault": seed.get("vault"),
-        "layer": seed.get("layer"),
-        "vector": seed.get("vector"),
-        "circuit": seed.get("circuit"),
-        "created_at": seed.get("created_at"),
-        "updated_at": seed.get("updated_at"),
+        "category": seed.get("category"),
+        "scope": seed.get("scope"),
+        "artifact_type": seed.get("artifactType"),
+        "artifact_ref": seed.get("artifactRef"),
+        "source": seed.get("source"),
+        "created_at": seed.get("created_at") or seed.get("createdAt"),
+        "updated_at": seed.get("updated_at") or seed.get("updatedAt"),
     }
 
     # Add dimension nodes + edges from seed
@@ -493,12 +493,13 @@ def get_memory_subgraph_from_graph(
                 "label": "OM_Memory",
                 "memory_id": rid,
                 "content": rm.get("content"),
-                "vault": rm.get("vault"),
-                "layer": rm.get("layer"),
-                "vector": rm.get("vector"),
-                "circuit": rm.get("circuit"),
-                "created_at": rm.get("created_at"),
-                "updated_at": rm.get("updated_at"),
+                "category": rm.get("category"),
+                "scope": rm.get("scope"),
+                "artifact_type": rm.get("artifactType"),
+                "artifact_ref": rm.get("artifactRef"),
+                "source": rm.get("source"),
+                "created_at": rm.get("created_at") or rm.get("createdAt"),
+                "updated_at": rm.get("updated_at") or rm.get("updatedAt"),
                 "shared_count": rm.get("shared_count"),
             }
 
@@ -1112,7 +1113,7 @@ def retrieve_via_similarity_graph(
         List of memory dicts with graph ranking info:
         - id: Memory UUID
         - content: Memory content
-        - vault, layer, circuit: AXIS metadata
+        - category, scope, artifact_type, artifact_ref: metadata fields
         - seedConnections: How many seed memories link to this one
         - avgSimilarity: Average similarity score from seeds
         - maxSimilarity: Maximum similarity score from any seed
@@ -1152,10 +1153,11 @@ def retrieve_via_similarity_graph(
             LIMIT $limit
             RETURN candidate.id AS id,
                    candidate.content AS content,
-                   candidate.vault AS vault,
-                   candidate.layer AS layer,
-                   candidate.circuit AS circuit,
-                   candidate.vector AS vector,
+                   candidate.category AS category,
+                   candidate.scope AS scope,
+                   candidate.artifactType AS artifactType,
+                   candidate.artifactRef AS artifactRef,
+                   candidate.source AS source,
                    seedConnections,
                    avgSimilarity,
                    maxSimilarity
@@ -1174,10 +1176,11 @@ def retrieve_via_similarity_graph(
                 mem = {
                     "id": record["id"],
                     "content": record["content"],
-                    "vault": record["vault"],
-                    "layer": record["layer"],
-                    "circuit": record["circuit"],
-                    "vector": record["vector"],
+                    "category": record["category"],
+                    "scope": record["scope"],
+                    "artifactType": record["artifactType"],
+                    "artifactRef": record["artifactRef"],
+                    "source": record["source"],
                     "seedConnections": record["seedConnections"],
                     "avgSimilarity": record["avgSimilarity"],
                     "maxSimilarity": record["maxSimilarity"],
@@ -1253,8 +1256,10 @@ def retrieve_via_entity_graph(
             LIMIT $limit
             RETURN m.id AS id,
                    m.content AS content,
-                   m.vault AS vault,
-                   m.layer AS layer,
+                   m.category AS category,
+                   m.scope AS scope,
+                   m.artifactType AS artifactType,
+                   m.artifactRef AS artifactRef,
                    matchedEntities,
                    entityNames
             """
@@ -1271,8 +1276,10 @@ def retrieve_via_entity_graph(
                 mem = {
                     "id": record["id"],
                     "content": record["content"],
-                    "vault": record["vault"],
-                    "layer": record["layer"],
+                    "category": record["category"],
+                    "scope": record["scope"],
+                    "artifactType": record["artifactType"],
+                    "artifactRef": record["artifactRef"],
                     "matchedEntities": record["matchedEntities"],
                     "entityNames": record["entityNames"],
                 }

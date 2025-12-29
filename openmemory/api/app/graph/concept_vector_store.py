@@ -10,7 +10,7 @@ using a separate Qdrant collection. This enables:
 4. Concept clustering and relationship discovery
 
 The concepts are stored in a separate collection from memories to maintain
-clean separation between the AXIS memory system and Business Concepts.
+clean separation between the structured memory system and Business Concepts.
 
 Collection: business_concepts
 
@@ -542,7 +542,7 @@ class ConceptSimilarityService:
         name: str,
         concept_type: Optional[str] = None,
         summary: Optional[str] = None,
-        vault: Optional[str] = None,
+        category: Optional[str] = None,
         source_type: Optional[str] = None,
     ) -> Tuple[bool, Optional[List[Dict[str, Any]]]]:
         """
@@ -556,7 +556,7 @@ class ConceptSimilarityService:
             name: Concept name
             concept_type: Optional type
             summary: Optional summary
-            vault: Optional vault
+            category: Optional category
             source_type: Optional source type
 
         Returns:
@@ -583,7 +583,7 @@ class ConceptSimilarityService:
             # Store the embedding
             metadata = {
                 "type": concept_type,
-                "vault": vault,
+                "category": category,
                 "source_type": source_type,
             }
 

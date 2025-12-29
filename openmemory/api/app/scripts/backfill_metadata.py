@@ -1,8 +1,8 @@
 """
-Backfill axis metadata into the SQL database from the vector store.
+Backfill structured metadata into the SQL database from the vector store.
 
 Usage:
-    poetry run python -m app.scripts.backfill_axis_metadata [--limit 500] [--dry-run]
+    poetry run python -m app.scripts.backfill_metadata [--limit 500] [--dry-run]
 
 Notes:
 - Only memories with empty/None metadata_ are updated.
@@ -19,7 +19,7 @@ from app.models import Memory
 from app.utils.memory import get_memory_client
 
 
-def backfill_axis_metadata(*, limit: int | None = None, dry_run: bool = False) -> Dict[str, int]:
+def backfill_metadata(*, limit: int | None = None, dry_run: bool = False) -> Dict[str, int]:
     db = SessionLocal()
     memory_client = get_memory_client()
 
@@ -66,12 +66,12 @@ def backfill_axis_metadata(*, limit: int | None = None, dry_run: bool = False) -
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backfill axis metadata into SQL from vector store")
+    parser = argparse.ArgumentParser(description="Backfill structured metadata into SQL from vector store")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of memories to process")
     parser.add_argument("--dry-run", action="store_true", help="Do not write changes, just report")
     args = parser.parse_args()
 
-    stats = backfill_axis_metadata(limit=args.limit, dry_run=args.dry_run)
+    stats = backfill_metadata(limit=args.limit, dry_run=args.dry_run)
     print(json.dumps(stats, indent=2))
 
 

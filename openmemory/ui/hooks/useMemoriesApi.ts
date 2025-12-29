@@ -8,10 +8,10 @@ import {
   MemoryUpdateRequest,
   SimilarMemory,
   MemorySubgraph,
-  Vault,
-  Layer,
-  Circuit,
-  Vector,
+  StructuredCategory,
+  MemoryScope,
+  ArtifactType,
+  SourceType,
 } from '@/components/types';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '@/store/store';
@@ -26,11 +26,13 @@ export interface SimpleMemory {
   categories: string[];
   app_name: string;
   metadata?: {
-    vault?: string;
-    layer?: string;
-    circuit?: number;
-    vector?: string;
-    re?: string;
+    category?: StructuredCategory;
+    scope?: MemoryScope;
+    artifact_type?: ArtifactType;
+    artifact_ref?: string;
+    entity?: string;
+    source?: SourceType;
+    evidence?: string[];
     tags?: Record<string, any>;
   };
 }
@@ -110,11 +112,10 @@ interface UseMemoriesApiReturn {
       sortColumn?: string;
       sortDirection?: 'asc' | 'desc';
       showArchived?: boolean;
-      vaults?: string[];
-      layers?: string[];
-      vectors?: string[];
-      circuits?: number[];
+      scopes?: string[];
+      artifactTypes?: string[];
       entities?: string[];
+      sources?: string[];
     }
   ) => Promise<{ memories: Memory[]; total: number; pages: number }>;
   fetchMemoryById: (memoryId: string) => Promise<void>;
@@ -127,11 +128,13 @@ interface UseMemoriesApiReturn {
     memoryId: string,
     updates: {
       content?: string;
-      vault?: Vault;
-      layer?: Layer;
-      circuit?: Circuit;
-      vector?: Vector;
+      category?: StructuredCategory;
+      scope?: MemoryScope;
+      artifact_type?: ArtifactType;
+      artifact_ref?: string;
       entity?: string;
+      source?: SourceType;
+      evidence?: string[];
       tags?: Record<string, any>;
     }
   ) => Promise<void>;
@@ -166,11 +169,10 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       sortColumn?: string;
       sortDirection?: 'asc' | 'desc';
       showArchived?: boolean;
-      vaults?: string[];
-      layers?: string[];
-      vectors?: string[];
-      circuits?: number[];
+      scopes?: string[];
+      artifactTypes?: string[];
       entities?: string[];
+      sources?: string[];
     }
   ): Promise<{ memories: Memory[], total: number, pages: number }> => {
     setIsLoading(true);
@@ -184,15 +186,14 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
           size: size,
           search_query: query,
           app_ids: filters?.apps,
-          category_ids: filters?.categories,
           sort_column: filters?.sortColumn?.toLowerCase(),
           sort_direction: filters?.sortDirection,
           show_archived: filters?.showArchived,
-          vaults: filters?.vaults,
-          layers: filters?.layers,
-          vectors: filters?.vectors,
-          circuits: filters?.circuits,
-          entities: filters?.entities
+          memory_categories: filters?.categories,
+          scopes: filters?.scopes,
+          artifact_types: filters?.artifactTypes,
+          entities: filters?.entities,
+          sources: filters?.sources
         }
       );
 
@@ -350,11 +351,13 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     memoryId: string,
     updates: {
       content?: string;
-      vault?: Vault;
-      layer?: Layer;
-      circuit?: Circuit;
-      vector?: Vector;
+      category?: StructuredCategory;
+      scope?: MemoryScope;
+      artifact_type?: ArtifactType;
+      artifact_ref?: string;
       entity?: string;
+      source?: SourceType;
+      evidence?: string[];
       tags?: Record<string, any>;
     }
   ): Promise<void> => {
@@ -368,11 +371,13 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         user_id: user_id,
       };
       if (updates.content !== undefined) payload.memory_content = updates.content;
-      if (updates.vault !== undefined) payload.vault = updates.vault;
-      if (updates.layer !== undefined) payload.layer = updates.layer;
-      if (updates.circuit !== undefined) payload.circuit = updates.circuit;
-      if (updates.vector !== undefined) payload.vector = updates.vector;
+      if (updates.category !== undefined) payload.category = updates.category;
+      if (updates.scope !== undefined) payload.scope = updates.scope;
+      if (updates.artifact_type !== undefined) payload.artifact_type = updates.artifact_type;
+      if (updates.artifact_ref !== undefined) payload.artifact_ref = updates.artifact_ref;
       if (updates.entity !== undefined) payload.entity = updates.entity;
+      if (updates.source !== undefined) payload.source = updates.source;
+      if (updates.evidence !== undefined) payload.evidence = updates.evidence;
       if (updates.tags !== undefined) payload.tags = updates.tags;
 
       await axios.put(`${URL}/api/v1/memories/${memoryId}`, payload);

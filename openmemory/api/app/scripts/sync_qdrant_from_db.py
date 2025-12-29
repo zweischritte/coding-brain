@@ -83,7 +83,7 @@ def get_sqlite_memories(user_uuid: str):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, content, metadata, created_at, vault, layer, axis_vector
+        SELECT id, content, metadata, created_at
         FROM memories
         WHERE user_id = ? AND state = 'active'
     """, (user_uuid,))
@@ -103,9 +103,11 @@ def get_sqlite_memories(user_uuid: str):
             "content": row[1],
             "metadata": metadata,
             "created_at": row[3],
-            "vault": row[4],
-            "layer": row[5],
-            "axis_vector": row[6]
+            "category": metadata.get("category"),
+            "scope": metadata.get("scope"),
+            "artifact_type": metadata.get("artifact_type"),
+            "artifact_ref": metadata.get("artifact_ref"),
+            "entity": metadata.get("entity"),
         })
 
     conn.close()
@@ -142,12 +144,16 @@ def sync_memory_to_qdrant(memory: dict, user_id: str, dry_run: bool = False) -> 
 
         # Build metadata from stored fields
         metadata = memory.get("metadata", {}) or {}
-        if memory.get("vault"):
-            metadata["vault"] = memory["vault"]
-        if memory.get("layer"):
-            metadata["layer"] = memory["layer"]
-        if memory.get("axis_vector"):
-            metadata["axis_vector"] = memory["axis_vector"]
+        if memory.get("category"):
+            metadata["category"] = memory["category"]
+        if memory.get("scope"):
+            metadata["scope"] = memory["scope"]
+        if memory.get("artifact_type"):
+            metadata["artifact_type"] = memory["artifact_type"]
+        if memory.get("artifact_ref"):
+            metadata["artifact_ref"] = memory["artifact_ref"]
+        if memory.get("entity"):
+            metadata["entity"] = memory["entity"]
 
         # Use mem0's add method which handles embedding
         result = client.add(

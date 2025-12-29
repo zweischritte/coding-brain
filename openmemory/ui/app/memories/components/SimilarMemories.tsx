@@ -133,20 +133,20 @@ export function SimilarMemories({
               >
                 {Math.round(memory.similarity_score * 100)}% match
               </Badge>
-              {memory.vault && (
+              {memory.category && (
                 <Badge
                   variant="secondary"
                   className="text-xs bg-zinc-700 text-zinc-300"
                 >
-                  {memory.vault}
+                  {memory.category}
                 </Badge>
               )}
-              {memory.layer && (
+              {memory.scope && (
                 <Badge
                   variant="secondary"
                   className="text-xs bg-zinc-700 text-zinc-300"
                 >
-                  {memory.layer}
+                  {memory.scope}
                 </Badge>
               )}
             </div>

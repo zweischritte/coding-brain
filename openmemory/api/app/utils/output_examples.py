@@ -17,14 +17,19 @@ from app.utils.output_generator import (
 
 
 # Example 1: Integration with existing search
-async def example_search_function(query: str, entity: str = None, vault: str = None,
-                                   layer: str = None, limit: int = 10) -> List[Dict]:
+async def example_search_function(
+    query: str,
+    entity: str = None,
+    category: str = None,
+    scope: str = None,
+    limit: int = 10,
+) -> List[Dict]:
     """
     Mock search function - replace with actual MCP search_memory call.
 
     In production, this would be:
         from app.mcp_server import search_memory
-        return await search_memory(query=query, entity=entity, vault=vault, ...)
+        return await search_memory(query=query, entity=entity, category=category, scope=scope, ...)
     """
     # Simulate search results
     return [
@@ -33,6 +38,8 @@ async def example_search_function(query: str, entity: str = None, vault: str = N
             "memory": "BMG's revenue model is freemium with enterprise upsell. Free tier for individuals, paid for teams.",
             "score": 0.85,
             "entity": entity,
+            "category": category or "architecture",
+            "scope": scope or "project",
             "tags": {"source_type": "video", "confidence": 0.8},
             "created_at": "2025-01-15T10:30:00Z"
         },
@@ -41,6 +48,8 @@ async def example_search_function(query: str, entity: str = None, vault: str = N
             "memory": "Target customer segment: Technical founders at seed-stage startups needing structured decision-making tools.",
             "score": 0.78,
             "entity": entity,
+            "category": category or "glossary",
+            "scope": scope or "project",
             "tags": {"source_type": "document", "confidence": 0.7},
             "created_at": "2025-01-14T14:20:00Z"
         },
@@ -49,6 +58,8 @@ async def example_search_function(query: str, entity: str = None, vault: str = N
             "memory": "Key partnership opportunity with CloudFactory for enterprise distribution channel.",
             "score": 0.72,
             "entity": entity,
+            "category": category or "dependency",
+            "scope": scope or "project",
             "tags": {"source_type": "conversation", "confidence": 0.6},
             "created_at": "2025-01-13T09:15:00Z"
         }

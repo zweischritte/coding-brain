@@ -9,16 +9,14 @@ Namespace: All labels and relationship types use OM_ prefix to avoid clashing
 with Mem0's graph schema.
 
 Metadata Keys Supported:
-- vault: SOV, WLT, SIG, FRC, DIR, FGP, Q (and full names like SOVEREIGNTY_CORE)
-- layer: somatic, emotional, narrative, cognitive, values, identity, relational, goals, resources, context, temporal, meta
-- re: Reference entity (e.g., "BMG", "Grischa")
-- vector: say, want, do
-- circuit: 1-8
+- category: decision, convention, architecture, dependency, workflow, testing, security, performance, runbook, glossary
+- scope: session, user, team, project, org, enterprise
+- artifact_type: repo, service, module, component, api, db, infra, file
+- artifact_ref: string reference (path, service name, etc.)
+- entity: primary entity reference
+- evidence: Evidence items (string or list)
 - tags: Dict with arbitrary keys and bool/int/str/list/dict values
-- from/origin: Origin reference
-- ev: Evidence items (string or list)
-- was: Previous state text
-- src/source: user, inference
+- source: user, inference
 - source_app, mcp_client: App metadata
 """
 
@@ -32,13 +30,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_METADATA_RELATION_TYPES: List[str] = [
     "OM_ABOUT",
-    "OM_IN_VAULT",
-    "OM_IN_LAYER",
-    "OM_HAS_VECTOR",
-    "OM_IN_CIRCUIT",
+    "OM_IN_CATEGORY",
+    "OM_IN_SCOPE",
+    "OM_HAS_ARTIFACT_TYPE",
+    "OM_REFERENCES_ARTIFACT",
     "OM_TAGGED",
-    "OM_DERIVED_FROM",
-    "OM_EVIDENCE",
+    "OM_HAS_EVIDENCE",
     "OM_WRITTEN_VIA",
     "OM_RELATION",      # Entity-to-Entity typed relations (bruder_von, arbeitet_bei, etc.)
     "OM_CO_MENTIONED",  # Entity co-occurrence within same memory
@@ -49,7 +46,7 @@ DEFAULT_METADATA_RELATION_TYPES: List[str] = [
 class ProjectorConfig:
     """Configuration for the metadata projector."""
 
-    # Whether to create dimension nodes (vault, layer, etc.) or just store as properties
+    # Whether to create dimension nodes (category, scope, artifact, etc.) or just store as properties
     create_dimension_nodes: bool = True
 
     # Whether to store tag values on relationships
@@ -70,18 +67,15 @@ class MemoryMetadata:
     updated_at: Optional[str] = None
     state: Optional[str] = None
 
-    # AXIS structure
-    vault: Optional[str] = None
-    layer: Optional[str] = None
-    vector: Optional[str] = None
-    circuit: Optional[int] = None
-    axis_category: Optional[str] = None
+    # Dev-assistant schema
+    category: Optional[str] = None
+    scope: Optional[str] = None
+    artifact_type: Optional[str] = None
+    artifact_ref: Optional[str] = None
 
     # Relations
-    entity: Optional[str] = None  # from "re" key
-    origin: Optional[str] = None  # from "from" or "origin" key
-    evidence: List[str] = field(default_factory=list)  # from "ev" key
-    was: Optional[str] = None
+    entity: Optional[str] = None
+    evidence: List[str] = field(default_factory=list)
 
     # Source
     source: Optional[str] = None  # user or inference
@@ -98,32 +92,20 @@ class MemoryMetadata:
 
         Handles various edge cases:
         - Missing keys
-        - ev as string or list
-        - from vs origin
-        - src vs source
+        - evidence as string or list
         """
         metadata = data.get("metadata", data)
 
         # Handle evidence (can be string or list)
-        ev_raw = metadata.get("ev")
-        if ev_raw is None:
+        evidence_raw = metadata.get("evidence")
+        if evidence_raw is None:
             evidence = []
-        elif isinstance(ev_raw, str):
-            evidence = [ev_raw]
-        elif isinstance(ev_raw, list):
-            evidence = [str(e) for e in ev_raw if e]
+        elif isinstance(evidence_raw, str):
+            evidence = [evidence_raw]
+        elif isinstance(evidence_raw, list):
+            evidence = [str(e) for e in evidence_raw if e]
         else:
             evidence = []
-
-        # Handle circuit (can be string or int)
-        circuit_raw = metadata.get("circuit")
-        if circuit_raw is not None:
-            try:
-                circuit = int(circuit_raw)
-            except (ValueError, TypeError):
-                circuit = None
-        else:
-            circuit = None
 
         # Handle tags (can be dict or list)
         tags_raw = metadata.get("tags")
@@ -141,16 +123,13 @@ class MemoryMetadata:
             created_at=data.get("created_at") or metadata.get("created_at"),
             updated_at=data.get("updated_at") or metadata.get("updated_at"),
             state=data.get("state") or metadata.get("state"),
-            vault=metadata.get("vault"),
-            layer=metadata.get("layer"),
-            vector=metadata.get("vector"),
-            circuit=circuit,
-            axis_category=metadata.get("axis_category"),
-            entity=metadata.get("re"),
-            origin=metadata.get("from") or metadata.get("origin"),
+            category=metadata.get("category"),
+            scope=metadata.get("scope"),
+            artifact_type=metadata.get("artifact_type"),
+            artifact_ref=metadata.get("artifact_ref"),
+            entity=metadata.get("entity"),
             evidence=evidence,
-            was=metadata.get("was"),
-            source=metadata.get("src") or metadata.get("source"),
+            source=metadata.get("source") or metadata.get("src"),
             source_app=metadata.get("source_app"),
             mcp_client=metadata.get("mcp_client"),
             tags=tags,
@@ -169,7 +148,7 @@ class CypherBuilder:
 
         Naming convention (per Neo4j best practices):
         - Node labels: CamelCase (OM_Memory, OM_Entity)
-        - Relationship types: SNAKE_CASE (OM_ABOUT, OM_IN_VAULT)
+        - Relationship types: SNAKE_CASE (OM_ABOUT, OM_IN_CATEGORY)
         - Properties: camelCase (userId, createdAt, memoryIds)
         """
         return [
@@ -178,12 +157,11 @@ class CypherBuilder:
             # Composite unique on OM_Entity (userId + name)
             "CREATE CONSTRAINT om_entity_user_name IF NOT EXISTS FOR (e:OM_Entity) REQUIRE (e.userId, e.name) IS UNIQUE",
             # Unique constraints on dimension nodes
-            "CREATE CONSTRAINT om_vault_name IF NOT EXISTS FOR (v:OM_Vault) REQUIRE v.name IS UNIQUE",
-            "CREATE CONSTRAINT om_layer_name IF NOT EXISTS FOR (l:OM_Layer) REQUIRE l.name IS UNIQUE",
-            "CREATE CONSTRAINT om_vector_name IF NOT EXISTS FOR (v:OM_Vector) REQUIRE v.name IS UNIQUE",
-            "CREATE CONSTRAINT om_circuit_level IF NOT EXISTS FOR (c:OM_Circuit) REQUIRE c.level IS UNIQUE",
+            "CREATE CONSTRAINT om_category_name IF NOT EXISTS FOR (c:OM_Category) REQUIRE c.name IS UNIQUE",
+            "CREATE CONSTRAINT om_scope_name IF NOT EXISTS FOR (s:OM_Scope) REQUIRE s.name IS UNIQUE",
+            "CREATE CONSTRAINT om_artifact_type_name IF NOT EXISTS FOR (a:OM_ArtifactType) REQUIRE a.name IS UNIQUE",
+            "CREATE CONSTRAINT om_artifact_ref_name IF NOT EXISTS FOR (a:OM_ArtifactRef) REQUIRE a.name IS UNIQUE",
             "CREATE CONSTRAINT om_tag_key IF NOT EXISTS FOR (t:OM_Tag) REQUIRE t.key IS UNIQUE",
-            "CREATE CONSTRAINT om_origin_name IF NOT EXISTS FOR (o:OM_Origin) REQUIRE o.name IS UNIQUE",
             "CREATE CONSTRAINT om_evidence_name IF NOT EXISTS FOR (e:OM_Evidence) REQUIRE e.name IS UNIQUE",
             "CREATE CONSTRAINT om_app_name IF NOT EXISTS FOR (a:OM_App) REQUIRE a.name IS UNIQUE",
             # Index on userId for efficient filtering (camelCase per best practices)
@@ -204,10 +182,13 @@ class CypherBuilder:
             "CREATE INDEX om_relation_type IF NOT EXISTS FOR ()-[r:OM_RELATION]-() ON (r.type)",
             # Index on memory state for filtering active/deleted
             "CREATE INDEX om_memory_state IF NOT EXISTS FOR (m:OM_Memory) ON (m.state)",
-            # Index on vault for aggregation queries
-            "CREATE INDEX om_memory_vault IF NOT EXISTS FOR (m:OM_Memory) ON (m.vault)",
-            # Index on layer for aggregation queries
-            "CREATE INDEX om_memory_layer IF NOT EXISTS FOR (m:OM_Memory) ON (m.layer)",
+            # Index on category for aggregation queries
+            "CREATE INDEX om_memory_category IF NOT EXISTS FOR (m:OM_Memory) ON (m.category)",
+            # Index on scope for aggregation queries
+            "CREATE INDEX om_memory_scope IF NOT EXISTS FOR (m:OM_Memory) ON (m.scope)",
+            # Indexes for artifact filters
+            "CREATE INDEX om_memory_artifact_type IF NOT EXISTS FOR (m:OM_Memory) ON (m.artifactType)",
+            "CREATE INDEX om_memory_artifact_ref IF NOT EXISTS FOR (m:OM_Memory) ON (m.artifactRef)",
         ]
 
     @staticmethod
@@ -242,13 +223,12 @@ class CypherBuilder:
             m.createdAt = $createdAt,
             m.updatedAt = $updatedAt,
             m.state = $state,
-            m.vault = $vault,
-            m.layer = $layer,
-            m.vector = $vector,
-            m.circuit = $circuit,
-            m.axisCategory = $axisCategory,
+            m.category = $category,
+            m.scope = $scope,
+            m.artifactType = $artifactType,
+            m.artifactRef = $artifactRef,
+            m.entity = $entity,
             m.source = $source,
-            m.was = $was,
             m.projectedAt = datetime()
         RETURN m.id AS id
         """
@@ -265,39 +245,39 @@ class CypherBuilder:
         """
 
     @staticmethod
-    def vault_relation_query() -> str:
-        """Generate query to create vault relation."""
+    def category_relation_query() -> str:
+        """Generate query to create category relation."""
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MERGE (v:OM_Vault {name: $vaultName})
-        MERGE (m)-[:OM_IN_VAULT]->(v)
+        MERGE (c:OM_Category {name: $categoryName})
+        MERGE (m)-[:OM_IN_CATEGORY]->(c)
         """
 
     @staticmethod
-    def layer_relation_query() -> str:
-        """Generate query to create layer relation."""
+    def scope_relation_query() -> str:
+        """Generate query to create scope relation."""
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MERGE (l:OM_Layer {name: $layerName})
-        MERGE (m)-[:OM_IN_LAYER]->(l)
+        MERGE (s:OM_Scope {name: $scopeName})
+        MERGE (m)-[:OM_IN_SCOPE]->(s)
         """
 
     @staticmethod
-    def vector_relation_query() -> str:
-        """Generate query to create vector relation."""
+    def artifact_type_relation_query() -> str:
+        """Generate query to create artifact type relation."""
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MERGE (v:OM_Vector {name: $vectorName})
-        MERGE (m)-[:OM_HAS_VECTOR]->(v)
+        MERGE (a:OM_ArtifactType {name: $artifactType})
+        MERGE (m)-[:OM_HAS_ARTIFACT_TYPE]->(a)
         """
 
     @staticmethod
-    def circuit_relation_query() -> str:
-        """Generate query to create circuit relation."""
+    def artifact_ref_relation_query() -> str:
+        """Generate query to create artifact reference relation."""
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MERGE (c:OM_Circuit {level: $circuitLevel})
-        MERGE (m)-[:OM_IN_CIRCUIT]->(c)
+        MERGE (a:OM_ArtifactRef {name: $artifactRef})
+        MERGE (m)-[:OM_REFERENCES_ARTIFACT]->(a)
         """
 
     @staticmethod
@@ -308,15 +288,6 @@ class CypherBuilder:
         MERGE (t:OM_Tag {key: $tagKey})
         MERGE (m)-[r:OM_TAGGED]->(t)
         SET r.tagValue = $tagValue
-        """
-
-    @staticmethod
-    def origin_relation_query() -> str:
-        """Generate query to create origin relation."""
-        return """
-        MATCH (m:OM_Memory {id: $memoryId})
-        MERGE (o:OM_Origin {name: $originName})
-        MERGE (m)-[:OM_DERIVED_FROM]->(o)
         """
 
     @staticmethod
@@ -552,10 +523,10 @@ class CypherBuilder:
           AND node.state = 'active'
         RETURN node.id AS id,
                node.content AS content,
-               node.vault AS vault,
-               node.layer AS layer,
-               node.vector AS vector,
-               node.circuit AS circuit,
+               node.category AS category,
+               node.scope AS scope,
+               node.artifactType AS artifactType,
+               node.artifactRef AS artifactRef,
                node.createdAt AS createdAt,
                score AS searchScore
         ORDER BY score DESC
@@ -644,12 +615,11 @@ class CypherBuilder:
                labels(target)[0] AS targetLabel,
                CASE
                    WHEN target:OM_Entity THEN target.name
-                   WHEN target:OM_Vault THEN target.name
-                   WHEN target:OM_Layer THEN target.name
-                   WHEN target:OM_Vector THEN target.name
-                   WHEN target:OM_Circuit THEN target.level
+                   WHEN target:OM_Category THEN target.name
+                   WHEN target:OM_Scope THEN target.name
+                   WHEN target:OM_ArtifactType THEN target.name
+                   WHEN target:OM_ArtifactRef THEN target.name
                    WHEN target:OM_Tag THEN target.key
-                   WHEN target:OM_Origin THEN target.name
                    WHEN target:OM_Evidence THEN target.name
                    WHEN target:OM_App THEN target.name
                    ELSE null
@@ -753,13 +723,12 @@ class MetadataProjector:
                         "createdAt": metadata.created_at,
                         "updatedAt": metadata.updated_at,
                         "state": metadata.state,
-                        "vault": metadata.vault,
-                        "layer": metadata.layer,
-                        "vector": metadata.vector,
-                        "circuit": metadata.circuit,
-                        "axisCategory": metadata.axis_category,
+                        "category": metadata.category,
+                        "scope": metadata.scope,
+                        "artifactType": metadata.artifact_type,
+                        "artifactRef": metadata.artifact_ref,
+                        "entity": metadata.entity,
                         "source": metadata.source,
-                        "was": metadata.was,
                     }
                 )
 
@@ -776,39 +745,38 @@ class MetadataProjector:
                             }
                         )
 
-                    # Vault relation
-                    if metadata.vault:
+                    # Category relation
+                    if metadata.category:
                         session.run(
-                            CypherBuilder.vault_relation_query(),
-                            {"memoryId": metadata.id, "vaultName": metadata.vault}
+                            CypherBuilder.category_relation_query(),
+                            {"memoryId": metadata.id, "categoryName": metadata.category}
                         )
 
-                    # Layer relation
-                    if metadata.layer:
+                    # Scope relation
+                    if metadata.scope:
                         session.run(
-                            CypherBuilder.layer_relation_query(),
-                            {"memoryId": metadata.id, "layerName": metadata.layer}
+                            CypherBuilder.scope_relation_query(),
+                            {"memoryId": metadata.id, "scopeName": metadata.scope}
                         )
 
-                    # Vector relation
-                    if metadata.vector:
+                    # Artifact type relation
+                    if metadata.artifact_type:
                         session.run(
-                            CypherBuilder.vector_relation_query(),
-                            {"memoryId": metadata.id, "vectorName": metadata.vector}
+                            CypherBuilder.artifact_type_relation_query(),
+                            {
+                                "memoryId": metadata.id,
+                                "artifactType": metadata.artifact_type,
+                            }
                         )
 
-                    # Circuit relation
-                    if metadata.circuit is not None:
+                    # Artifact ref relation
+                    if metadata.artifact_ref:
                         session.run(
-                            CypherBuilder.circuit_relation_query(),
-                            {"memoryId": metadata.id, "circuitLevel": metadata.circuit}
-                        )
-
-                    # Origin relation
-                    if metadata.origin:
-                        session.run(
-                            CypherBuilder.origin_relation_query(),
-                            {"memoryId": metadata.id, "originName": metadata.origin}
+                            CypherBuilder.artifact_ref_relation_query(),
+                            {
+                                "memoryId": metadata.id,
+                                "artifactRef": metadata.artifact_ref,
+                            }
                         )
 
                     # Evidence relations
@@ -964,11 +932,11 @@ class MetadataProjector:
                        m.createdAt AS createdAt,
                        m.updatedAt AS updatedAt,
                        m.state AS state,
-                       m.vault AS vault,
-                       m.layer AS layer,
-                       m.vector AS vector,
-                       m.circuit AS circuit,
-                       m.axisCategory AS axisCategory,
+                       m.category AS category,
+                       m.scope AS scope,
+                       m.artifactType AS artifactType,
+                       m.artifactRef AS artifactRef,
+                       m.entity AS entity,
                        m.source AS source
                 LIMIT 1
                 """
@@ -988,11 +956,11 @@ class MetadataProjector:
                         "createdAt": record["createdAt"],
                         "updatedAt": record["updatedAt"],
                         "state": record["state"],
-                        "vault": record["vault"],
-                        "layer": record["layer"],
-                        "vector": record["vector"],
-                        "circuit": record["circuit"],
-                        "axisCategory": record["axisCategory"],
+                        "category": record["category"],
+                        "scope": record["scope"],
+                        "artifactType": record["artifactType"],
+                        "artifactRef": record["artifactRef"],
+                        "entity": record["entity"],
                         "source": record["source"],
                     }
                 return None
@@ -1012,7 +980,7 @@ class MetadataProjector:
         Find related memories by traversing metadata dimension nodes.
 
         A memory is "related" if it shares a dimension node with the seed
-        (e.g. same tag key, same entity, same vault, etc.).
+        (e.g. same tag key, same entity, same category, etc.).
 
         Args:
             memory_id: Seed memory UUID
@@ -1042,12 +1010,11 @@ class MetadataProjector:
                         targetLabel: labels(dim)[0],
                         targetValue: CASE
                             WHEN dim:OM_Entity THEN dim.name
-                            WHEN dim:OM_Vault THEN dim.name
-                            WHEN dim:OM_Layer THEN dim.name
-                            WHEN dim:OM_Vector THEN dim.name
-                            WHEN dim:OM_Circuit THEN dim.level
+                            WHEN dim:OM_Category THEN dim.name
+                            WHEN dim:OM_Scope THEN dim.name
+                            WHEN dim:OM_ArtifactType THEN dim.name
+                            WHEN dim:OM_ArtifactRef THEN dim.name
                             WHEN dim:OM_Tag THEN dim.key
-                            WHEN dim:OM_Origin THEN dim.name
                             WHEN dim:OM_Evidence THEN dim.name
                             WHEN dim:OM_App THEN dim.name
                             ELSE null
@@ -1061,11 +1028,11 @@ class MetadataProjector:
                        other.createdAt AS createdAt,
                        other.updatedAt AS updatedAt,
                        other.state AS state,
-                       other.vault AS vault,
-                       other.layer AS layer,
-                       other.vector AS vector,
-                       other.circuit AS circuit,
-                       other.axisCategory AS axisCategory,
+                       other.category AS category,
+                       other.scope AS scope,
+                       other.artifactType AS artifactType,
+                       other.artifactRef AS artifactRef,
+                       other.entity AS entity,
                        other.source AS source,
                        sharedRelations AS sharedRelations,
                        sharedCount AS sharedCount
@@ -1110,11 +1077,11 @@ class MetadataProjector:
                             "createdAt": record["createdAt"],
                             "updatedAt": record["updatedAt"],
                             "state": record["state"],
-                            "vault": record["vault"],
-                            "layer": record["layer"],
-                            "vector": record["vector"],
-                            "circuit": record["circuit"],
-                            "axisCategory": record["axisCategory"],
+                            "category": record["category"],
+                            "scope": record["scope"],
+                            "artifactType": record["artifactType"],
+                            "artifactRef": record["artifactRef"],
+                            "entity": record["entity"],
                             "source": record["source"],
                             "sharedRelations": normalized_shared,
                             "sharedCount": record["sharedCount"],
@@ -1139,7 +1106,7 @@ class MetadataProjector:
 
         Args:
             user_id: String user ID
-            group_by: One of vault, layer, tag, entity, app, vector, circuit, origin, evidence, source, state
+            group_by: One of category, scope, artifact_type, artifact_ref, tag, entity, app, evidence, source, state
             allowed_memory_ids: Optional allowlist of memory IDs (ACL)
             limit: Max buckets to return
 
@@ -1150,11 +1117,17 @@ class MetadataProjector:
         limit = max(1, min(int(limit or 20), 200))
 
         # Cypher fragments per aggregation type
-        if group_by == "vault":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_VAULT]->(d:OM_Vault)"
+        if group_by == "category":
+            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_CATEGORY]->(d:OM_Category)"
             key_expr = "d.name"
-        elif group_by == "layer":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_LAYER]->(d:OM_Layer)"
+        elif group_by == "scope":
+            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_SCOPE]->(d:OM_Scope)"
+            key_expr = "d.name"
+        elif group_by == "artifact_type":
+            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_HAS_ARTIFACT_TYPE]->(d:OM_ArtifactType)"
+            key_expr = "d.name"
+        elif group_by == "artifact_ref":
+            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_REFERENCES_ARTIFACT]->(d:OM_ArtifactRef)"
             key_expr = "d.name"
         elif group_by == "tag":
             match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_TAGGED]->(d:OM_Tag)"
@@ -1164,15 +1137,6 @@ class MetadataProjector:
             key_expr = "d.name"
         elif group_by == "app":
             match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_WRITTEN_VIA]->(d:OM_App)"
-            key_expr = "d.name"
-        elif group_by == "vector":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_HAS_VECTOR]->(d:OM_Vector)"
-            key_expr = "d.name"
-        elif group_by == "circuit":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_CIRCUIT]->(d:OM_Circuit)"
-            key_expr = "toString(d.level)"
-        elif group_by == "origin":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_DERIVED_FROM]->(d:OM_Origin)"
             key_expr = "d.name"
         elif group_by == "evidence":
             match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_HAS_EVIDENCE]->(d:OM_Evidence)"
@@ -1186,7 +1150,7 @@ class MetadataProjector:
         else:
             raise ValueError(
                 f"Unsupported group_by='{group_by}'. "
-                "Use one of: vault, layer, tag, entity, app, vector, circuit, origin, evidence, source, state."
+                "Use one of: category, scope, artifact_type, artifact_ref, tag, entity, app, evidence, source, state."
             )
 
         cypher = f"""
@@ -1565,20 +1529,19 @@ class MetadataProjector:
                     value: CASE
                       WHEN n:OM_Memory THEN n.id
                       WHEN n:OM_Entity THEN n.name
-                      WHEN n:OM_Vault THEN n.name
-                      WHEN n:OM_Layer THEN n.name
-                      WHEN n:OM_Vector THEN n.name
-                      WHEN n:OM_Circuit THEN toString(n.level)
+                      WHEN n:OM_Category THEN n.name
+                      WHEN n:OM_Scope THEN n.name
+                      WHEN n:OM_ArtifactType THEN n.name
+                      WHEN n:OM_ArtifactRef THEN n.name
                       WHEN n:OM_Tag THEN n.key
-                      WHEN n:OM_Origin THEN n.name
                       WHEN n:OM_Evidence THEN n.name
                       WHEN n:OM_App THEN n.name
                       ELSE null
                     END,
                     memoryId: CASE WHEN n:OM_Memory THEN n.id ELSE null END,
                     content: CASE WHEN n:OM_Memory THEN n.content ELSE null END,
-                    vault: CASE WHEN n:OM_Memory THEN n.vault ELSE null END,
-                    layer: CASE WHEN n:OM_Memory THEN n.layer ELSE null END
+                    category: CASE WHEN n:OM_Memory THEN n.category ELSE null END,
+                    scope: CASE WHEN n:OM_Memory THEN n.scope ELSE null END
                   }}] AS nodes,
                   [r IN relationships(p) | {{
                     type: type(r),
@@ -1658,10 +1621,10 @@ class MetadataProjector:
                     memories.append({
                         "id": record["id"],
                         "content": record["content"],
-                        "vault": record["vault"],
-                        "layer": record["layer"],
-                        "vector": record["vector"],
-                        "circuit": record["circuit"],
+                        "category": record["category"],
+                        "scope": record["scope"],
+                        "artifactType": record["artifactType"],
+                        "artifactRef": record["artifactRef"],
                         "createdAt": record["createdAt"],
                         "searchScore": record["searchScore"],
                     })

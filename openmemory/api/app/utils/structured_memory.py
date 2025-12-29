@@ -1,140 +1,123 @@
 """
-Structured Memory API Validation
+Structured Memory API Validation (Dev Assistant).
 
-Provides validation and building of structured memory parameters
-for the AXIS 3.4 protocol without embedded string parsing.
+Validates and builds structured memory metadata for the coding-brain system.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
-
-from app.utils.axis_tags import (
-    VAULT_CODES,
-    VAULT_TO_CATEGORY,
-    VALID_LAYERS,
-    VALID_VECTORS,
-    VALID_CIRCUITS,
-)
+from typing import Any, Dict, List, Optional, Tuple
 
 
 # =============================================================================
 # VALIDATION ERROR
 # =============================================================================
 
+
 class StructuredMemoryError(Exception):
     """Raised when structured memory parameters are invalid."""
-    pass
 
 
 # =============================================================================
 # CONSTANTS
 # =============================================================================
 
-VALID_VAULTS = list(VAULT_CODES.keys())
+VALID_CATEGORIES = [
+    "decision",
+    "convention",
+    "architecture",
+    "dependency",
+    "workflow",
+    "testing",
+    "security",
+    "performance",
+    "runbook",
+    "glossary",
+]
+
+VALID_SCOPES = [
+    "session",
+    "user",
+    "team",
+    "project",
+    "org",
+    "enterprise",
+]
+
+VALID_ARTIFACT_TYPES = [
+    "repo",
+    "service",
+    "module",
+    "component",
+    "api",
+    "db",
+    "infra",
+    "file",
+]
+
 VALID_SOURCES = ["user", "inference"]
+
+LEGACY_KEYS = {
+    "re",
+    "src",
+    "ev",
+    "from",
+    "was",
+}
 
 
 # =============================================================================
 # VALIDATION FUNCTIONS
 # =============================================================================
 
-def validate_vault(vault: str) -> str:
-    """
-    Validate vault code.
 
-    Args:
-        vault: Vault short code (SOV, WLT, SIG, FRC, DIR, FGP, Q)
+def _normalize_value(value: str) -> str:
+    if not isinstance(value, str):
+        raise StructuredMemoryError("Expected string value")
+    return value.strip()
 
-    Returns:
-        Validated vault code (uppercase)
 
-    Raises:
-        StructuredMemoryError: If vault is invalid
-    """
-    vault = vault.upper().strip()
-    if vault not in VALID_VAULTS:
+def validate_text(text: str) -> str:
+    """Validate memory text content."""
+    text = _normalize_value(text)
+    if not text:
+        raise StructuredMemoryError("Text cannot be empty")
+    return text
+
+
+def validate_category(category: str) -> str:
+    """Validate category name."""
+    category = _normalize_value(category).lower()
+    if category not in VALID_CATEGORIES:
         raise StructuredMemoryError(
-            f"Invalid vault '{vault}'. Must be one of: {', '.join(VALID_VAULTS)}"
+            f"Invalid category '{category}'. Must be one of: {', '.join(VALID_CATEGORIES)}"
         )
-    return vault
+    return category
 
 
-def validate_layer(layer: str) -> str:
-    """
-    Validate layer name.
-
-    Args:
-        layer: Layer name (somatic, emotional, narrative, etc.)
-
-    Returns:
-        Validated layer name (lowercase)
-
-    Raises:
-        StructuredMemoryError: If layer is invalid
-    """
-    layer = layer.lower().strip()
-    if layer not in VALID_LAYERS:
+def validate_scope(scope: str) -> str:
+    """Validate scope name."""
+    scope = _normalize_value(scope).lower()
+    if scope not in VALID_SCOPES:
         raise StructuredMemoryError(
-            f"Invalid layer '{layer}'. Must be one of: {', '.join(VALID_LAYERS)}"
+            f"Invalid scope '{scope}'. Must be one of: {', '.join(VALID_SCOPES)}"
         )
-    return layer
+    return scope
 
 
-def validate_circuit(circuit: int) -> int:
-    """
-    Validate circuit number.
-
-    Args:
-        circuit: Circuit number (1-8)
-
-    Returns:
-        Validated circuit number
-
-    Raises:
-        StructuredMemoryError: If circuit is invalid
-    """
-    if not isinstance(circuit, int) or circuit not in VALID_CIRCUITS:
+def validate_artifact_type(artifact_type: str) -> str:
+    """Validate artifact type."""
+    artifact_type = _normalize_value(artifact_type).lower()
+    if artifact_type not in VALID_ARTIFACT_TYPES:
         raise StructuredMemoryError(
-            f"Invalid circuit {circuit}. Must be integer 1-8"
+            f"Invalid artifact_type '{artifact_type}'. Must be one of: "
+            f"{', '.join(VALID_ARTIFACT_TYPES)}"
         )
-    return circuit
-
-
-def validate_vector(vector: str) -> str:
-    """
-    Validate vector type.
-
-    Args:
-        vector: Vector type (say, want, do)
-
-    Returns:
-        Validated vector (lowercase)
-
-    Raises:
-        StructuredMemoryError: If vector is invalid
-    """
-    vector = vector.lower().strip()
-    if vector not in VALID_VECTORS:
-        raise StructuredMemoryError(
-            f"Invalid vector '{vector}'. Must be one of: {', '.join(VALID_VECTORS)}"
-        )
-    return vector
+    return artifact_type
 
 
 def validate_source(source: str) -> str:
-    """
-    Validate source type.
-
-    Args:
-        source: Source type (user, inference)
-
-    Returns:
-        Validated source (lowercase)
-
-    Raises:
-        StructuredMemoryError: If source is invalid
-    """
-    source = source.lower().strip()
+    """Validate source type."""
+    source = _normalize_value(source).lower()
     if source not in VALID_SOURCES:
         raise StructuredMemoryError(
             f"Invalid source '{source}'. Must be one of: {', '.join(VALID_SOURCES)}"
@@ -142,120 +125,90 @@ def validate_source(source: str) -> str:
     return source
 
 
-def validate_text(text: str) -> str:
-    """
-    Validate memory text content.
-
-    Args:
-        text: Memory content
-
-    Returns:
-        Validated text (stripped)
-
-    Raises:
-        StructuredMemoryError: If text is empty
-    """
-    text = text.strip()
-    if not text:
-        raise StructuredMemoryError("Text cannot be empty")
-    return text
+def validate_artifact_ref(artifact_ref: str) -> str:
+    """Validate artifact ref."""
+    artifact_ref = _normalize_value(artifact_ref)
+    if not artifact_ref:
+        raise StructuredMemoryError("artifact_ref cannot be empty")
+    return artifact_ref
 
 
-def validate_tags(tags: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Validate tags dictionary.
-
-    Args:
-        tags: Dictionary of tags
-
-    Returns:
-        Validated tags dictionary
-
-    Raises:
-        StructuredMemoryError: If tags format is invalid
-    """
-    if not isinstance(tags, dict):
-        raise StructuredMemoryError("Tags must be a dictionary")
-
-    # Validate all keys are strings
-    for key in tags.keys():
-        if not isinstance(key, str):
-            raise StructuredMemoryError(f"Tag key must be string, got {type(key).__name__}")
-
-    return tags
+def validate_entity(entity: str) -> str:
+    """Validate entity string."""
+    entity = _normalize_value(entity)
+    if not entity:
+        raise StructuredMemoryError("entity cannot be empty")
+    return entity
 
 
 def validate_evidence(evidence: List[str]) -> List[str]:
-    """
-    Validate evidence list.
-
-    Args:
-        evidence: List of evidence strings
-
-    Returns:
-        Validated evidence list
-
-    Raises:
-        StructuredMemoryError: If evidence format is invalid
-    """
+    """Validate evidence list."""
     if not isinstance(evidence, list):
         raise StructuredMemoryError("Evidence must be a list")
-
+    cleaned = []
     for item in evidence:
         if not isinstance(item, str):
-            raise StructuredMemoryError(f"Evidence item must be string, got {type(item).__name__}")
+            raise StructuredMemoryError(
+                f"Evidence item must be string, got {type(item).__name__}"
+            )
+        cleaned_item = item.strip()
+        if cleaned_item:
+            cleaned.append(cleaned_item)
+    return cleaned
 
-    return evidence
+
+def validate_tags(tags: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate tags dictionary."""
+    if not isinstance(tags, dict):
+        raise StructuredMemoryError("Tags must be a dictionary")
+    for key in tags.keys():
+        if not isinstance(key, str):
+            raise StructuredMemoryError(
+                f"Tag key must be string, got {type(key).__name__}"
+            )
+    return tags
+
+
+def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop legacy keys and keep unknown extras."""
+    if not isinstance(metadata, dict):
+        raise StructuredMemoryError("metadata must be a dictionary")
+    return {k: v for k, v in metadata.items() if k not in LEGACY_KEYS}
 
 
 # =============================================================================
 # STRUCTURED MEMORY BUILDER
 # =============================================================================
 
+
 @dataclass
 class StructuredMemoryInput:
-    """
-    Validated structured memory input.
+    """Validated structured memory input."""
 
-    All fields are validated upon creation.
-    """
     text: str
-    vault: str
-    layer: str
-    vault_full: str = field(init=False)
-    axis_category: str = field(init=False)
+    category: str
+    scope: str
 
-    # Optional structure
-    circuit: Optional[int] = None
-    vector: Optional[str] = None
-
-    # Optional metadata
+    artifact_type: Optional[str] = None
+    artifact_ref: Optional[str] = None
     entity: Optional[str] = None
     source: str = "user"
-    was: Optional[str] = None
-    origin: Optional[str] = None
     evidence: Optional[List[str]] = None
-
-    # Optional tags
     tags: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
-        """Validate all fields after initialization."""
-        # Required fields
         self.text = validate_text(self.text)
-        self.vault = validate_vault(self.vault)
-        self.layer = validate_layer(self.layer)
+        self.category = validate_category(self.category)
+        self.scope = validate_scope(self.scope)
 
-        # Computed fields
-        self.vault_full = VAULT_CODES[self.vault]
-        self.axis_category = VAULT_TO_CATEGORY.get(self.vault_full, "personal")
+        if self.artifact_type is not None:
+            self.artifact_type = validate_artifact_type(self.artifact_type)
 
-        # Optional fields
-        if self.circuit is not None:
-            self.circuit = validate_circuit(self.circuit)
+        if self.artifact_ref is not None:
+            self.artifact_ref = validate_artifact_ref(self.artifact_ref)
 
-        if self.vector is not None:
-            self.vector = validate_vector(self.vector)
+        if self.entity is not None:
+            self.entity = validate_entity(self.entity)
 
         self.source = validate_source(self.source)
 
@@ -266,91 +219,51 @@ class StructuredMemoryInput:
             self.tags = validate_tags(self.tags)
 
     def to_metadata_dict(self) -> Dict[str, Any]:
-        """
-        Convert to flat metadata dictionary for storage.
-
-        Returns:
-            Dictionary suitable for database/vector store metadata
-        """
         result = {
-            "source": "axis_protocol",
-            "vault": self.vault_full,
-            "layer": self.layer,
-            "axis_category": self.axis_category,
-            "src": self.source,
+            "category": self.category,
+            "scope": self.scope,
+            "source": self.source,
         }
 
-        if self.circuit is not None:
-            result["circuit"] = self.circuit
-
-        if self.vector is not None:
-            result["vector"] = self.vector
-
+        if self.artifact_type is not None:
+            result["artifact_type"] = self.artifact_type
+        if self.artifact_ref is not None:
+            result["artifact_ref"] = self.artifact_ref
         if self.entity is not None:
-            result["re"] = self.entity
-
-        if self.was is not None:
-            result["was"] = self.was
-
-        if self.origin is not None:
-            result["from"] = self.origin
-
+            result["entity"] = self.entity
         if self.evidence is not None:
-            result["ev"] = self.evidence
-
+            result["evidence"] = self.evidence
         if self.tags:
             result["tags"] = self.tags
 
         return result
 
 
+# =============================================================================
+# API HELPERS
+# =============================================================================
+
+
 def build_structured_memory(
     text: str,
-    vault: str,
-    layer: str,
-    circuit: Optional[int] = None,
-    vector: Optional[str] = None,
+    category: str,
+    scope: str,
+    artifact_type: Optional[str] = None,
+    artifact_ref: Optional[str] = None,
     entity: Optional[str] = None,
     source: str = "user",
-    was: Optional[str] = None,
-    origin: Optional[str] = None,
     evidence: Optional[List[str]] = None,
     tags: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    """
-    Build and validate structured memory input.
-
-    This is the main entry point for the structured API.
-
-    Args:
-        text: Pure content, no markers
-        vault: SOV|WLT|SIG|FRC|DIR|FGP|Q
-        layer: somatic|emotional|narrative|cognitive|values|identity|relational|goals|resources|context|temporal|meta
-        circuit: 1-8 (optional)
-        vector: say|want|do (optional)
-        entity: Reference entity (optional)
-        source: user|inference (default: user)
-        was: Previous state (optional)
-        origin: Origin reference (optional)
-        evidence: Evidence list (optional)
-        tags: Dict with string keys (optional)
-
-    Returns:
-        Tuple of (clean_text, metadata_dict)
-
-    Raises:
-        StructuredMemoryError: If any parameter is invalid
-    """
+    """Build and validate structured memory input."""
     memory = StructuredMemoryInput(
         text=text,
-        vault=vault,
-        layer=layer,
-        circuit=circuit,
-        vector=vector,
+        category=category,
+        scope=scope,
+        artifact_type=artifact_type,
+        artifact_ref=artifact_ref,
         entity=entity,
         source=source,
-        was=was,
-        origin=origin,
         evidence=evidence,
         tags=tags,
     )
@@ -358,66 +271,74 @@ def build_structured_memory(
     return memory.text, memory.to_metadata_dict()
 
 
-# =============================================================================
-# UPDATE HELPERS
-# =============================================================================
+def normalize_metadata_for_create(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate metadata dict for create requests."""
+    metadata = sanitize_metadata(metadata)
+    category = metadata.get("category")
+    scope = metadata.get("scope")
+    if category is None or scope is None:
+        raise StructuredMemoryError("metadata must include 'category' and 'scope'")
+
+    validated = {
+        "category": validate_category(category),
+        "scope": validate_scope(scope),
+        "source": validate_source(metadata.get("source", "user")),
+    }
+
+    if metadata.get("artifact_type") is not None:
+        validated["artifact_type"] = validate_artifact_type(metadata["artifact_type"])
+
+    if metadata.get("artifact_ref") is not None:
+        validated["artifact_ref"] = validate_artifact_ref(metadata["artifact_ref"])
+
+    if metadata.get("entity") is not None:
+        validated["entity"] = validate_entity(metadata["entity"])
+
+    if metadata.get("evidence") is not None:
+        validated["evidence"] = validate_evidence(metadata["evidence"])
+
+    if metadata.get("tags") is not None:
+        validated["tags"] = validate_tags(metadata["tags"])
+
+    # Preserve extra metadata keys (minus legacy) to avoid data loss
+    extras = {
+        key: value
+        for key, value in metadata.items()
+        if key not in validated and key not in {"category", "scope", "source"}
+    }
+
+    return {**validated, **extras}
+
 
 def validate_update_fields(
-    text: Optional[str] = None,
-    vault: Optional[str] = None,
-    layer: Optional[str] = None,
-    circuit: Optional[int] = None,
-    vector: Optional[str] = None,
+    category: Optional[str] = None,
+    scope: Optional[str] = None,
+    artifact_type: Optional[str] = None,
+    artifact_ref: Optional[str] = None,
     entity: Optional[str] = None,
     source: Optional[str] = None,
-    was: Optional[str] = None,
-    origin: Optional[str] = None,
     evidence: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """
-    Validate fields for memory update.
+    """Validate fields for memory update."""
+    validated: Dict[str, Any] = {}
 
-    Only validates fields that are provided (not None).
+    if category is not None:
+        validated["category"] = validate_category(category)
 
-    Returns:
-        Dictionary of validated fields
+    if scope is not None:
+        validated["scope"] = validate_scope(scope)
 
-    Raises:
-        StructuredMemoryError: If any provided field is invalid
-    """
-    validated = {}
+    if artifact_type is not None:
+        validated["artifact_type"] = validate_artifact_type(artifact_type)
 
-    if text is not None:
-        validated["text"] = validate_text(text)
-
-    if vault is not None:
-        vault = validate_vault(vault)
-        validated["vault"] = vault
-        validated["vault_full"] = VAULT_CODES[vault]
-        validated["axis_category"] = VAULT_TO_CATEGORY.get(
-            validated["vault_full"], "personal"
-        )
-
-    if layer is not None:
-        validated["layer"] = validate_layer(layer)
-
-    if circuit is not None:
-        validated["circuit"] = validate_circuit(circuit)
-
-    if vector is not None:
-        validated["vector"] = validate_vector(vector)
+    if artifact_ref is not None:
+        validated["artifact_ref"] = validate_artifact_ref(artifact_ref)
 
     if entity is not None:
-        validated["entity"] = entity.strip()
+        validated["entity"] = validate_entity(entity)
 
     if source is not None:
         validated["source"] = validate_source(source)
-
-    if was is not None:
-        validated["was"] = was.strip()
-
-    if origin is not None:
-        validated["origin"] = origin.strip()
 
     if evidence is not None:
         validated["evidence"] = validate_evidence(evidence)
@@ -431,49 +352,20 @@ def apply_metadata_updates(
     add_tags: Optional[Dict[str, Any]] = None,
     remove_tags: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """
-    Apply validated updates to existing metadata.
+    """Apply validated updates to existing metadata."""
+    metadata = sanitize_metadata(current_metadata)
 
-    Args:
-        current_metadata: Existing metadata dict
-        validated_fields: Validated fields to update
-        add_tags: Tags to add/update
-        remove_tags: Tag keys to remove
+    for key, value in validated_fields.items():
+        metadata[key] = value
 
-    Returns:
-        Updated metadata dictionary
-    """
-    metadata = dict(current_metadata)
-
-    # Apply field updates
-    field_mapping = {
-        "vault_full": "vault",
-        "layer": "layer",
-        "circuit": "circuit",
-        "vector": "vector",
-        "entity": "re",
-        "source": "src",
-        "was": "was",
-        "origin": "from",
-        "evidence": "ev",
-        "axis_category": "axis_category",
-    }
-
-    for field_key, meta_key in field_mapping.items():
-        if field_key in validated_fields:
-            metadata[meta_key] = validated_fields[field_key]
-
-    # Handle tags
     current_tags = metadata.get("tags", {})
     if not isinstance(current_tags, dict):
         current_tags = {}
 
-    # Remove tags
     if remove_tags:
         for tag in remove_tags:
             current_tags.pop(tag, None)
 
-    # Add/update tags
     if add_tags:
         current_tags.update(add_tags)
 

@@ -2,7 +2,7 @@
 
 This repository now integrates **Neo4j** into **OpenMemory (mem0)** in two complementary ways:
 
-1) **Deterministic metadata graph** (`OM_*` namespace): projects your OpenMemory/Qdrant metadata (vault/layer/tags/etc.) into Neo4j as a queryable graph.
+1) **Deterministic metadata graph** (`OM_*` namespace): projects your OpenMemory/Qdrant metadata (category/scope/tags/artifacts/etc.) into Neo4j as a queryable graph.
 2) **Mem0 Graph Memory** (LLM‑extracted entity graph): builds **direct entity→entity relationships** from memory text using Mem0’s Graph Memory feature (stored as `:__Entity__` nodes when `base_label=true`).
 
 The vector store (**Qdrant**) remains the primary semantic index; Neo4j adds **structure, traversal, and graph context**.
@@ -145,7 +145,7 @@ Neo4j holds **two “subgraphs”** in the same database, separated by label/rel
 ### 5.1 Deterministic metadata graph (`OM_*`)
 
 Purpose:
-- translate **vector metadata** (vault/layer/tags/re/etc.) into **queryable relations**
+- translate **structured metadata** (category/scope/artifact_type/artifact_ref/entity/evidence/tags/source) into **queryable relations**
 - support deterministic traversal/aggregation from MCP tools
 
 Implementation:
@@ -156,30 +156,28 @@ Implementation:
 **Naming Conventions** (per Neo4j best practices)
 
 - Node labels: CamelCase (e.g., `OM_Memory`, `OM_Entity`)
-- Relationship types: SNAKE_CASE (e.g., `OM_ABOUT`, `OM_IN_VAULT`)
+- Relationship types: SNAKE_CASE (e.g., `OM_ABOUT`, `OM_IN_CATEGORY`)
 - Properties: camelCase (e.g., `userId`, `createdAt`, `memoryIds`)
 
 **Node labels**
 - `OM_Memory` (one per memory UUID)
-- `OM_Entity` (`metadata.re`)
-- `OM_Vault` (`metadata.vault`)
-- `OM_Layer` (`metadata.layer`)
-- `OM_Vector` (`metadata.vector`)
-- `OM_Circuit` (`metadata.circuit`)
+- `OM_Entity` (`metadata.entity`)
+- `OM_Category` (`metadata.category`)
+- `OM_Scope` (`metadata.scope`)
+- `OM_ArtifactType` (`metadata.artifact_type`)
+- `OM_ArtifactRef` (`metadata.artifact_ref`)
 - `OM_Tag` (`metadata.tags` keys)
-- `OM_Origin` (`metadata.from` / `metadata.origin`)
-- `OM_Evidence` (`metadata.ev`)
+- `OM_Evidence` (`metadata.evidence`)
 - `OM_App` (`metadata.source_app`, `metadata.mcp_client`)
 
 **Relationship types**
 - `(OM_Memory)-[:OM_ABOUT]->(OM_Entity)`
-- `(OM_Memory)-[:OM_IN_VAULT]->(OM_Vault)`
-- `(OM_Memory)-[:OM_IN_LAYER]->(OM_Layer)`
-- `(OM_Memory)-[:OM_HAS_VECTOR]->(OM_Vector)`
-- `(OM_Memory)-[:OM_IN_CIRCUIT]->(OM_Circuit)`
+- `(OM_Memory)-[:OM_IN_CATEGORY]->(OM_Category)`
+- `(OM_Memory)-[:OM_IN_SCOPE]->(OM_Scope)`
+- `(OM_Memory)-[:OM_HAS_ARTIFACT_TYPE]->(OM_ArtifactType)`
+- `(OM_Memory)-[:OM_REFERENCES_ARTIFACT]->(OM_ArtifactRef)`
 - `(OM_Memory)-[:OM_TAGGED {tagValue: <serialized> }]->(OM_Tag)`
-- `(OM_Memory)-[:OM_DERIVED_FROM]->(OM_Origin)`
-- `(OM_Memory)-[:OM_EVIDENCE]->(OM_Evidence)`
+- `(OM_Memory)-[:OM_HAS_EVIDENCE]->(OM_Evidence)`
 - `(OM_Memory)-[:OM_WRITTEN_VIA]->(OM_App)`
 
 **Enhanced Semantic Connection Edges** (materialized graph edges for fast traversal)
@@ -288,14 +286,14 @@ Response shapes (high level):
 These tools query the deterministic `OM_*` graph (no LLM):
 
 - `graph_related_memories(memory_id, via?, limit?)`
-  - “Find memories that share tags/entities/vault/layer/etc. with a seed memory.”
+  - “Find memories that share tags/entities/category/scope/artifact_type/artifact_ref/etc. with a seed memory.”
 
 - `graph_subgraph(memory_id, depth?, via?, related_limit?)`
   - Returns a small JSON subgraph around a memory (memory + dimension nodes + optionally related memories).
   - **Token Optimization:** The `related[]` array contains only non-redundant fields (`id`, `sharedCount`, `sharedRelations`). Full memory content and metadata are available in the `nodes[]` array, avoiding ~23% token overhead from content duplication.
 
 - `graph_aggregate(group_by, limit?)`
-  - Aggregates memories by `vault|layer|tag|entity|app|vector|circuit|origin|evidence|source|state`.
+  - Aggregates memories by `category|scope|artifact_type|artifact_ref|tag|entity|app|evidence|source|state`.
 
 - `graph_tag_cooccurrence(limit?, min_count?, sample_size?)`
   - Returns tag pairs that frequently co-occur across memories.
@@ -312,7 +310,7 @@ These tools query the pre-computed `OM_SIMILAR`, `OM_CO_MENTIONED`, and `OM_COOC
 - `graph_similar_memories(memory_id, min_score?, limit?)`
   - Get semantically similar memories via pre-computed `OM_SIMILAR` edges
   - O(1) graph lookup — no embedding computation at query time
-  - Returns: `[{id, content, vault, layer, similarity_score, rank}, ...]`
+  - Returns: `[{id, content, category, scope, artifact_type, artifact_ref, similarity_score, rank}, ...]`
 
 - `graph_entity_network(entity_name, min_count?, limit?)`
   - Get entities that co-occur with a given entity via `OM_CO_MENTIONED` edges
@@ -784,7 +782,7 @@ This makes Mem0 Graph Memory ingestion robust against noisy LLM outputs.
 - Use the deterministic graph tools:
   - `graph_subgraph(memory_id=...)`
   - `graph_related_memories(memory_id=..., via="tag,entity")`
-  - `graph_aggregate(group_by="vault")`
+  - `graph_aggregate(group_by="category")`
 
 ### 10.2 Via Neo4j (cypher-shell)
 
@@ -897,7 +895,7 @@ This section documents how OpenMemory's Neo4j integration follows industry best 
 
 **Naming Conventions** (strictly followed):
 - Node labels: CamelCase (`OM_Memory`, `OM_Entity`)
-- Relationship types: SNAKE_CASE (`OM_ABOUT`, `OM_IN_VAULT`)
+- Relationship types: SNAKE_CASE (`OM_ABOUT`, `OM_IN_CATEGORY`)
 - Properties: camelCase (`userId`, `createdAt`, `memoryIds`)
 
 **Query-First Design**:
@@ -909,23 +907,22 @@ The graph schema is designed around common query patterns:
 
 **Dimension Nodes (Fan-Out Pattern)**:
 Rather than storing metadata as properties, shared values become dimension nodes:
-- `OM_Vault`, `OM_Layer`, `OM_Vector`, `OM_Circuit` — AXIS taxonomy dimensions
-- `OM_Entity`, `OM_Tag`, `OM_Origin` — semantic classification nodes
+- `OM_Category`, `OM_Scope`, `OM_ArtifactType`, `OM_ArtifactRef` — structured metadata dimensions
+- `OM_Entity`, `OM_Tag` — semantic classification nodes
 
 This enables efficient aggregations and multi-hop traversals.
 
 ### 13.2 Semantic Graph Structures
 
-**Ontology Integration**:
-The AXIS taxonomy (Vault/Layer/Vector/Circuit) creates a hierarchical semantic structure:
-- Vault: Domain/sovereignty classification (SOV, WLT, SIG, FRC, DIR, FGP, Q)
-- Layer: Processing depth (somatic → meta, 12 levels)
-- Vector: Behavioral dimension (say, want, do)
-- Circuit: Energy/integration level (1-8)
+**Schema Integration**:
+The dev-assistant schema encodes structured metadata for retrieval and analysis:
+- Category: decision, convention, architecture, dependency, workflow, testing, security, performance, runbook, glossary
+- Scope: session, user, team, project, org, enterprise
+- Artifact type/ref: repo/service/module/component/api/db/infra/file + identifier/path
 
 **Knowledge Graph Patterns**:
 ```
-Memory → [dimensions] → Vault/Layer/etc.  # Classification
+Memory → [dimensions] → Category/Scope/Artifact  # Classification
 Memory → OM_ABOUT → Entity                 # Entity extraction
 Entity → OM_CO_MENTIONED → Entity          # Relationship inference
 Memory → OM_SIMILAR → Memory               # Semantic similarity
@@ -935,8 +932,9 @@ Tag → OM_COOCCURS → Tag                    # Statistical patterns
 **Relationship Semantics**:
 All relationship types are specific and meaningful:
 - `OM_ABOUT`: Memory mentions/references entity
-- `OM_IN_VAULT`, `OM_IN_LAYER`: Hierarchical classification
-- `OM_DERIVED_FROM`: Provenance tracking
+- `OM_IN_CATEGORY`, `OM_IN_SCOPE`: Classification
+- `OM_HAS_ARTIFACT_TYPE`, `OM_REFERENCES_ARTIFACT`: Artifact linkage
+- `OM_HAS_EVIDENCE`: Evidence linkage
 - `OM_CO_MENTIONED`: Statistical co-occurrence with count
 - `OM_SIMILAR`: Semantic similarity with score
 
@@ -1060,10 +1058,10 @@ YIELD nodeId, embedding
 
 For category-based inference:
 ```cypher
-// Vault hierarchy with inference
-(subVault)-[:IS_A]->(parentVault)
+// Category hierarchy with inference
+(subCategory)-[:IS_A]->(parentCategory)
 // Query: Find all memories in parent category (transitive)
-MATCH (m:OM_Memory)-[:OM_IN_VAULT]->(v)-[:IS_A*0..]->(parent:OM_Vault {name: $vaultName})
+MATCH (m:OM_Memory)-[:OM_IN_CATEGORY]->(c)-[:IS_A*0..]->(parent:OM_Category {name: $categoryName})
 ```
 
 ### 14.4 Graph Algorithms for Analysis
@@ -1097,14 +1095,13 @@ YIELD node, score
 
 | Label | Properties | Unique Constraint | Description |
 |-------|-----------|-------------------|-------------|
-| `OM_Memory` | id, userId, content, createdAt, updatedAt, state, vault, layer, vector, circuit, axisCategory, source, was, projectedAt | id | Core memory node |
+| `OM_Memory` | id, userId, content, createdAt, updatedAt, state, category, scope, artifactType, artifactRef, entity, source, projectedAt | id | Core memory node |
 | `OM_Entity` | userId, name | (userId, name) | Referenced entities |
-| `OM_Vault` | name | name | AXIS vault dimension |
-| `OM_Layer` | name | name | AXIS layer dimension |
-| `OM_Vector` | name | name | AXIS vector dimension |
-| `OM_Circuit` | level | level | AXIS circuit level |
+| `OM_Category` | name | name | Category dimension |
+| `OM_Scope` | name | name | Scope dimension |
+| `OM_ArtifactType` | name | name | Artifact type |
+| `OM_ArtifactRef` | name | name | Artifact reference |
 | `OM_Tag` | key | key | Tag keys |
-| `OM_Origin` | name | name | Origin sources |
 | `OM_Evidence` | name | name | Evidence items |
 | `OM_App` | name | name | Application sources |
 | `OM_TemporalEvent` | userId, name, eventType, startDate, endDate, description, memoryIds, createdAt, updatedAt | (userId, name) | Biographical timeline events |
@@ -1114,12 +1111,11 @@ YIELD node, score
 | Type | Source | Target | Properties | Description |
 |------|--------|--------|------------|-------------|
 | `OM_ABOUT` | OM_Memory | OM_Entity | — | Memory references entity |
-| `OM_IN_VAULT` | OM_Memory | OM_Vault | — | Memory in vault |
-| `OM_IN_LAYER` | OM_Memory | OM_Layer | — | Memory at layer |
-| `OM_HAS_VECTOR` | OM_Memory | OM_Vector | — | Memory has vector |
-| `OM_IN_CIRCUIT` | OM_Memory | OM_Circuit | — | Memory at circuit |
+| `OM_IN_CATEGORY` | OM_Memory | OM_Category | — | Memory in category |
+| `OM_IN_SCOPE` | OM_Memory | OM_Scope | — | Memory in scope |
+| `OM_HAS_ARTIFACT_TYPE` | OM_Memory | OM_ArtifactType | — | Memory has artifact type |
+| `OM_REFERENCES_ARTIFACT` | OM_Memory | OM_ArtifactRef | — | Memory references artifact |
 | `OM_TAGGED` | OM_Memory | OM_Tag | tagValue | Tagged with value |
-| `OM_DERIVED_FROM` | OM_Memory | OM_Origin | — | Origin tracking |
 | `OM_HAS_EVIDENCE` | OM_Memory | OM_Evidence | — | Evidence link |
 | `OM_WRITTEN_VIA` | OM_Memory | OM_App | — | App source |
 | `OM_SIMILAR` | OM_Memory | OM_Memory | userId, score, rank, createdAt, updatedAt | Semantic similarity |
@@ -1331,7 +1327,7 @@ Never finds pairs because there's only ever one `OM_ABOUT` edge per memory.
 
 **Symptoms:**
 - `graph_entity_network(entity_name="BMG")` returns empty results
-- `graph_path_between_entities(entity_a="BMG", entity_b="Matthias")` finds only structural paths (shared layer/vault/app) — not semantic relationships
+- `graph_path_between_entities(entity_a="BMG", entity_b="Matthias")` finds only structural paths (shared category/scope/artifact/app) — not semantic relationships
 - Backfill creates 0 edges
 
 ### The Solution: Leverage Mem0 Graph Memory

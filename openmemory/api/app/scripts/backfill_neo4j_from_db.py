@@ -157,10 +157,6 @@ def backfill_from_db(
 
                 try:
                     metadata = dict(m.metadata_ or {})
-                    # Ensure key AXIS fields exist even if older records have them only in indexed columns.
-                    metadata.setdefault("vault", m.vault)
-                    metadata.setdefault("layer", m.layer)
-                    metadata.setdefault("vector", m.axis_vector)
 
                     data = {
                         "content": m.content,
@@ -175,12 +171,12 @@ def backfill_from_db(
                     if dry_run:
                         stats.skipped += 1
                         logger.info(
-                            "[DRY RUN] %s user=%s state=%s vault=%s layer=%s tags=%d",
+                            "[DRY RUN] %s user=%s state=%s category=%s scope=%s tags=%d",
                             memory_id,
                             u.user_id,
                             data["state"],
-                            mm.vault,
-                            mm.layer,
+                            mm.category,
+                            mm.scope,
                             len(mm.tags or {}),
                         )
                         continue
@@ -189,12 +185,12 @@ def backfill_from_db(
                     if ok:
                         stats.processed += 1
                         logger.info(
-                            "OK %s user=%s state=%s vault=%s layer=%s tags=%d",
+                            "OK %s user=%s state=%s category=%s scope=%s tags=%d",
                             memory_id,
                             u.user_id,
                             data["state"],
-                            mm.vault,
-                            mm.layer,
+                            mm.category,
+                            mm.scope,
                             len(mm.tags or {}),
                         )
                     else:
@@ -253,4 +249,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

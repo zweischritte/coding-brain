@@ -213,8 +213,8 @@ export default function EntityPage() {
               <TableHeader>
                 <TableRow className="border-zinc-800 hover:bg-transparent">
                   <TableHead className="text-zinc-400">Content</TableHead>
-                  <TableHead className="text-zinc-400 w-[100px]">Vault</TableHead>
-                  <TableHead className="text-zinc-400 w-[100px]">Layer</TableHead>
+                  <TableHead className="text-zinc-400 w-[120px]">Category</TableHead>
+                  <TableHead className="text-zinc-400 w-[120px]">Scope</TableHead>
                   <TableHead className="text-zinc-400 w-[100px]">Entities</TableHead>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
@@ -230,22 +230,22 @@ export default function EntityPage() {
                       <p className="line-clamp-2">{memory.content}</p>
                     </TableCell>
                     <TableCell>
-                      {memory.vault && (
+                      {memory.category && (
                         <Badge
                           variant="secondary"
                           className="bg-zinc-800 text-zinc-300 border border-zinc-700"
                         >
-                          {memory.vault}
+                          {memory.category}
                         </Badge>
                       )}
                     </TableCell>
                     <TableCell>
-                      {memory.layer && (
+                      {memory.scope && (
                         <Badge
                           variant="secondary"
                           className="bg-zinc-800 text-zinc-300 border border-zinc-700"
                         >
-                          {memory.layer}
+                          {memory.scope}
                         </Badge>
                       )}
                     </TableCell>

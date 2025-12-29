@@ -90,7 +90,7 @@ def get_sqlite_memories(user_uuid: str) -> List[Dict[str, Any]]:
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, content, metadata, created_at, vault, layer, axis_vector
+        SELECT id, content, metadata, created_at
         FROM memories
         WHERE user_id = ? AND state = 'active'
     """, (user_uuid,))
@@ -110,9 +110,11 @@ def get_sqlite_memories(user_uuid: str) -> List[Dict[str, Any]]:
             "content": row[1],
             "metadata": metadata,
             "created_at": row[3],
-            "vault": row[4],
-            "layer": row[5],
-            "axis_vector": row[6]
+            "category": metadata.get("category"),
+            "scope": metadata.get("scope"),
+            "artifact_type": metadata.get("artifact_type"),
+            "artifact_ref": metadata.get("artifact_ref"),
+            "entity": metadata.get("entity"),
         })
 
     conn.close()
@@ -165,18 +167,32 @@ def build_payload(memory: Dict, user_id: str) -> Dict:
     }
 
     # Copy metadata fields
-    for key in ["source_app", "mcp_client", "source", "vault", "layer",
-                "axis_category", "src", "re", "tags", "circuit"]:
+    for key in [
+        "source_app",
+        "mcp_client",
+        "source",
+        "category",
+        "scope",
+        "artifact_type",
+        "artifact_ref",
+        "entity",
+        "evidence",
+        "tags",
+    ]:
         if key in metadata:
             payload[key] = metadata[key]
 
     # Override with top-level fields if present
-    if memory.get("vault"):
-        payload["vault"] = memory["vault"]
-    if memory.get("layer"):
-        payload["layer"] = memory["layer"]
-    if memory.get("axis_vector"):
-        payload["axis_vector"] = memory["axis_vector"]
+    if memory.get("category"):
+        payload["category"] = memory["category"]
+    if memory.get("scope"):
+        payload["scope"] = memory["scope"]
+    if memory.get("artifact_type"):
+        payload["artifact_type"] = memory["artifact_type"]
+    if memory.get("artifact_ref"):
+        payload["artifact_ref"] = memory["artifact_ref"]
+    if memory.get("entity"):
+        payload["entity"] = memory["entity"]
 
     return payload
 

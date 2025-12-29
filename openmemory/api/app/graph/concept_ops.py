@@ -76,7 +76,7 @@ def extract_and_store_concepts(
     memory_id: str,
     user_id: str,
     content: str,
-    vault: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Extract business concepts from memory content and store in graph.
@@ -91,7 +91,7 @@ def extract_and_store_concepts(
         memory_id: UUID of the memory
         user_id: User ID for scoping
         content: Memory content to extract from
-        vault: Optional vault for concept scoping
+        category: Optional category for concept scoping
 
     Returns:
         Dict with extraction results:
@@ -158,7 +158,7 @@ def extract_and_store_concepts(
                     name=concept.concept,
                     concept_type=concept.type,
                     confidence=concept.confidence,
-                    vault=vault,
+                    category=category,
                     summary=None,
                     source_type=concept.source_type,
                     evidence_count=len(concept.evidence),
@@ -215,7 +215,7 @@ def extract_concepts_batch(
     Extract concepts from multiple memories in batch.
 
     Args:
-        memories: List of dicts with 'id', 'content', and optional 'vault'
+        memories: List of dicts with 'id', 'content', and optional 'category'
         user_id: User ID for scoping
 
     Returns:
@@ -234,7 +234,7 @@ def extract_concepts_batch(
     for memory in memories:
         memory_id = memory.get("id")
         content = memory.get("content")
-        vault = memory.get("vault")
+        category = memory.get("category")
 
         if not memory_id or not content:
             results["errors"] += 1
@@ -244,7 +244,7 @@ def extract_concepts_batch(
             memory_id=memory_id,
             user_id=user_id,
             content=content,
-            vault=vault,
+            category=category,
         )
 
         if "error" in extraction:
@@ -298,7 +298,7 @@ def get_concept(
 
 def list_concepts(
     user_id: str,
-    vault: Optional[str] = None,
+    category: Optional[str] = None,
     concept_type: Optional[str] = None,
     min_confidence: Optional[float] = None,
     limit: int = 50,
@@ -309,7 +309,7 @@ def list_concepts(
 
     Args:
         user_id: User ID for scoping
-        vault: Optional vault filter
+        category: Optional category filter
         concept_type: Optional type filter
         min_confidence: Optional minimum confidence filter
         limit: Maximum results (default 50)
@@ -330,7 +330,7 @@ def list_concepts(
 
         return projector.list_concepts(
             user_id=user_id,
-            vault=vault,
+            category=category,
             concept_type=concept_type,
             min_confidence=min_confidence,
             limit=limit,
@@ -684,7 +684,7 @@ def get_concept_network(
                     data: {
                         confidence: c.confidence,
                         conceptType: c.type,
-                        vault: c.vault
+                        category: c.category
                     }
                 })[0..$limit] AS conceptNodes,
                 COLLECT(DISTINCT CASE WHEN other IS NOT NULL THEN {
@@ -825,7 +825,7 @@ def search_concepts(
                 node.name AS name,
                 node.type AS type,
                 node.confidence AS confidence,
-                node.vault AS vault,
+                node.category AS category,
                 node.summary AS summary,
                 score AS searchScore
             ORDER BY score DESC
@@ -847,7 +847,7 @@ def search_concepts(
                     "name": record["name"],
                     "type": record["type"],
                     "confidence": record["confidence"],
-                    "vault": record["vault"],
+                    "category": record["category"],
                     "summary": record["summary"],
                     "searchScore": record["searchScore"],
                 })
@@ -1000,7 +1000,7 @@ def semantic_search_concepts(
                 "id": concept_id,
                 "name": name,
                 "type": vr.get("type"),
-                "vault": vr.get("vault"),
+                "category": vr.get("category"),
                 "similarityScore": vr.get("score", 0),
             })
 

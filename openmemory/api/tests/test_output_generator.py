@@ -24,8 +24,8 @@ from app.utils.output_generator import (
 async def mock_search(
     query: str,
     entity: str = None,
-    vault: str = None,
-    layer: str = None,
+    category: str = None,
+    scope: str = None,
     limit: int = 10
 ) -> List[Dict]:
     """Mock search function that returns sample memories based on query."""

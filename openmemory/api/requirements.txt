@@ -25,6 +25,7 @@ rank-bm25>=0.2.2
 rapidfuzz>=3.0.0
 # JWT/OAuth2 authentication
 python-jose[cryptography]>=3.3.0
+redis>=5.0.0,<6.0.0
 
 # Phase 6: Operability and Resilience
 circuitbreaker>=2.0.0

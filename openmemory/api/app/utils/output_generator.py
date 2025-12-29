@@ -143,7 +143,7 @@ class OutputGenerator(ABC):
 
         Args:
             search_fn: Async function to search memories
-                       signature: (query, entity, vault, layer, limit) -> List[memory_dicts]
+                       signature: (query, entity, category, scope, limit) -> List[memory_dicts]
             graph_query_fn: Optional async function to run graph queries
                            signature: (cypher_query, params) -> List[result_dicts]
         """
@@ -159,8 +159,8 @@ class OutputGenerator(ABC):
         self,
         query: str,
         entity: str,
-        vault: Optional[str] = None,
-        layer: Optional[str] = None,
+        category: Optional[str] = None,
+        scope: Optional[str] = None,
         limit: int = 10
     ) -> Tuple[List[Dict], float]:
         """
@@ -173,8 +173,8 @@ class OutputGenerator(ABC):
             results = await self.search(
                 query=query,
                 entity=entity,
-                vault=vault,
-                layer=layer,
+                category=category,
+                scope=scope,
                 limit=limit
             )
 
@@ -237,49 +237,31 @@ class BusinessModelCanvasGenerator(OutputGenerator):
 
     BMC_SECTIONS = {
         "value_propositions": {
-            "query": "value proposition customer benefit problem solving unique",
-            "vault": "WLT",
-            "layer": "goals"
+            "query": "value proposition customer benefit problem solving unique"
         },
         "customer_segments": {
-            "query": "customer segment target audience persona user type",
-            "vault": "WLT",
-            "layer": "relational"
+            "query": "customer segment target audience persona user type"
         },
         "channels": {
-            "query": "channel distribution sales marketing reach customer acquisition",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "channel distribution sales marketing reach customer acquisition"
         },
         "customer_relationships": {
-            "query": "customer relationship retention engagement support interaction",
-            "vault": "WLT",
-            "layer": "relational"
+            "query": "customer relationship retention engagement support interaction"
         },
         "revenue_streams": {
-            "query": "revenue pricing monetization income business model payment",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "revenue pricing monetization income business model payment"
         },
         "key_resources": {
-            "query": "key resource asset capability infrastructure technology team",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "key resource asset capability infrastructure technology team"
         },
         "key_activities": {
-            "query": "key activity operation process core function execution",
-            "vault": "WLT",
-            "layer": "goals"
+            "query": "key activity operation process core function execution"
         },
         "key_partnerships": {
-            "query": "partner partnership strategic alliance vendor supplier ecosystem",
-            "vault": "WLT",
-            "layer": "relational"
+            "query": "partner partnership strategic alliance vendor supplier ecosystem"
         },
         "cost_structure": {
-            "query": "cost expense structure budget burn rate economics",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "cost expense structure budget burn rate economics"
         }
     }
 
@@ -295,8 +277,8 @@ class BusinessModelCanvasGenerator(OutputGenerator):
             memories, confidence = await self._query_section(
                 query=config["query"],
                 entity=entity,
-                vault=config.get("vault"),
-                layer=config.get("layer"),
+                category=config.get("category"),
+                scope=config.get("scope"),
                 limit=10
             )
 
@@ -416,54 +398,34 @@ class LeanCanvasGenerator(OutputGenerator):
 
     LEAN_SECTIONS = {
         "problem": {
-            "query": "problem pain point challenge issue customer struggle",
-            "vault": "WLT",
-            "layer": "cognitive"
+            "query": "problem pain point challenge issue customer struggle"
         },
         "solution": {
-            "query": "solution approach product feature capability answer",
-            "vault": "WLT",
-            "layer": "goals"
+            "query": "solution approach product feature capability answer"
         },
         "unique_value_proposition": {
-            "query": "unique value proposition differentiation competitive advantage why us",
-            "vault": "WLT",
-            "layer": "identity"
+            "query": "unique value proposition differentiation competitive advantage why us"
         },
         "unfair_advantage": {
-            "query": "unfair advantage moat barrier to entry secret sauce unique asset",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "unfair advantage moat barrier to entry secret sauce unique asset"
         },
         "customer_segments": {
-            "query": "customer segment early adopter target market persona",
-            "vault": "WLT",
-            "layer": "relational"
+            "query": "customer segment early adopter target market persona"
         },
         "existing_alternatives": {
-            "query": "alternative competitor current solution existing approach",
-            "vault": "WLT",
-            "layer": "context"
+            "query": "alternative competitor current solution existing approach"
         },
         "key_metrics": {
-            "query": "metric KPI measure success indicator performance",
-            "vault": "WLT",
-            "layer": "goals"
+            "query": "metric KPI measure success indicator performance"
         },
         "channels": {
-            "query": "channel distribution go-to-market reach customer acquisition",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "channel distribution go-to-market reach customer acquisition"
         },
         "cost_structure": {
-            "query": "cost expense fixed variable CAC burn rate",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "cost expense fixed variable CAC burn rate"
         },
         "revenue_streams": {
-            "query": "revenue pricing LTV monetization business model",
-            "vault": "WLT",
-            "layer": "resources"
+            "query": "revenue pricing LTV monetization business model"
         }
     }
 
@@ -477,8 +439,8 @@ class LeanCanvasGenerator(OutputGenerator):
             memories, confidence = await self._query_section(
                 query=config["query"],
                 entity=entity,
-                vault=config.get("vault"),
-                layer=config.get("layer")
+                category=config.get("category"),
+                scope=config.get("scope")
             )
 
             # For Lean Canvas, we want concise bullet points
@@ -559,37 +521,37 @@ class StrategyOnePagerGenerator(OutputGenerator):
         # Core insight (highest confidence memories)
         core_memories, core_conf = await self._query_section(
             "core insight key learning main takeaway",
-            entity, vault="WLT", layer="cognitive", limit=5
+            entity, limit=5
         )
 
         # Problem/opportunity
         problem_memories, prob_conf = await self._query_section(
             "problem opportunity gap need market",
-            entity, vault="WLT", layer="cognitive", limit=5
+            entity, limit=5
         )
 
         # Solution approach
         solution_memories, sol_conf = await self._query_section(
             "solution approach strategy how execute",
-            entity, vault="WLT", layer="goals", limit=5
+            entity, limit=5
         )
 
         # Why now (market timing)
         timing_memories, timing_conf = await self._query_section(
             "timing market trend catalyst why now momentum",
-            entity, vault="WLT", layer="context", limit=5
+            entity, limit=5
         )
 
         # Risks and mitigations
         risk_memories, risk_conf = await self._query_section(
             "risk challenge concern mitigation contingency",
-            entity, vault="Q", limit=5
+            entity, limit=5
         )
 
         # Next steps
         action_memories, action_conf = await self._query_section(
             "next step action priority immediate focus",
-            entity, vault="WLT", layer="goals", limit=5
+            entity, limit=5
         )
 
         # Build sections
@@ -695,11 +657,10 @@ class WeeklyDigestGenerator(OutputGenerator):
         # Evolved concepts (has 'was' field or version tag)
         # Would need special query to find updated memories
 
-        # Contradictions (from Q vault or contradiction tags)
+        # Contradictions (from contradiction tags or query matches)
         contradictions, contra_conf = await self._query_section(
             "contradiction tension conflict different",
             entity or "",
-            vault="Q",
             limit=5
         )
 

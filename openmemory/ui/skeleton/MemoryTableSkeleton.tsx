@@ -20,19 +20,19 @@ export function MemoryTableSkeleton() {
               </div>
             </TableHead>
             <TableHead className="w-[110px] border-zinc-700 text-center">
-              Vault
+              Category
             </TableHead>
             <TableHead className="w-[100px] border-zinc-700 text-center">
-              Layer
+              Scope
             </TableHead>
             <TableHead className="w-[120px] border-zinc-700 text-center">
               Entity
             </TableHead>
             <TableHead className="w-[80px] border-zinc-700 text-center">
-              Vector
+              Artifact
             </TableHead>
             <TableHead className="w-[80px] border-zinc-700 text-center">
-              Circuit
+              Source
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center w-full justify-center">

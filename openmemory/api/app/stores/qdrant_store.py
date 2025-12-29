@@ -54,7 +54,16 @@ class TenantQdrantStoreConfig:
     embedding_dim: int = 1536
     distance_metric: Distance = Distance.COSINE
     on_disk: bool = False
-    indexed_fields: tuple = ("org_id", "user_id", "vault", "layer")
+    indexed_fields: tuple = (
+        "org_id",
+        "user_id",
+        "category",
+        "scope",
+        "artifact_type",
+        "artifact_ref",
+        "entity",
+        "source",
+    )
 
 
 class TenantQdrantStore:

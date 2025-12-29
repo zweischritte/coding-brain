@@ -1,10 +1,10 @@
-# AXIS Graph Protocol — Neo4j Operations
+# Memory Graph Protocol — Neo4j Operations
 
 ## Architecture
 
 OpenMemory uses a **dual-graph architecture**:
 
-1. **Deterministic `OM_*` Graph** — Metadata projection (vault/layer/tags → Neo4j)
+1. **Deterministic `OM_*` Graph** — Metadata projection (category/scope/tags/artifacts → Neo4j)
 2. **LLM-Extracted `:__Entity__` Graph** — Mem0 Graph Memory (semantic relations)
 
 ### Enhanced Semantic Edges
@@ -85,7 +85,7 @@ graph_similar_memories(
     min_score=0.0,         # Default 0.0, recommended: 0.7 for quality
     limit=10               # Max results (default: 10)
 )
-# Returns: [{id, content, vault, layer, similarity_score, rank}]
+# Returns: [{id, content, category, scope, artifact_type, artifact_ref, similarity_score, rank}]
 ```
 
 ### graph_entity_network
@@ -228,7 +228,7 @@ graph_related_tags(tag_key="trigger")
 graph_tag_cooccurrence(min_count=3)
 
 # Distribution analysis
-graph_aggregate(group_by="vault")
+graph_aggregate(group_by="category")
 graph_aggregate(group_by="entity", limit=30)
 ```
 
@@ -239,7 +239,7 @@ graph_aggregate(group_by="entity", limit=30)
 | Pattern in Query | Auto-Action |
 |------------------|-------------|
 | New entity stored | `graph_path_between_entities` |
-| "Fingerprint" | `graph_aggregate` by vault+layer |
+| "Fingerprint" | `graph_aggregate` by category+scope |
 | Pattern language | `graph_tag_cooccurrence` |
 | "Netzwerk" / "Verbindungen" | `graph_entity_network` |
 | "Beziehung" / "Relation" | `graph_entity_relations` |

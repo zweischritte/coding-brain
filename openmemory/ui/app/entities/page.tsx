@@ -40,21 +40,21 @@ export default function EntitiesPage() {
   const [sortBy, setSortBy] = useState<"name" | "count">("count");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [graphStats, setGraphStats] = useState<any>(null);
-  const [vaultDistribution, setVaultDistribution] = useState<AggregationBucket[]>([]);
+  const [categoryDistribution, setCategoryDistribution] = useState<AggregationBucket[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [entityList, stats, vaults] = await Promise.all([
+        const [entityList, stats, categories] = await Promise.all([
           listEntities(200, 1),
           getStats(),
-          aggregate("vault", 10),
+          aggregate("category", 10),
         ]);
         setEntities(entityList);
         setFilteredEntities(entityList);
         setGraphStats(stats);
-        setVaultDistribution(vaults);
+        setCategoryDistribution(categories);
         setError(null);
       } catch (err) {
         setError("Failed to load entities");
@@ -289,11 +289,11 @@ export default function EntitiesPage() {
           </Card>
         </div>
 
-        {/* Sidebar - Vault Distribution */}
+        {/* Sidebar - Category Distribution */}
         <div className="animate-fade-slide-down delay-3">
           <Card className="bg-zinc-900 border-zinc-800">
             <CardHeader>
-              <CardTitle className="text-white text-lg">By Vault</CardTitle>
+              <CardTitle className="text-white text-lg">By Category</CardTitle>
             </CardHeader>
             <CardContent>
               {isLoading ? (
@@ -302,23 +302,23 @@ export default function EntitiesPage() {
                     <Skeleton key={i} className="h-8 w-full bg-zinc-800" />
                   ))}
                 </div>
-              ) : vaultDistribution.length === 0 ? (
+              ) : categoryDistribution.length === 0 ? (
                 <p className="text-zinc-400 text-sm text-center py-4">
-                  No vault data available
+                  No category data available
                 </p>
               ) : (
                 <div className="space-y-2">
-                  {vaultDistribution.map((vault) => (
+                  {categoryDistribution.map((category) => (
                     <div
-                      key={vault.key}
+                      key={category.key}
                       className="flex items-center justify-between p-2 rounded-lg bg-zinc-800/50"
                     >
-                      <span className="text-zinc-200 text-sm">{vault.key}</span>
+                      <span className="text-zinc-200 text-sm">{category.key}</span>
                       <Badge
                         variant="outline"
                         className="border-primary text-primary"
                       >
-                        {vault.count}
+                        {category.count}
                       </Badge>
                     </div>
                   ))}

@@ -31,8 +31,12 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
 class SearchFilters(BaseModel):
     """Optional filters for search queries."""
-    vault: Optional[str] = Field(None, description="Filter by vault")
-    layer: Optional[str] = Field(None, description="Filter by memory layer")
+    category: Optional[str] = Field(None, description="Filter by memory category")
+    scope: Optional[str] = Field(None, description="Filter by memory scope")
+    artifact_type: Optional[str] = Field(None, description="Filter by artifact type")
+    artifact_ref: Optional[str] = Field(None, description="Filter by artifact ref")
+    entity: Optional[str] = Field(None, description="Filter by entity")
+    source: Optional[str] = Field(None, description="Filter by source")
     app_id: Optional[str] = Field(None, description="Filter by app ID")
 
 
@@ -102,10 +106,18 @@ def _filters_to_dict(filters: Optional[SearchFilters]) -> Optional[Dict[str, Any
         return None
 
     result = {}
-    if filters.vault:
-        result["vault"] = filters.vault
-    if filters.layer:
-        result["layer"] = filters.layer
+    if filters.category:
+        result["category"] = filters.category
+    if filters.scope:
+        result["scope"] = filters.scope
+    if filters.artifact_type:
+        result["artifact_type"] = filters.artifact_type
+    if filters.artifact_ref:
+        result["artifact_ref"] = filters.artifact_ref
+    if filters.entity:
+        result["entity"] = filters.entity
+    if filters.source:
+        result["source"] = filters.source
     if filters.app_id:
         result["app_id"] = filters.app_id
 

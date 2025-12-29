@@ -13,7 +13,7 @@ Usage:
     chunks = await chunker.chunk_file("meeting_recording.mp3")
 
     for chunk in chunks:
-        await add_memories(text=chunk.text, vault="WLT", ...)
+        await add_memories(text=chunk.text, category="workflow", scope="team", ...)
 """
 
 import re
@@ -624,8 +624,10 @@ async def example_usage():
     for chunk in chunks:
         # await add_memories(
         #     text=chunk.text,
-        #     vault="WLT",
-        #     layer="cognitive",
+        #     category="workflow",
+        #     scope="team",
+        #     artifact_type="file",
+        #     artifact_ref="meeting_recording.mp3",
         #     entity=chunk.speaker,
         #     tags={
         #         "chunk_index": chunk.chunk_index,

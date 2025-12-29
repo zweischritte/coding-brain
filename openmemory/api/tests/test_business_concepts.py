@@ -78,7 +78,7 @@ def sample_concept():
         "name": "Revenue is growing fast",
         "type": "trend",
         "confidence": 0.8,
-        "vault": "WLT",
+        "category": "decision",
         "summary": "Company revenue doubled in Q4",
         "source_type": "stated_fact",
         "evidence_count": 3,
@@ -240,7 +240,7 @@ class TestConceptProjector:
             name=sample_concept["name"],
             concept_type=sample_concept["type"],
             confidence=sample_concept["confidence"],
-            vault=sample_concept["vault"],
+            category=sample_concept["category"],
         )
 
         assert result is not None
@@ -436,15 +436,15 @@ class TestConvergenceResult:
         """Should return True for strong convergence."""
         evidence = [
             ConvergenceEvidence(
-                memory_id="m1", content="test", vault="WLT",
+                memory_id="m1", content="test", category="decision",
                 created_at=datetime(2024, 1, 1), entities=[]
             ),
             ConvergenceEvidence(
-                memory_id="m2", content="test", vault="FRC",
+                memory_id="m2", content="test", category="architecture",
                 created_at=datetime(2024, 1, 15), entities=[]
             ),
             ConvergenceEvidence(
-                memory_id="m3", content="test", vault="SOV",
+                memory_id="m3", content="test", category="workflow",
                 created_at=datetime(2024, 1, 20), entities=[]
             ),
         ]
@@ -454,7 +454,7 @@ class TestConvergenceResult:
             evidence=evidence,
             convergence_score=0.75,
             temporal_spread_days=20,
-            vault_diversity=0.67,
+            category_diversity=0.67,
             source_diversity=0.5,
             entity_path_diversity=0.4,
             recommended_confidence=0.85,
@@ -466,15 +466,15 @@ class TestConvergenceResult:
         """Should return False for low convergence score."""
         evidence = [
             ConvergenceEvidence(
-                memory_id="m1", content="test", vault="WLT",
+                memory_id="m1", content="test", category="decision",
                 created_at=datetime(2024, 1, 1), entities=[]
             ),
             ConvergenceEvidence(
-                memory_id="m2", content="test", vault="FRC",
+                memory_id="m2", content="test", category="architecture",
                 created_at=datetime(2024, 1, 15), entities=[]
             ),
             ConvergenceEvidence(
-                memory_id="m3", content="test", vault="SOV",
+                memory_id="m3", content="test", category="workflow",
                 created_at=datetime(2024, 1, 20), entities=[]
             ),
         ]
@@ -484,7 +484,7 @@ class TestConvergenceResult:
             evidence=evidence,
             convergence_score=0.5,  # Below 0.7 threshold
             temporal_spread_days=20,
-            vault_diversity=0.67,
+            category_diversity=0.67,
             source_diversity=0.5,
             entity_path_diversity=0.4,
             recommended_confidence=0.7,
@@ -499,7 +499,7 @@ class TestConvergenceResult:
             evidence=[],
             convergence_score=0.756,
             temporal_spread_days=20,
-            vault_diversity=0.678,
+            category_diversity=0.678,
             source_diversity=0.512,
             entity_path_diversity=0.433,
             recommended_confidence=0.854,
@@ -509,7 +509,7 @@ class TestConvergenceResult:
 
         # Check rounding
         assert d["convergence_score"] == 0.756
-        assert d["vault_diversity"] == 0.678
+        assert d["category_diversity"] == 0.678
         assert d["recommended_confidence"] == 0.854
 
 

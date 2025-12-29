@@ -6,10 +6,9 @@ Removes debug/re-ranking metadata while preserving essential information.
 
 Design Principles:
 - Remove re-ranking debug info (semantic/boost scores, query echo, filter debug)
-- Keep essential fields for LLM interpretation (id, memory, score, AXIS metadata)
+- Keep essential fields for LLM interpretation (id, memory, score, structured metadata)
 - Conditional field inclusion (only include if present/not null)
 - Timezone normalization to Europe/Berlin
-- Vault short codes for brevity
 
 Usage:
     from app.utils.response_format import format_search_results, format_memory_list
@@ -26,18 +25,6 @@ from zoneinfo import ZoneInfo
 
 # Timezone for output
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
-
-# Reverse vault mapping: full name -> short code
-VAULT_SHORT_CODES: Dict[str, str] = {
-    "SOVEREIGNTY_CORE": "SOV",
-    "WEALTH_MATRIX": "WLT",
-    "SIGNAL_LIBRARY": "SIG",
-    "FRACTURE_LOG": "FRC",
-    "SOURCE_DIRECTIVES": "DIR",
-    "FINGERPRINT": "FGP",
-    "QUESTIONS_QUEUE": "Q",
-}
-
 
 # =============================================================================
 # TIMESTAMP FORMATTING
@@ -83,21 +70,6 @@ def format_timestamp(dt_str: Optional[str]) -> Optional[str]:
         return None
 
 
-def get_vault_short(vault_name: Optional[str]) -> Optional[str]:
-    """
-    Convert full vault name to short code.
-
-    Args:
-        vault_name: Full vault name (e.g., "FRACTURE_LOG")
-
-    Returns:
-        Short code (e.g., "FRC") or original if not found
-    """
-    if not vault_name:
-        return None
-    return VAULT_SHORT_CODES.get(vault_name, vault_name)
-
-
 # =============================================================================
 # MEMORY RESULT FORMATTING
 # =============================================================================
@@ -117,11 +89,10 @@ def format_memory_result(
     - id: Primary key for chaining (update_memory, delete_memories)
     - memory: Actual content
     - score: Final score (if search result, rounded to 2 decimals)
-    - vault: Short code (FRC, SOV, etc.)
-    - layer: Content domain
-    - circuit: Activation level (if present)
-    - vector: Say-Want-Do (if present)
+    - category, scope: Structured memory classification
+    - artifact_type, artifact_ref: Codebase location identifiers (if present)
     - entity: Reference object (if present)
+    - source, evidence: Provenance fields (if present)
     - tags: Qualitative info (if present and non-empty)
     - created_at: Timestamp in Berlin time
     - updated_at: Timestamp in Berlin time (if present)
@@ -150,33 +121,43 @@ def format_memory_result(
     if not isinstance(metadata, dict):
         metadata = {}
 
-    # Vault (short code) - check both places
-    vault = metadata.get("vault") or result.get("vault")
-    if vault:
-        formatted["vault"] = get_vault_short(vault)
+    # Category & scope
+    category = metadata.get("category") or result.get("category")
+    if category:
+        formatted["category"] = category
 
-    # Layer - check both places
-    layer = metadata.get("layer") or result.get("layer")
-    if layer:
-        formatted["layer"] = layer
+    scope = metadata.get("scope") or result.get("scope")
+    if scope:
+        formatted["scope"] = scope
 
-    # Circuit (conditional)
-    circuit = metadata.get("circuit") or result.get("circuit")
-    if circuit is not None:
-        formatted["circuit"] = circuit
+    # Artifact identifiers
+    artifact_type = metadata.get("artifact_type") or result.get("artifact_type")
+    if artifact_type:
+        formatted["artifact_type"] = artifact_type
 
-    # Vector (conditional)
-    vector = metadata.get("vector") or result.get("vector")
-    if vector:
-        formatted["vector"] = vector
+    artifact_ref = metadata.get("artifact_ref") or result.get("artifact_ref")
+    if artifact_ref:
+        formatted["artifact_ref"] = artifact_ref
 
-    # Entity (conditional) - stored as "re" in metadata
+    # Entity (conditional) - stored as "entity" in metadata
     entity = metadata.get("entity") or metadata.get("re") or result.get("entity")
     if entity:
         formatted["entity"] = entity
 
+    # Source (conditional)
+    source = metadata.get("source") or result.get("source")
+    if source:
+        formatted["source"] = source
+
+    # Evidence (conditional)
+    evidence = metadata.get("evidence") or result.get("evidence")
+    if evidence:
+        formatted["evidence"] = evidence
+
     # Tags (conditional - only if non-empty)
     tags = metadata.get("tags") or result.get("tags")
+    if isinstance(tags, list):
+        tags = {t: True for t in tags}
     if tags and isinstance(tags, dict) and len(tags) > 0:
         formatted["tags"] = tags
 
@@ -258,9 +239,6 @@ def format_memory_list(
     """
     Format list_memories results for lean response.
 
-    Adds missing AXIS fields from metadata:
-    - circuit, vector, tags, entity
-
     Removes unnecessary fields:
     - hash, user_id, role
 
@@ -286,26 +264,25 @@ def format_memory_list(
 
 def format_add_memory_result(
     result: Dict[str, Any],
-    axis_metadata: Dict[str, Any],
+    structured_metadata: Dict[str, Any],
     created_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Format a single add_memories result for lean response.
 
-    Consolidates result and axis_metadata into a single flat object.
+    Consolidates result and structured_metadata into a single flat object.
     Matches list_memories structure for consistency.
 
     Design principles:
     - No redundancy — each field appears exactly once
     - Consistent with list_memories — same structure, same field names
-    - Short vault codes — FRC, WLT, SOV, etc.
-    - Flat where possible — only nest tags and meta
+    - Flat where possible — only nest tags when present
     - Always return created_at — confirms successful storage
-    - Entity as direct field — not buried as 're' in metadata
+    - Entity as direct field
 
     Args:
         result: Raw result from memory_client.add()
-        axis_metadata: Parsed AXIS metadata from input
+        structured_metadata: Parsed structured metadata from input
         created_at: ISO timestamp string (optional, will use current time if not provided)
 
     Returns:
@@ -318,49 +295,42 @@ def format_add_memory_result(
         "memory": result.get("memory"),
     }
 
-    # Vault (short code)
-    vault = axis_metadata.get("vault")
-    if vault:
-        formatted["vault"] = get_vault_short(vault)
+    # Category & scope
+    category = structured_metadata.get("category")
+    if category:
+        formatted["category"] = category
 
-    # Layer
-    layer = axis_metadata.get("layer")
-    if layer:
-        formatted["layer"] = layer
+    scope = structured_metadata.get("scope")
+    if scope:
+        formatted["scope"] = scope
 
-    # Circuit (conditional)
-    circuit = axis_metadata.get("circuit")
-    if circuit is not None:
-        formatted["circuit"] = circuit
+    # Artifact identifiers
+    artifact_type = structured_metadata.get("artifact_type")
+    if artifact_type:
+        formatted["artifact_type"] = artifact_type
 
-    # Vector (conditional)
-    vector = axis_metadata.get("vector")
-    if vector:
-        formatted["vector"] = vector
+    artifact_ref = structured_metadata.get("artifact_ref")
+    if artifact_ref:
+        formatted["artifact_ref"] = artifact_ref
 
-    # Entity (direct field from 're' in axis_metadata)
-    entity = axis_metadata.get("re")
+    # Entity (direct field)
+    entity = structured_metadata.get("entity")
     if entity:
         formatted["entity"] = entity
 
     # Tags (only if non-empty)
-    tags = axis_metadata.get("tags")
+    tags = structured_metadata.get("tags")
     if tags and isinstance(tags, dict) and len(tags) > 0:
         formatted["tags"] = tags
 
-    # Meta object for inline metadata (src, from, was, ev)
-    meta = {}
-    if axis_metadata.get("src"):
-        meta["src"] = axis_metadata["src"]
-    if axis_metadata.get("from"):
-        meta["from"] = axis_metadata["from"]
-    if axis_metadata.get("was"):
-        meta["was"] = axis_metadata["was"]
-    if axis_metadata.get("ev"):
-        meta["ev"] = axis_metadata["ev"]
+    # Source and evidence
+    source = structured_metadata.get("source")
+    if source:
+        formatted["source"] = source
 
-    if meta:
-        formatted["meta"] = meta
+    evidence = structured_metadata.get("evidence")
+    if evidence:
+        formatted["evidence"] = evidence
 
     # Created_at (always included to confirm successful storage)
     if created_at:
@@ -375,7 +345,7 @@ def format_add_memory_result(
 
 def format_add_memories_response(
     results: List[Dict[str, Any]],
-    axis_metadata: Dict[str, Any],
+    structured_metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Format add_memories response for lean output.
@@ -388,7 +358,7 @@ def format_add_memories_response(
 
     Args:
         results: List of raw results from memory_client.add()
-        axis_metadata: Parsed AXIS metadata from input
+        structured_metadata: Parsed structured metadata from input
 
     Returns:
         Formatted response dict
@@ -396,11 +366,11 @@ def format_add_memories_response(
     from datetime import datetime, timezone
 
     if not results:
-        # Handle empty results case (potential bug with Q-vault)
-        # Still return axis_metadata fields as a single result to indicate parsing worked
+        # Handle empty results case (potential bug in client add flow)
+        # Still return structured_metadata fields as a single result to indicate parsing worked
         return format_add_memory_result(
             result={"id": None, "memory": None},
-            axis_metadata=axis_metadata,
+            structured_metadata=structured_metadata,
         )
 
     # Format all results
@@ -408,7 +378,7 @@ def format_add_memories_response(
     for result in results:
         formatted = format_add_memory_result(
             result=result,
-            axis_metadata=axis_metadata,
+            structured_metadata=structured_metadata,
             created_at=None,  # Will use current time
         )
         formatted_results.append(formatted)

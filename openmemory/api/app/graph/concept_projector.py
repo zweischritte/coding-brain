@@ -88,7 +88,7 @@ class ConceptCypherBuilder:
             "CREATE CONSTRAINT om_bizentity_user_name IF NOT EXISTS FOR (e:OM_BizEntity) REQUIRE (e.userId, e.name) IS UNIQUE",
             # Indexes for efficient querying
             "CREATE INDEX om_concept_user_id IF NOT EXISTS FOR (c:OM_Concept) ON (c.userId)",
-            "CREATE INDEX om_concept_vault IF NOT EXISTS FOR (c:OM_Concept) ON (c.vault)",
+            "CREATE INDEX om_concept_category IF NOT EXISTS FOR (c:OM_Concept) ON (c.category)",
             "CREATE INDEX om_concept_type IF NOT EXISTS FOR (c:OM_Concept) ON (c.type)",
             "CREATE INDEX om_concept_confidence IF NOT EXISTS FOR (c:OM_Concept) ON (c.confidence)",
             "CREATE INDEX om_concept_created IF NOT EXISTS FOR (c:OM_Concept) ON (c.createdAt)",
@@ -125,7 +125,7 @@ class ConceptCypherBuilder:
             c.id = $id,
             c.type = $type,
             c.confidence = $confidence,
-            c.vault = $vault,
+            c.category = $category,
             c.summary = $summary,
             c.sourceType = $sourceType,
             c.evidenceCount = $evidenceCount,
@@ -135,7 +135,7 @@ class ConceptCypherBuilder:
         ON MATCH SET
             c.type = COALESCE($type, c.type),
             c.confidence = CASE WHEN $confidence > c.confidence THEN $confidence ELSE c.confidence END,
-            c.vault = COALESCE($vault, c.vault),
+            c.category = COALESCE($category, c.category),
             c.summary = COALESCE($summary, c.summary),
             c.sourceType = COALESCE($sourceType, c.sourceType),
             c.evidenceCount = COALESCE($evidenceCount, c.evidenceCount),
@@ -278,7 +278,7 @@ class ConceptCypherBuilder:
             c.name AS name,
             c.type AS type,
             c.confidence AS confidence,
-            c.vault AS vault,
+            c.category AS category,
             c.summary AS summary,
             c.sourceType AS sourceType,
             c.evidenceCount AS evidenceCount,
@@ -294,7 +294,7 @@ class ConceptCypherBuilder:
         """
         return """
         MATCH (c:OM_Concept {userId: $userId})
-        WHERE ($vault IS NULL OR c.vault = $vault)
+        WHERE ($category IS NULL OR c.category = $category)
           AND ($type IS NULL OR c.type = $type)
           AND ($minConfidence IS NULL OR c.confidence >= $minConfidence)
         OPTIONAL MATCH (m:OM_Memory)-[:SUPPORTS]->(c)
@@ -304,7 +304,7 @@ class ConceptCypherBuilder:
             c.name AS name,
             c.type AS type,
             c.confidence AS confidence,
-            c.vault AS vault,
+            c.category AS category,
             c.summary AS summary,
             c.sourceType AS sourceType,
             c.evidenceCount AS evidenceCount,
@@ -440,7 +440,7 @@ class ConceptProjector:
         name: str,
         concept_type: str,
         confidence: float,
-        vault: Optional[str] = None,
+        category: Optional[str] = None,
         summary: Optional[str] = None,
         source_type: Optional[str] = None,
         evidence_count: int = 0,
@@ -456,7 +456,7 @@ class ConceptProjector:
             name: Concept name (unique per user)
             concept_type: Type from CONCEPT_TYPES
             confidence: Confidence score 0.0-1.0
-            vault: Optional vault (WLT, FRC, etc.)
+            category: Optional category for concept scoping
             summary: Optional summary text
             source_type: Optional source type from SOURCE_TYPES
             evidence_count: Number of supporting evidence items
@@ -486,7 +486,7 @@ class ConceptProjector:
                         "name": name,
                         "type": concept_type,
                         "confidence": min(1.0, max(0.0, confidence)),
-                        "vault": vault,
+                        "category": category,
                         "summary": summary,
                         "sourceType": source_type,
                         "evidenceCount": evidence_count,
@@ -517,7 +517,7 @@ class ConceptProjector:
                                 name=name,
                                 concept_type=concept_type,
                                 summary=summary,
-                                vault=vault,
+                                category=category,
                                 source_type=source_type,
                             )
                             if success:
@@ -808,7 +808,7 @@ class ConceptProjector:
                         "name": record["name"],
                         "type": record["type"],
                         "confidence": record["confidence"],
-                        "vault": record["vault"],
+                        "category": record["category"],
                         "summary": record["summary"],
                         "sourceType": record["sourceType"],
                         "evidenceCount": record["evidenceCount"],
@@ -824,7 +824,7 @@ class ConceptProjector:
     def list_concepts(
         self,
         user_id: str,
-        vault: Optional[str] = None,
+        category: Optional[str] = None,
         concept_type: Optional[str] = None,
         min_confidence: Optional[float] = None,
         limit: int = 50,
@@ -835,7 +835,7 @@ class ConceptProjector:
 
         Args:
             user_id: User ID for scoping
-            vault: Optional vault filter
+            category: Optional category filter
             concept_type: Optional type filter
             min_confidence: Optional minimum confidence filter
             limit: Maximum results (default 50)
@@ -850,7 +850,7 @@ class ConceptProjector:
                     ConceptCypherBuilder.list_concepts_query(),
                     {
                         "userId": user_id,
-                        "vault": vault,
+                        "category": category,
                         "type": concept_type,
                         "minConfidence": min_confidence,
                         "limit": min(100, max(1, limit)),
@@ -864,7 +864,7 @@ class ConceptProjector:
                         "name": record["name"],
                         "type": record["type"],
                         "confidence": record["confidence"],
-                        "vault": record["vault"],
+                        "category": record["category"],
                         "summary": record["summary"],
                         "sourceType": record["sourceType"],
                         "evidenceCount": record["evidenceCount"],

@@ -22,7 +22,12 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
-import { Vault, Layer, Vector, Circuit } from "@/components/types";
+import {
+  ArtifactType,
+  MemoryScope,
+  SourceType,
+  StructuredCategory,
+} from "@/components/types";
 
 interface EditMemoryDialogProps {
   open: boolean;
@@ -30,96 +35,54 @@ interface EditMemoryDialogProps {
   memoryId: string;
   initialContent: string;
   initialMetadata?: {
-    // API may return full vault names (e.g. "WEALTH_MATRIX") rather than short codes (e.g. "WLT")
-    vault?: string;
-    layer?: Layer;
-    circuit?: Circuit;
-    vector?: Vector;
-    re?: string;
+    category?: StructuredCategory;
+    scope?: MemoryScope;
+    artifact_type?: ArtifactType;
+    artifact_ref?: string;
+    entity?: string;
+    source?: SourceType;
+    evidence?: string[];
     tags?: Record<string, any>;
   };
   onSuccess?: () => void;
 }
 
-const VAULT_OPTIONS: { value: Vault; label: string }[] = [
-  { value: "SOV", label: "SOV - Sovereignty Core" },
-  { value: "WLT", label: "WLT - Wealth & Work" },
-  { value: "SIG", label: "SIG - Signal Processing" },
-  { value: "FRC", label: "FRC - Force Health" },
-  { value: "DIR", label: "DIR - Direction System" },
-  { value: "FGP", label: "FGP - Fingerprint Evolution" },
-  { value: "Q", label: "Q - Questions" },
+const CATEGORY_OPTIONS: { value: StructuredCategory; label: string }[] = [
+  { value: "decision", label: "Decision" },
+  { value: "convention", label: "Convention" },
+  { value: "architecture", label: "Architecture" },
+  { value: "dependency", label: "Dependency" },
+  { value: "workflow", label: "Workflow" },
+  { value: "testing", label: "Testing" },
+  { value: "security", label: "Security" },
+  { value: "performance", label: "Performance" },
+  { value: "runbook", label: "Runbook" },
+  { value: "glossary", label: "Glossary" },
 ];
 
-// Map full vault names (from API) to short codes (for UI)
-const VAULT_NAME_TO_CODE: Record<string, Vault> = {
-  // AXIS 3.4 (backend)
-  "SOVEREIGNTY_CORE": "SOV",
-  "WEALTH_MATRIX": "WLT",
-  "SIGNAL_LIBRARY": "SIG",
-  "FRACTURE_LOG": "FRC",
-  "SOURCE_DIRECTIVES": "DIR",
-  "FINGERPRINT": "FGP",
-  "QUESTIONS_QUEUE": "Q",
-
-  // Legacy / alternate names
-  "WEALTH_WORK": "WLT",
-  "SIGNAL_PROCESSING": "SIG",
-  "FORCE_HEALTH": "FRC",
-  "DIRECTION_SYSTEM": "DIR",
-  "FINGERPRINT_EVOLUTION": "FGP",
-  "QUESTIONS": "Q",
-
-  // Also support short codes directly
-  "SOV": "SOV",
-  "WLT": "WLT",
-  "SIG": "SIG",
-  "FRC": "FRC",
-  "DIR": "DIR",
-  "FGP": "FGP",
-  "Q": "Q",
-};
-
-function normalizeVault(vault: string | undefined): Vault | undefined {
-  if (!vault) return undefined;
-  const normalized = vault
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return VAULT_NAME_TO_CODE[normalized];
-}
-
-const LAYER_OPTIONS: { value: Layer; label: string }[] = [
-  { value: "somatic", label: "Somatic" },
-  { value: "emotional", label: "Emotional" },
-  { value: "narrative", label: "Narrative" },
-  { value: "cognitive", label: "Cognitive" },
-  { value: "values", label: "Values" },
-  { value: "identity", label: "Identity" },
-  { value: "relational", label: "Relational" },
-  { value: "goals", label: "Goals" },
-  { value: "resources", label: "Resources" },
-  { value: "context", label: "Context" },
-  { value: "temporal", label: "Temporal" },
-  { value: "meta", label: "Meta" },
+const SCOPE_OPTIONS: { value: MemoryScope; label: string }[] = [
+  { value: "session", label: "Session" },
+  { value: "user", label: "User" },
+  { value: "team", label: "Team" },
+  { value: "project", label: "Project" },
+  { value: "org", label: "Org" },
+  { value: "enterprise", label: "Enterprise" },
 ];
 
-const VECTOR_OPTIONS: { value: Vector; label: string }[] = [
-  { value: "say", label: "Say - What I express" },
-  { value: "want", label: "Want - What I desire" },
-  { value: "do", label: "Do - What I act on" },
+const ARTIFACT_OPTIONS: { value: ArtifactType; label: string }[] = [
+  { value: "repo", label: "Repo" },
+  { value: "service", label: "Service" },
+  { value: "module", label: "Module" },
+  { value: "component", label: "Component" },
+  { value: "api", label: "API" },
+  { value: "db", label: "Database" },
+  { value: "infra", label: "Infra" },
+  { value: "file", label: "File" },
 ];
 
-const CIRCUIT_OPTIONS: { value: Circuit; label: string }[] = [
-  { value: 1, label: "1 - Survival" },
-  { value: 2, label: "2 - Emotional-Territorial" },
-  { value: 3, label: "3 - Semantic-Symbolic" },
-  { value: 4, label: "4 - Social-Sexual" },
-  { value: 5, label: "5 - Neurosomatic" },
-  { value: 6, label: "6 - Neuroelectric" },
-  { value: 7, label: "7 - Neurogenetic" },
-  { value: 8, label: "8 - Quantum" },
+const SOURCE_OPTIONS: { value: SourceType; label: string }[] = [
+  { value: "user", label: "User" },
+  { value: "inference", label: "Inference" },
 ];
 
 export function EditMemoryDialog({
@@ -133,29 +96,25 @@ export function EditMemoryDialog({
   const { toast } = useToast();
   const { updateMemoryWithMetadata, isLoading } = useMemoriesApi();
 
-  // Form state - initialize empty, useEffect will populate
   const [content, setContent] = useState("");
-  const [vault, setVault] = useState<Vault | undefined>(undefined);
-  const [layer, setLayer] = useState<Layer | undefined>(undefined);
-  const [circuit, setCircuit] = useState<Circuit | undefined>(undefined);
-  const [vector, setVector] = useState<Vector | undefined>(undefined);
-  const [entity, setEntity] = useState<string>("");
+  const [category, setCategory] = useState<StructuredCategory | undefined>(undefined);
+  const [scope, setScope] = useState<MemoryScope | undefined>(undefined);
+  const [artifactType, setArtifactType] = useState<ArtifactType | undefined>(undefined);
+  const [artifactRef, setArtifactRef] = useState("");
+  const [entity, setEntity] = useState("");
+  const [source, setSource] = useState<SourceType | undefined>(undefined);
+  const [evidence, setEvidence] = useState("");
 
-  // Reset form when dialog opens or when initialMetadata changes
   useEffect(() => {
     if (open) {
-      // Normalize vault from API format (e.g., "SOVEREIGNTY_CORE") to UI format (e.g., "SOV")
-      const vaultCandidate =
-        initialMetadata?.vault ||
-        (initialMetadata as any)?.vault_full ||
-        (initialMetadata as any)?.vaultFull;
-      const normalizedVault = normalizeVault(vaultCandidate);
       setContent(initialContent || "");
-      setVault(normalizedVault);
-      setLayer(initialMetadata?.layer);
-      setCircuit(initialMetadata?.circuit);
-      setVector(initialMetadata?.vector);
-      setEntity(initialMetadata?.re || "");
+      setCategory(initialMetadata?.category);
+      setScope(initialMetadata?.scope);
+      setArtifactType(initialMetadata?.artifact_type);
+      setArtifactRef(initialMetadata?.artifact_ref || "");
+      setEntity(initialMetadata?.entity || "");
+      setSource(initialMetadata?.source);
+      setEvidence((initialMetadata?.evidence || []).join(", "));
     }
   }, [open, initialContent, initialMetadata]);
 
@@ -163,36 +122,45 @@ export function EditMemoryDialog({
     try {
       const updates: {
         content?: string;
-        vault?: Vault;
-        layer?: Layer;
-        circuit?: Circuit;
-        vector?: Vector;
+        category?: StructuredCategory;
+        scope?: MemoryScope;
+        artifact_type?: ArtifactType;
+        artifact_ref?: string;
         entity?: string;
+        source?: SourceType;
+        evidence?: string[];
       } = {};
 
-      // Only include changed fields
       if (content !== initialContent) {
         updates.content = content;
       }
-      // Compare with normalized vault value
-      const normalizedInitialVault = normalizeVault(initialMetadata?.vault);
-      if (vault !== normalizedInitialVault) {
-        updates.vault = vault;
+      if (category !== initialMetadata?.category) {
+        updates.category = category;
       }
-      if (layer !== initialMetadata?.layer) {
-        updates.layer = layer;
+      if (scope !== initialMetadata?.scope) {
+        updates.scope = scope;
       }
-      if (circuit !== initialMetadata?.circuit) {
-        updates.circuit = circuit;
+      if (artifactType !== initialMetadata?.artifact_type) {
+        updates.artifact_type = artifactType;
       }
-      if (vector !== initialMetadata?.vector) {
-        updates.vector = vector;
+      if ((artifactRef || "") !== (initialMetadata?.artifact_ref || "")) {
+        updates.artifact_ref = artifactRef || undefined;
       }
-      if (entity !== (initialMetadata?.re || "")) {
-        updates.entity = entity;
+      if ((entity || "") !== (initialMetadata?.entity || "")) {
+        updates.entity = entity || undefined;
+      }
+      if (source !== initialMetadata?.source) {
+        updates.source = source;
       }
 
-      // Only update if there are changes
+      const evidenceList = evidence
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (evidenceList.join(",") !== (initialMetadata?.evidence || []).join(",")) {
+        updates.evidence = evidenceList.length ? evidenceList : undefined;
+      }
+
       if (Object.keys(updates).length === 0) {
         toast({
           title: "No changes",
@@ -222,160 +190,138 @@ export function EditMemoryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[700px] bg-zinc-900 border-zinc-800">
         <DialogHeader>
           <DialogTitle className="text-white">Edit Memory</DialogTitle>
           <DialogDescription className="text-zinc-400">
-            Update the memory content and AXIS metadata.
+            Update the content or structured metadata.
           </DialogDescription>
         </DialogHeader>
-
-        <div className="space-y-4 py-4">
-          {/* Memory Content */}
+        <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="content" className="text-zinc-200">
+            <Label htmlFor="content" className="text-zinc-300">
               Content
             </Label>
             <Textarea
               id="content"
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              className="bg-zinc-800 border-zinc-700 text-white min-h-[100px]"
-              placeholder="Memory content..."
-            />
-          </div>
-
-          {/* AXIS Metadata Grid */}
-          <div className="grid grid-cols-2 gap-4">
-            {/* Vault */}
-            <div className="space-y-2">
-              <Label className="text-zinc-200">Vault</Label>
-              <Select
-                value={vault}
-                onValueChange={(v) => setVault(v as Vault)}
-              >
-                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
-                  <SelectValue placeholder="Select vault..." />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-800 border-zinc-700">
-                  {VAULT_OPTIONS.map((opt) => (
-                    <SelectItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="text-white"
-                    >
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Layer */}
-            <div className="space-y-2">
-              <Label className="text-zinc-200">Layer</Label>
-              <Select
-                value={layer}
-                onValueChange={(v) => setLayer(v as Layer)}
-              >
-                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
-                  <SelectValue placeholder="Select layer..." />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-800 border-zinc-700">
-                  {LAYER_OPTIONS.map((opt) => (
-                    <SelectItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="text-white"
-                    >
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Circuit */}
-            <div className="space-y-2">
-              <Label className="text-zinc-200">Circuit</Label>
-              <Select
-                value={circuit?.toString()}
-                onValueChange={(v) => setCircuit(parseInt(v) as Circuit)}
-              >
-                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
-                  <SelectValue placeholder="Select circuit..." />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-800 border-zinc-700">
-                  {CIRCUIT_OPTIONS.map((opt) => (
-                    <SelectItem
-                      key={opt.value}
-                      value={opt.value.toString()}
-                      className="text-white"
-                    >
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Vector */}
-            <div className="space-y-2">
-              <Label className="text-zinc-200">Vector</Label>
-              <Select
-                value={vector}
-                onValueChange={(v) => setVector(v as Vector)}
-              >
-                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
-                  <SelectValue placeholder="Select vector..." />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-800 border-zinc-700">
-                  {VECTOR_OPTIONS.map((opt) => (
-                    <SelectItem
-                      key={opt.value}
-                      value={opt.value}
-                      className="text-white"
-                    >
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {/* Entity Reference */}
-          <div className="space-y-2">
-            <Label htmlFor="entity" className="text-zinc-200">
-              Entity Reference
-            </Label>
-            <Input
-              id="entity"
-              value={entity}
-              onChange={(e) => setEntity(e.target.value)}
               className="bg-zinc-800 border-zinc-700 text-white"
-              placeholder="e.g., person name, project, topic..."
+              rows={4}
             />
-            <p className="text-xs text-zinc-500">
-              The primary entity this memory is about
-            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Category</Label>
+              <Select value={category} onValueChange={(value) => setCategory(value as StructuredCategory)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+                  <SelectValue placeholder="Select category" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-white">
+                  {CATEGORY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Scope</Label>
+              <Select value={scope} onValueChange={(value) => setScope(value as MemoryScope)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+                  <SelectValue placeholder="Select scope" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-white">
+                  {SCOPE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Artifact Type</Label>
+              <Select value={artifactType} onValueChange={(value) => setArtifactType(value as ArtifactType)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+                  <SelectValue placeholder="Select artifact type" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-white">
+                  {ARTIFACT_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="artifact-ref" className="text-zinc-300">
+                Artifact Ref
+              </Label>
+              <Input
+                id="artifact-ref"
+                value={artifactRef}
+                onChange={(e) => setArtifactRef(e.target.value)}
+                className="bg-zinc-800 border-zinc-700 text-white"
+                placeholder="repo/path/file or symbol"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="entity" className="text-zinc-300">
+                Entity
+              </Label>
+              <Input
+                id="entity"
+                value={entity}
+                onChange={(e) => setEntity(e.target.value)}
+                className="bg-zinc-800 border-zinc-700 text-white"
+                placeholder="team, service, component"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-zinc-300">Source</Label>
+              <Select value={source} onValueChange={(value) => setSource(value as SourceType)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+                  <SelectValue placeholder="Select source" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-white">
+                  {SOURCE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="evidence" className="text-zinc-300">
+                Evidence (comma-separated)
+              </Label>
+              <Input
+                id="evidence"
+                value={evidence}
+                onChange={(e) => setEvidence(e.target.value)}
+                className="bg-zinc-800 border-zinc-700 text-white"
+                placeholder="ADR-12, PR-330"
+              />
+            </div>
           </div>
         </div>
-
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-          >
+        <DialogFooter className="mt-4">
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button
-            onClick={handleSave}
-            disabled={isLoading}
-            className="bg-primary text-black hover:bg-primary/90"
-          >
-            {isLoading ? "Saving..." : "Save Changes"}
+          <Button onClick={handleSave} disabled={isLoading}>
+            Save Changes
           </Button>
         </DialogFooter>
       </DialogContent>

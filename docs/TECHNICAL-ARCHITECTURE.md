@@ -42,7 +42,7 @@ This architecture enables both semantic similarity search and explicit relations
 │   │                                  │  │                           │   │
 │   │  Collections:                    │  │  Labels:                  │   │
 │   │  • openmemory (memories)         │  │  • OM_Memory, OM_Entity   │   │
-│   │  • business_concepts (concepts)  │  │  • OM_Vault, OM_Layer     │   │
+│   │  • business_concepts (concepts)  │  │  • OM_Category, OM_Scope  │   │
 │   │                                  │  │  • OM_Concept, etc.       │   │
 │   └──────────────────────────────────┘  └───────────────────────────┘   │
 │                                                                          │
@@ -58,7 +58,7 @@ This architecture enables both semantic similarity search and explicit relations
 
 ---
 
-## 2. Vector Store Layer (Qdrant)
+## 2. Vector Store (Qdrant)
 
 ### 2.1 Embedding Pipeline
 
@@ -77,7 +77,7 @@ Memory Text ──▶ Tokenization ──▶ Embedding Model ──▶ 1536-dim 
 
 | Collection | Purpose | Isolation |
 |------------|---------|-----------|
-| `openmemory` | Personal memories (AXIS layer) | `userId: "grischa"` |
+| `openmemory` | Structured memories (dev-assistant schema) | `userId: "grischa"` |
 | `business_concepts` | Business concept embeddings | `userId: "concepts"` |
 
 ### 2.3 Point Structure
@@ -93,11 +93,12 @@ Each Qdrant point contains:
     "created_at": "2025-12-25T10:00:00Z",
     "updated_at": "2025-12-25T10:00:00Z",
     "user_id": "grischadallmer",
-    "vault": "WLT",
-    "layer": "cognitive",
-    "vector": "say",
-    "circuit": 4,
-    "re": "BMG",
+    "category": "decision",
+    "scope": "project",
+    "artifact_type": "service",
+    "artifact_ref": "api/gateway",
+    "entity": "BMG",
+    "evidence": ["review-notes-2025-12-20"],
     "tags": {"important": true, "quarterly": "Q4"},
     "source": "user",
     "source_app": "claude-code"
@@ -134,7 +135,7 @@ points, next_offset = qdrant.scroll(
 
 ---
 
-## 3. Graph Store Layer (Neo4j)
+## 3. Graph Store (Neo4j)
 
 ### 3.1 Schema Overview
 
@@ -147,14 +148,13 @@ OpenMemory maintains a **dual graph architecture**:
 
 | Label | Properties | Unique Constraint | Description |
 |-------|-----------|-------------------|-------------|
-| `OM_Memory` | id, userId, content, createdAt, updatedAt, state, vault, layer, vector, circuit, source | id | Core memory node |
+| `OM_Memory` | id, userId, content, createdAt, updatedAt, state, category, scope, artifactType, artifactRef, entity, source | id | Core memory node |
 | `OM_Entity` | userId, name | (userId, name) | Referenced entities |
-| `OM_Vault` | name | name | Vault dimension (SOV, WLT, SIG, FRC, DIR, FGP, Q) |
-| `OM_Layer` | name | name | Layer dimension (somatic, emotional, narrative, cognitive, etc.) |
-| `OM_Vector` | name | name | Vector dimension (say, want, do) |
-| `OM_Circuit` | level | level | Circuit level (1-8) |
+| `OM_Category` | name | name | Category dimension (decision, convention, architecture, dependency, workflow, testing, security, performance, runbook, glossary) |
+| `OM_Scope` | name | name | Scope dimension (session, user, team, project, org, enterprise) |
+| `OM_ArtifactType` | name | name | Artifact type (repo, service, module, component, api, db, infra, file) |
+| `OM_ArtifactRef` | name | name | Artifact reference (path, service name, etc.) |
 | `OM_Tag` | key | key | Tag keys |
-| `OM_Origin` | name | name | Origin sources |
 | `OM_Evidence` | name | name | Evidence items |
 | `OM_App` | name | name | Application sources |
 | `OM_TemporalEvent` | userId, name, eventType, startDate, endDate, description, memoryIds | (userId, name) | Biographical timeline events |
@@ -164,12 +164,11 @@ OpenMemory maintains a **dual graph architecture**:
 | Type | Source | Target | Properties | Description |
 |------|--------|--------|------------|-------------|
 | `OM_ABOUT` | OM_Memory | OM_Entity | — | Memory references entity |
-| `OM_IN_VAULT` | OM_Memory | OM_Vault | — | Memory in vault |
-| `OM_IN_LAYER` | OM_Memory | OM_Layer | — | Memory at layer |
-| `OM_HAS_VECTOR` | OM_Memory | OM_Vector | — | Memory has vector |
-| `OM_IN_CIRCUIT` | OM_Memory | OM_Circuit | — | Memory at circuit |
+| `OM_IN_CATEGORY` | OM_Memory | OM_Category | — | Memory in category |
+| `OM_IN_SCOPE` | OM_Memory | OM_Scope | — | Memory in scope |
+| `OM_HAS_ARTIFACT_TYPE` | OM_Memory | OM_ArtifactType | — | Memory has artifact type |
+| `OM_REFERENCES_ARTIFACT` | OM_Memory | OM_ArtifactRef | — | Memory references artifact |
 | `OM_TAGGED` | OM_Memory | OM_Tag | tagValue | Tagged with value |
-| `OM_DERIVED_FROM` | OM_Memory | OM_Origin | — | Origin tracking |
 | `OM_HAS_EVIDENCE` | OM_Memory | OM_Evidence | — | Evidence link |
 | `OM_WRITTEN_VIA` | OM_Memory | OM_App | — | App source |
 | `OM_SIMILAR` | OM_Memory | OM_Memory | userId, score, rank, createdAt, updatedAt | Semantic similarity |
@@ -398,7 +397,7 @@ The `entity_bridge.py` module bridges Mem0's LLM-extracted entities to OpenMemor
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Entity Bridge Layer                                                  │
+│ Entity Bridge Flow                                                   │
 │   1. Query Mem0's :__Entity__ graph for this memory's entities      │
 │   2. Create OM_ABOUT edges for EACH extracted entity                │
 │   3. Update OM_CO_MENTIONED edges between entity pairs              │
@@ -554,15 +553,15 @@ RETURN e1.name, e2.name, sim
 
 ---
 
-## 10. Business Concepts Layer
+## 10. Business Concepts System
 
 ### 10.1 Architecture
 
-A separate knowledge layer that extracts structured concepts from memories:
+A separate knowledge subsystem that extracts structured concepts from memories:
 
 ```
 ┌─────────────────────────────┬───────────────────────────────────┐
-│     Memory Layer            │      Business Concepts Layer       │
+│     Memory Store            │      Business Concepts Store       │
 │                             │                                    │
 │  • Raw memories             │  • Synthesized concepts            │
 │  • Personal knowledge       │  • Business patterns               │
@@ -643,8 +642,7 @@ def find_contradictions(concept_id, user_id, min_severity=0.5):
 ```
 Port 8765 - OpenMemory MCP Server
 ├── /mcp/claude/sse/{user_id}        → Memory Tools (~25 tools)
-├── /concepts/claude/sse/{user_id}   → Business Concept Tools (~10 tools)
-└── /axis/claude/sse/{user_id}       → AXIS Guidance Tools
+└── /concepts/claude/sse/{user_id}   → Business Concept Tools (~10 tools)
 ```
 
 ### 11.2 Tool Categories
@@ -676,7 +674,7 @@ User Input
 ┌───────────────────────────────────────────────────────────────┐
 │  MCP Tool: add_memories                                        │
 │                                                                │
-│  1. Parse metadata (vault, layer, vector, circuit, tags, etc.) │
+│  1. Parse metadata (category, scope, artifact_type, artifact_ref, entity, evidence, tags, etc.) │
 │  2. Generate embedding via configured embedder                  │
 │  3. Store in Qdrant with payload                               │
 └───────────────────────────────────────────────────────────────┘

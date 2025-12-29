@@ -34,8 +34,8 @@ def sample_search_results():
             "memory": "Kritik triggert Schutzreaktion",
             "scores": {"semantic": 0.9, "boost": 0.3, "final": 1.17},
             "metadata": {
-                "vault": "FRACTURE_LOG",
-                "layer": "emotional",
+                "category": "decision",
+                "scope": "project",
                 "entity": "BMG",
             },
             "created_at": "2025-12-04T11:14:00Z",
@@ -45,8 +45,8 @@ def sample_search_results():
             "memory": "Pattern recognition active",
             "scores": {"semantic": 0.85, "boost": 0.2, "final": 1.02},
             "metadata": {
-                "vault": "FINGERPRINT",
-                "layer": "meta",
+                "category": "architecture",
+                "scope": "project",
             },
             "created_at": "2025-12-05T09:30:00Z",
         },
@@ -58,13 +58,13 @@ def sample_meta_relations():
     """Sample meta_relations from projector."""
     return {
         "mem-1": [
-            {"type": "OM_IN_VAULT", "target_label": "OM_Vault", "target_value": "FRACTURE_LOG"},
-            {"type": "OM_IN_LAYER", "target_label": "OM_Layer", "target_value": "emotional"},
+            {"type": "OM_IN_CATEGORY", "target_label": "OM_Category", "target_value": "decision"},
+            {"type": "OM_IN_SCOPE", "target_label": "OM_Scope", "target_value": "project"},
             {"type": "OM_ABOUT", "target_label": "OM_Entity", "target_value": "BMG"},
         ],
         "mem-2": [
-            {"type": "OM_IN_VAULT", "target_label": "OM_Vault", "target_value": "FINGERPRINT"},
-            {"type": "OM_IN_LAYER", "target_label": "OM_Layer", "target_value": "meta"},
+            {"type": "OM_IN_CATEGORY", "target_label": "OM_Category", "target_value": "architecture"},
+            {"type": "OM_IN_SCOPE", "target_label": "OM_Scope", "target_value": "project"},
         ],
     }
 
@@ -103,7 +103,7 @@ class TestGraphOps:
                 memory_id="test-id",
                 user_id="user-1",
                 content="Test content",
-                metadata={"vault": "SOV"},
+                metadata={"category": "decision"},
             )
 
             assert result is True
@@ -158,7 +158,7 @@ class TestGraphOps:
                 memory_id="test-id",
                 user_id="user-1",
                 content="Test content",
-                metadata={"vault": "SOV", "layer": "identity"},
+                metadata={"category": "decision", "scope": "project"},
             )
 
             assert result is True
@@ -217,7 +217,7 @@ class TestGraphOpsGraphQueries:
 
             assert get_memory_node_from_graph("mem-1", "user-1") is None
             assert find_related_memories_in_graph("mem-1", "user-1") == []
-            assert aggregate_memories_in_graph("user-1", "vault") == []
+            assert aggregate_memories_in_graph("user-1", "category") == []
             assert tag_cooccurrence_in_graph("user-1") == []
             assert path_between_entities_in_graph("user-1", "A", "B") is None
 
@@ -269,16 +269,16 @@ class TestGraphOpsGraphQueries:
         mock_projector.get_memory_node.return_value = {
             "id": "mem-1",
             "content": "Seed content",
-            "vault": "SOVEREIGNTY_CORE",
-            "layer": "identity",
-            "vector": None,
-            "circuit": None,
+            "category": "architecture",
+            "scope": "project",
+            "artifactType": "service",
+            "artifactRef": "api/gateway",
             "created_at": "2025-12-04T11:14:00Z",
             "updated_at": None,
         }
         mock_projector.get_relations_for_memories.return_value = {
             "mem-1": [
-                {"type": "OM_IN_VAULT", "target_label": "OM_Vault", "target_value": "SOVEREIGNTY_CORE"},
+                {"type": "OM_IN_CATEGORY", "target_label": "OM_Category", "target_value": "architecture"},
                 {"type": "OM_TAGGED", "target_label": "OM_Tag", "target_value": "neo4j", "value": "True"},
             ]
         }
@@ -286,10 +286,10 @@ class TestGraphOpsGraphQueries:
             {
                 "id": "mem-2",
                 "content": "Related content",
-                "vault": "SOVEREIGNTY_CORE",
-                "layer": "identity",
-                "vector": None,
-                "circuit": None,
+                "category": "architecture",
+                "scope": "project",
+                "artifactType": "service",
+                "artifactRef": "api/gateway",
                 "created_at": "2025-12-05T09:30:00Z",
                 "updated_at": None,
                 "shared_count": 1,
@@ -314,7 +314,7 @@ class TestGraphOpsGraphQueries:
 
             assert sg is not None
             assert sg["seed_memory_id"] == "mem-1"
-            assert len(sg["nodes"]) >= 3  # seed, related, tag/vault
+            assert len(sg["nodes"]) >= 3  # seed, related, tag/category
             assert any(n["label"] == "OM_Tag" and n["value"] == "neo4j" for n in sg["nodes"])
             assert any(e["type"] == "OM_TAGGED" for e in sg["edges"])
 
@@ -343,7 +343,7 @@ class TestSearchEnrichment:
 
             assert "mem-1" in meta_relations
             assert "mem-2" in meta_relations
-            assert len(meta_relations["mem-1"]) == 3  # vault, layer, entity
+            assert len(meta_relations["mem-1"]) == 3  # category, scope, entity
 
     def test_enrichment_preserves_existing_response(self, sample_search_results):
         """Verify enrichment doesn't modify existing response fields."""

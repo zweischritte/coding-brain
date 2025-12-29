@@ -42,10 +42,11 @@ interface TimelineResponse {
 interface FullTextSearchResult {
   id: string;
   content: string;
-  vault?: string;
-  layer?: string;
-  vector?: string;
-  circuit?: number;
+  category?: string;
+  scope?: string;
+  artifact_type?: string;
+  artifact_ref?: string;
+  entity?: string;
   createdAt?: string;
   searchScore: number;
 }

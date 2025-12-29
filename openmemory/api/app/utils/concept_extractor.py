@@ -588,7 +588,7 @@ def extract_from_memory(
     memory_id: str,
     user_id: str,
     content: str,
-    vault: str = None,
+    category: str = None,
     api_key: str = None,
     model: str = "gpt-4o-mini",
     max_tokens_per_chunk: int = 8000,
@@ -605,7 +605,7 @@ def extract_from_memory(
         memory_id: UUID of the source memory
         user_id: User ID for scoping
         content: Memory content to extract from
-        vault: Optional vault for concept scoping
+        category: Optional category for concept scoping
         api_key: OpenAI API key (uses config if not provided)
         model: Model for extraction (default: gpt-4o-mini)
         max_tokens_per_chunk: Max tokens per chunk
@@ -694,7 +694,7 @@ def extract_from_memory(
                                 name=concept.concept,
                                 concept_type=concept.type,
                                 confidence=concept.confidence,
-                                vault=vault,
+                                category=category,
                                 source_type=concept.source_type,
                                 evidence_count=len(concept.evidence),
                             )
@@ -738,7 +738,7 @@ def batch_extract_from_memories(
     Extract concepts from multiple memories in batch.
 
     Args:
-        memories: List of dicts with 'id', 'content', and optional 'vault'
+        memories: List of dicts with 'id', 'content', and optional 'category'
         user_id: User ID for scoping
         api_key: OpenAI API key
         store_in_graph: Whether to store in Neo4j graph
@@ -757,7 +757,7 @@ def batch_extract_from_memories(
     for memory in memories:
         memory_id = memory.get("id")
         content = memory.get("content")
-        vault = memory.get("vault")
+        category = memory.get("category")
 
         if not memory_id or not content:
             results["errors"] += 1
@@ -767,7 +767,7 @@ def batch_extract_from_memories(
             memory_id=memory_id,
             user_id=user_id,
             content=content,
-            vault=vault,
+            category=category,
             api_key=api_key,
             store_in_graph=store_in_graph,
         )

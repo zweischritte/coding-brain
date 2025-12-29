@@ -215,8 +215,8 @@ class TestHybridSearch:
             json={
                 "query": "test query",
                 "filters": {
-                    "vault": "work",
-                    "layer": "long_term"
+                    "category": "workflow",
+                    "scope": "project"
                 }
             },
             headers={"Authorization": f"Bearer {token}"}
@@ -270,7 +270,7 @@ class TestLexicalSearch:
             "/api/v1/search/lexical",
             json={
                 "query": "test query",
-                "filters": {"vault": "personal"}
+                "filters": {"category": "testing"}
             },
             headers={"Authorization": f"Bearer {token}"}
         )

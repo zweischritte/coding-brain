@@ -25,8 +25,10 @@ interface EntityMemoriesResponse {
   memories: {
     id: string;
     content: string;
-    vault?: string;
-    layer?: string;
+    category?: string;
+    scope?: string;
+    artifact_type?: string;
+    artifact_ref?: string;
     matchedEntities: number;
     entityNames: string[];
   }[];

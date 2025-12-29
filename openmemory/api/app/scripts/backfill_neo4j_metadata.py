@@ -158,7 +158,7 @@ def backfill_memories(
             if dry_run:
                 if verbose:
                     logger.info(f"[DRY RUN] Would project memory {memory_id}")
-                    logger.info(f"  vault={memory_metadata.vault}, layer={memory_metadata.layer}")
+                    logger.info(f"  category={memory_metadata.category}, scope={memory_metadata.scope}")
                     logger.info(f"  entity={memory_metadata.entity}, tags={list(memory_metadata.tags.keys())}")
             else:
                 success = projector.upsert_memory(memory_metadata)

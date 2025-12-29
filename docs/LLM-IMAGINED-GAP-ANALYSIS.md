@@ -7,7 +7,7 @@ Sources: docs/IMPLEMENTATION-PLAN-DEV-ASSISTANT v9.md, docs/IMPLEMENTATION-PROGR
 ## Current Reality (Implemented Today)
 
 - Phase 0a/0b/0c only: benchmarks, security baseline (JWT/DPoP/RBAC/SCIM stubs), observability (tracing/logging/audit/SLO).
-- Legacy memory and business concept MCP tools exist (AXIS memory + OM_* graph).
+- Legacy memory and business concept MCP tools exist (structured memory + OM_* graph).
 - Hybrid retrieval for memory (RRF, query routing, graph boosts) exists.
 - No code indexing pipeline, no CODE_* code graph, and no code intelligence MCP tools yet.
 

@@ -5,7 +5,7 @@ Tests cover:
 - MemoryMetadata normalization from various input formats
 - CypherBuilder query generation
 - MetadataProjector upsert/delete operations (mocked session)
-- Edge cases: ev as string/list, unknown layers, missing keys
+- Edge cases: evidence as string/list, missing keys
 
 These tests do not require a live Neo4j instance.
 
@@ -42,15 +42,14 @@ def sample_memory_data():
         "user_id": "9142c989-ce04-416d-b00f-dd4a05d9a1f5",
         "content": "Kritik triggert Schutzreaktion",
         "metadata": {
-            "vault": "FRACTURE_LOG",
-            "layer": "emotional",
-            "re": "BMG",
-            "vector": "say",
-            "circuit": 2,
-            "axis_category": "patterns",
+            "category": "decision",
+            "scope": "project",
+            "artifact_type": "service",
+            "artifact_ref": "api/gateway",
+            "entity": "BMG",
             "tags": {"trigger": True, "intensity": 7},
-            "from": "projekt-a",
-            "ev": ["evidence-1", "evidence-2"],
+            "evidence": ["evidence-1", "evidence-2"],
+            "source": "user",
             "source_app": "openmemory",
             "mcp_client": "claude",
         },
@@ -95,12 +94,11 @@ class TestMemoryMetadata:
         assert metadata.id == "abc-123"
         assert metadata.user_id == "grischadallmer"
         assert metadata.content == "Kritik triggert Schutzreaktion"
-        assert metadata.vault == "FRACTURE_LOG"
-        assert metadata.layer == "emotional"
+        assert metadata.category == "decision"
+        assert metadata.scope == "project"
+        assert metadata.artifact_type == "service"
+        assert metadata.artifact_ref == "api/gateway"
         assert metadata.entity == "BMG"
-        assert metadata.vector == "say"
-        assert metadata.circuit == 2
-        assert metadata.origin == "projekt-a"
         assert metadata.evidence == ["evidence-1", "evidence-2"]
         assert metadata.tags == {"trigger": True, "intensity": 7}
         assert metadata.source_app == "openmemory"
@@ -110,9 +108,9 @@ class TestMemoryMetadata:
         """Handle evidence as single string."""
         data = {
             "metadata": {
-                "vault": "SOV",
-                "layer": "identity",
-                "ev": "single-evidence",
+                "category": "decision",
+                "scope": "project",
+                "evidence": "single-evidence",
             }
         }
         metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
@@ -122,9 +120,9 @@ class TestMemoryMetadata:
         """Handle evidence as list of strings."""
         data = {
             "metadata": {
-                "vault": "SOV",
-                "layer": "identity",
-                "ev": ["ev1", "ev2", "ev3"],
+                "category": "decision",
+                "scope": "project",
+                "evidence": ["ev1", "ev2", "ev3"],
             }
         }
         metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
@@ -132,21 +130,9 @@ class TestMemoryMetadata:
 
     def test_from_dict_ev_none(self):
         """Handle missing evidence."""
-        data = {"metadata": {"vault": "SOV", "layer": "identity"}}
+        data = {"metadata": {"category": "decision", "scope": "project"}}
         metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
         assert metadata.evidence == []
-
-    def test_from_dict_circuit_as_string(self):
-        """Handle circuit as string (from JSON)."""
-        data = {"metadata": {"circuit": "5"}}
-        metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
-        assert metadata.circuit == 5
-
-    def test_from_dict_circuit_invalid(self):
-        """Handle invalid circuit value."""
-        data = {"metadata": {"circuit": "not-a-number"}}
-        metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
-        assert metadata.circuit is None
 
     def test_from_dict_tags_as_list(self):
         """Handle tags as list (legacy format)."""
@@ -159,30 +145,6 @@ class TestMemoryMetadata:
         data = {"metadata": {"tags": {"ai_obs": True, "conf": 0.8}}}
         metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
         assert metadata.tags == {"ai_obs": True, "conf": 0.8}
-
-    def test_from_dict_unknown_layer(self):
-        """Handle unknown/legacy layer values without crashing."""
-        data = {"metadata": {"layer": "emotive"}}  # Legacy value
-        metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
-        assert metadata.layer == "emotive"  # Preserved as-is
-
-    def test_from_dict_unknown_vault(self):
-        """Handle unknown vault values like LIFE_ADMIN."""
-        data = {"metadata": {"vault": "LIFE_ADMIN"}}
-        metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
-        assert metadata.vault == "LIFE_ADMIN"
-
-    def test_from_dict_origin_from_key(self):
-        """Handle 'from' key for origin."""
-        data = {"metadata": {"from": "source-project"}}
-        metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
-        assert metadata.origin == "source-project"
-
-    def test_from_dict_origin_origin_key(self):
-        """Handle 'origin' key for origin."""
-        data = {"metadata": {"origin": "origin-project"}}
-        metadata = MemoryMetadata.from_dict(data, "id-1", "user-1")
-        assert metadata.origin == "origin-project"
 
     def test_from_dict_src_vs_source(self):
         """Handle both 'src' and 'source' keys."""
@@ -201,8 +163,10 @@ class TestMemoryMetadata:
 
         assert metadata.id == "id-1"
         assert metadata.user_id == "user-1"
-        assert metadata.vault is None
-        assert metadata.layer is None
+        assert metadata.category is None
+        assert metadata.scope is None
+        assert metadata.artifact_type is None
+        assert metadata.artifact_ref is None
         assert metadata.entity is None
         assert metadata.tags == {}
         assert metadata.evidence == []
@@ -238,7 +202,7 @@ class TestCypherBuilder:
         query, params = CypherBuilder.upsert_memory_query()
         assert "MERGE (m:OM_Memory" in query
         assert "$id" in query
-        assert "$user_id" in query
+        assert "$userId" in query
 
     def test_entity_relation_query(self):
         """Verify entity relation query structure."""
@@ -247,18 +211,18 @@ class TestCypherBuilder:
         assert "OM_ABOUT" in query
         assert "MERGE" in query
 
-    def test_vault_relation_query(self):
-        """Verify vault relation query structure."""
-        query = CypherBuilder.vault_relation_query()
-        assert "OM_Vault" in query
-        assert "OM_IN_VAULT" in query
+    def test_category_relation_query(self):
+        """Verify category relation query structure."""
+        query = CypherBuilder.category_relation_query()
+        assert "OM_Category" in query
+        assert "OM_IN_CATEGORY" in query
 
     def test_tag_relation_query_stores_value(self):
         """Verify tag relation stores value on relationship."""
         query = CypherBuilder.tag_relation_query()
         assert "OM_Tag" in query
         assert "OM_TAGGED" in query
-        assert "r.value" in query
+        assert "r.tagValue" in query
 
     def test_delete_memory_query_uses_detach(self):
         """Verify delete uses DETACH DELETE for clean removal."""
@@ -268,10 +232,10 @@ class TestCypherBuilder:
     def test_get_memory_relations_query(self):
         """Verify relations query returns all necessary fields."""
         query = CypherBuilder.get_memory_relations_query()
-        assert "memory_id" in query
-        assert "relation_type" in query
-        assert "target_label" in query
-        assert "target_value" in query
+        assert "memoryId" in query
+        assert "relationType" in query
+        assert "targetLabel" in query
+        assert "targetValue" in query
 
 
 # =============================================================================
@@ -335,28 +299,28 @@ class TestMetadataProjector:
                 break
 
         assert entity_call is not None
-        assert entity_call[0][1]["entity_name"] == "BMG"
+        assert entity_call[0][1]["entityName"] == "BMG"
 
-    def test_upsert_memory_with_vault(self, mock_session_factory, mock_session):
-        """Test upserting memory with vault relation."""
+    def test_upsert_memory_with_category(self, mock_session_factory, mock_session):
+        """Test upserting memory with category relation."""
         projector = MetadataProjector(mock_session_factory)
         metadata = MemoryMetadata(
             id="test-id",
             user_id="user-1",
-            vault="SOVEREIGNTY_CORE",
+            category="architecture",
         )
 
         projector.upsert_memory(metadata)
 
         calls = mock_session.run.call_args_list
-        vault_call = None
+        category_call = None
         for c in calls:
-            if c[0] and "OM_Vault" in c[0][0]:
-                vault_call = c
+            if c[0] and "OM_Category" in c[0][0]:
+                category_call = c
                 break
 
-        assert vault_call is not None
-        assert vault_call[0][1]["vault_name"] == "SOVEREIGNTY_CORE"
+        assert category_call is not None
+        assert category_call[0][1]["categoryName"] == "architecture"
 
     def test_upsert_memory_with_tags(self, mock_session_factory, mock_session):
         """Test upserting memory with tag relations."""
@@ -411,7 +375,7 @@ class TestMetadataProjector:
         assert result is True
         call = mock_session.run.call_args
         assert "DETACH DELETE" in call[0][0]
-        assert call[0][1]["memory_id"] == "memory-to-delete"
+        assert call[0][1]["memoryId"] == "memory-to-delete"
 
     def test_delete_all_user_memories(self, mock_session_factory, mock_session):
         """Test deleting all memories for a user."""
@@ -421,7 +385,7 @@ class TestMetadataProjector:
 
         assert result is True
         call = mock_session.run.call_args
-        assert call[0][1]["user_id"] == "grischadallmer"
+        assert call[0][1]["userId"] == "grischadallmer"
 
     def test_get_relations_for_memories(self, mock_session_factory, mock_session):
         """Test querying relations for memory IDs."""
@@ -429,20 +393,20 @@ class TestMetadataProjector:
         mock_records = [
             MagicMock(
                 __getitem__=lambda self, k: {
-                    "memory_id": "mem-1",
-                    "relation_type": "OM_IN_VAULT",
-                    "target_label": "OM_Vault",
-                    "target_value": "SOVEREIGNTY_CORE",
-                    "relation_value": None,
+                    "memoryId": "mem-1",
+                    "relationType": "OM_IN_CATEGORY",
+                    "targetLabel": "OM_Category",
+                    "targetValue": "architecture",
+                    "relationValue": None,
                 }[k]
             ),
             MagicMock(
                 __getitem__=lambda self, k: {
-                    "memory_id": "mem-1",
-                    "relation_type": "OM_ABOUT",
-                    "target_label": "OM_Entity",
-                    "target_value": "BMG",
-                    "relation_value": None,
+                    "memoryId": "mem-1",
+                    "relationType": "OM_ABOUT",
+                    "targetLabel": "OM_Entity",
+                    "targetValue": "BMG",
+                    "relationValue": None,
                 }[k]
             ),
         ]
@@ -554,29 +518,26 @@ class TestFullMemoryProjection:
                 query = call[0][0]
                 if "OM_Entity" in query:
                     relation_types.append("entity")
-                elif "OM_Vault" in query:
-                    relation_types.append("vault")
-                elif "OM_Layer" in query:
-                    relation_types.append("layer")
-                elif "OM_Vector" in query:
-                    relation_types.append("vector")
-                elif "OM_Circuit" in query:
-                    relation_types.append("circuit")
+                elif "OM_Category" in query:
+                    relation_types.append("category")
+                elif "OM_Scope" in query:
+                    relation_types.append("scope")
+                elif "OM_ArtifactType" in query:
+                    relation_types.append("artifact_type")
+                elif "OM_ArtifactRef" in query:
+                    relation_types.append("artifact_ref")
                 elif "OM_Tag" in query:
                     relation_types.append("tag")
-                elif "OM_Origin" in query:
-                    relation_types.append("origin")
                 elif "OM_Evidence" in query:
                     relation_types.append("evidence")
                 elif "OM_App" in query:
                     relation_types.append("app")
 
         assert "entity" in relation_types
-        assert "vault" in relation_types
-        assert "layer" in relation_types
-        assert "vector" in relation_types
-        assert "circuit" in relation_types
-        assert "origin" in relation_types
+        assert "category" in relation_types
+        assert "scope" in relation_types
+        assert "artifact_type" in relation_types
+        assert "artifact_ref" in relation_types
         # Tags should appear twice (trigger, intensity)
         assert relation_types.count("tag") == 2
         # Evidence should appear twice
@@ -593,16 +554,16 @@ class TestMetadataProjectorQueryMethods:
         mock_session.run.return_value = [
             {
                 "id": "mem-1",
-                "user_id": "user-1",
+                "userId": "user-1",
                 "content": "Test content",
-                "created_at": "2025-12-04T11:14:00Z",
-                "updated_at": "2025-12-05T09:30:00Z",
+                "createdAt": "2025-12-04T11:14:00Z",
+                "updatedAt": "2025-12-05T09:30:00Z",
                 "state": "active",
-                "vault": "SOVEREIGNTY_CORE",
-                "layer": "identity",
-                "vector": "say",
-                "circuit": 2,
-                "axis_category": "patterns",
+                "category": "architecture",
+                "scope": "project",
+                "artifactType": "service",
+                "artifactRef": "api/gateway",
+                "entity": "BMG",
                 "source": "user",
             }
         ]
@@ -616,39 +577,39 @@ class TestMetadataProjectorQueryMethods:
 
         assert node is not None
         assert node["id"] == "mem-1"
-        assert node["vault"] == "SOVEREIGNTY_CORE"
+        assert node["category"] == "architecture"
 
         args, kwargs = mock_session.run.call_args
         assert "MATCH (m:OM_Memory" in args[0]
         params = args[1]
-        assert params["memory_id"] == "mem-1"
-        assert params["user_id"] == "user-1"
+        assert params["memoryId"] == "mem-1"
+        assert params["userId"] == "user-1"
 
     def test_find_related_memories(self, mock_session_factory, mock_session):
         """Find related memories returns normalized shared_relations."""
         mock_session.run.return_value = [
             {
-                "memory_id": "mem-2",
+                "memoryId": "mem-2",
                 "content": "Related memory",
-                "created_at": "2025-12-05T09:30:00Z",
-                "updated_at": None,
+                "createdAt": "2025-12-05T09:30:00Z",
+                "updatedAt": None,
                 "state": "active",
-                "vault": "SOVEREIGNTY_CORE",
-                "layer": "identity",
-                "vector": "say",
-                "circuit": 2,
-                "axis_category": None,
+                "category": "architecture",
+                "scope": "project",
+                "artifactType": "service",
+                "artifactRef": "api/gateway",
+                "entity": "BMG",
                 "source": "user",
-                "shared_relations": [
+                "sharedRelations": [
                     {
                         "type": "OM_TAGGED",
-                        "target_label": "OM_Tag",
-                        "target_value": "neo4j",
-                        "seed_value": "True",
-                        "other_value": "True",
+                        "targetLabel": "OM_Tag",
+                        "targetValue": "neo4j",
+                        "seedValue": "True",
+                        "otherValue": "True",
                     }
                 ],
-                "shared_count": 1,
+                "sharedCount": 1,
             }
         ]
 
@@ -663,26 +624,26 @@ class TestMetadataProjectorQueryMethods:
 
         assert len(related) == 1
         assert related[0]["id"] == "mem-2"
-        assert related[0]["shared_count"] == 1
-        assert related[0]["shared_relations"][0]["type"] == "OM_TAGGED"
-        assert related[0]["shared_relations"][0]["target_value"] == "neo4j"
+        assert related[0]["sharedCount"] == 1
+        assert related[0]["sharedRelations"][0]["type"] == "OM_TAGGED"
+        assert related[0]["sharedRelations"][0]["targetValue"] == "neo4j"
 
     def test_aggregate_memories(self, mock_session_factory, mock_session):
         """Aggregate returns buckets."""
         mock_session.run.return_value = [
-            {"key": "SOVEREIGNTY_CORE", "count": 7},
-            {"key": "FRACTURE_LOG", "count": 3},
+            {"key": "architecture", "count": 7},
+            {"key": "decision", "count": 3},
         ]
 
         projector = MetadataProjector(mock_session_factory)
         buckets = projector.aggregate_memories(
             user_id="user-1",
-            group_by="vault",
+            group_by="category",
             allowed_memory_ids=["mem-1", "mem-2"],
             limit=10,
         )
 
-        assert buckets[0]["key"] == "SOVEREIGNTY_CORE"
+        assert buckets[0]["key"] == "architecture"
         assert buckets[0]["count"] == 7
 
     def test_aggregate_invalid_group_by(self, mock_session_factory):
@@ -698,7 +659,7 @@ class TestMetadataProjectorQueryMethods:
                 "tag1": "trigger",
                 "tag2": "important",
                 "count": 4,
-                "memory_ids": ["mem-1", "mem-2", "mem-3", "mem-4"],
+                "memoryIds": ["mem-1", "mem-2", "mem-3", "mem-4"],
             }
         ]
 
@@ -715,16 +676,16 @@ class TestMetadataProjectorQueryMethods:
         assert pairs[0]["tag1"] == "trigger"
         assert pairs[0]["tag2"] == "important"
         assert pairs[0]["count"] == 4
-        assert pairs[0]["example_memory_ids"] == ["mem-1", "mem-2", "mem-3"]
+        assert pairs[0]["exampleMemoryIds"] == ["mem-1", "mem-2", "mem-3"]
 
     def test_path_between_entities(self, mock_session_factory, mock_session):
         """Path query returns nodes + relationships when present."""
         mock_session.run.return_value = [
             {
                 "nodes": [
-                    {"label": "OM_Entity", "value": "A", "memory_id": None, "content": None, "vault": None, "layer": None},
-                    {"label": "OM_Memory", "value": "mem-1", "memory_id": "mem-1", "content": "x", "vault": "SOV", "layer": "identity"},
-                    {"label": "OM_Entity", "value": "B", "memory_id": None, "content": None, "vault": None, "layer": None},
+                    {"label": "OM_Entity", "value": "A", "memory_id": None, "content": None, "category": None, "scope": None},
+                    {"label": "OM_Memory", "value": "mem-1", "memory_id": "mem-1", "content": "x", "category": "architecture", "scope": "project"},
+                    {"label": "OM_Entity", "value": "B", "memory_id": None, "content": None, "category": None, "scope": None},
                 ],
                 "relationships": [
                     {"type": "OM_ABOUT", "value": None},

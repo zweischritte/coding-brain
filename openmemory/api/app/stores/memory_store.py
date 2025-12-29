@@ -135,9 +135,6 @@ class ScopedMemoryStore(BaseStore[Memory]):
         existing.content = entity.content
         existing.state = entity.state
         existing.metadata_ = entity.metadata_
-        existing.vault = entity.vault
-        existing.layer = entity.layer
-        existing.axis_vector = entity.axis_vector
 
         self._db.commit()
         self._db.refresh(existing)

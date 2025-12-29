@@ -12,11 +12,10 @@ export interface FiltersState {
   apps: {
     selectedApps: string[];
     selectedCategories: string[];
-    vaults: string[];
-    layers: string[];
-    vectors: string[];
-    circuits: number[];
+    scopes: string[];
+    artifactTypes: string[];
     entities: string[];
+    sources: string[];
     sortColumn: string;
     sortDirection: 'asc' | 'desc';
     showArchived: boolean;
@@ -33,11 +32,10 @@ const initialState: FiltersState = {
   apps: {
     selectedApps: [],
     selectedCategories: [],
-    vaults: [],
-    layers: [],
-    vectors: [],
-    circuits: [],
+    scopes: [],
+    artifactTypes: [],
     entities: [],
+    sources: [],
     sortColumn: 'created_at',
     sortDirection: 'desc',
     showArchived: false,
@@ -74,20 +72,17 @@ const filtersSlice = createSlice({
     setSelectedCategories: (state, action: PayloadAction<string[]>) => {
       state.apps.selectedCategories = action.payload;
     },
-    setVaults: (state, action: PayloadAction<string[]>) => {
-      state.apps.vaults = action.payload;
+    setScopes: (state, action: PayloadAction<string[]>) => {
+      state.apps.scopes = action.payload;
     },
-    setLayers: (state, action: PayloadAction<string[]>) => {
-      state.apps.layers = action.payload;
-    },
-    setVectors: (state, action: PayloadAction<string[]>) => {
-      state.apps.vectors = action.payload;
-    },
-    setCircuits: (state, action: PayloadAction<number[]>) => {
-      state.apps.circuits = action.payload;
+    setArtifactTypes: (state, action: PayloadAction<string[]>) => {
+      state.apps.artifactTypes = action.payload;
     },
     setEntities: (state, action: PayloadAction<string[]>) => {
       state.apps.entities = action.payload;
+    },
+    setSources: (state, action: PayloadAction<string[]>) => {
+      state.apps.sources = action.payload;
     },
     setShowArchived: (state, action: PayloadAction<boolean>) => {
       state.apps.showArchived = action.payload;
@@ -95,11 +90,10 @@ const filtersSlice = createSlice({
     clearFilters: (state) => {
       state.apps.selectedApps = [];
       state.apps.selectedCategories = [];
-      state.apps.vaults = [];
-      state.apps.layers = [];
-      state.apps.vectors = [];
-      state.apps.circuits = [];
+      state.apps.scopes = [];
+      state.apps.artifactTypes = [];
       state.apps.entities = [];
+      state.apps.sources = [];
       state.apps.showArchived = false;
     },
     setSortingState: (state, action: PayloadAction<{ column: string; direction: 'asc' | 'desc' }>) => {
@@ -115,11 +109,10 @@ export const {
   setCategoriesError,
   setSelectedApps,
   setSelectedCategories,
-  setVaults,
-  setLayers,
-  setVectors,
-  setCircuits,
+  setScopes,
+  setArtifactTypes,
   setEntities,
+  setSources,
   setShowArchived,
   clearFilters,
   setSortingState

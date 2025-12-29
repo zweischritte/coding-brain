@@ -247,8 +247,8 @@ class TestComputeBoostWithGraph:
 
     def test_boost_without_graph_context(self):
         """Test that boost works without graph context (backward compatible)."""
-        context = SearchContext(vault="SOV")
-        metadata = {"vault": "SOV"}
+        context = SearchContext(category="architecture")
+        metadata = {"category": "architecture"}
 
         boost, breakdown = compute_boost(
             metadata=metadata,
@@ -265,8 +265,8 @@ class TestComputeBoostWithGraph:
 
     def test_boost_with_graph_context(self):
         """Test that graph context adds to boost."""
-        context = SearchContext(vault="SOV")
-        metadata = {"vault": "SOV"}
+        context = SearchContext(category="architecture")
+        metadata = {"category": "architecture"}
 
         graph_context = GraphContext(
             available=True,
@@ -293,21 +293,21 @@ class TestComputeBoostWithGraph:
         # Should have both metadata and graph boosts
         assert "metadata" in breakdown
         assert "graph" in breakdown
-        assert boost > breakdown["metadata"].get("vault", 0)  # Graph added to it
+        assert boost > breakdown["metadata"].get("category", 0)  # Graph added to it
 
     def test_total_boost_capping_includes_graph(self):
         """Test that total boost cap includes graph boost."""
         context = SearchContext(
-            vault="SOV",
-            layer="identity",
+            category="workflow",
+            scope="project",
             entity="test",
             tags=["important", "urgent", "critical"],
             recency_weight=0.7,
         )
         metadata = {
-            "vault": "SOV",
-            "layer": "identity",
-            "re": "test",
+            "category": "workflow",
+            "scope": "project",
+            "entity": "test",
         }
         stored_tags = {"important": True, "urgent": True, "critical": True}
 

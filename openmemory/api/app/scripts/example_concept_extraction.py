@@ -146,8 +146,8 @@ def main():
     high_confidence_concepts = [c for c in result.concepts if c.confidence >= 0.7]
     low_confidence_concepts = [c for c in result.concepts if 0.5 <= c.confidence < 0.7]
 
-    print(f"✓ {len(high_confidence_concepts)} high-confidence concepts (auto-accept to WLT vault)")
-    print(f"⚠ {len(low_confidence_concepts)} medium-confidence concepts (review needed, store in Q vault)")
+    print(f"✓ {len(high_confidence_concepts)} high-confidence concepts (auto-accept: category=glossary, scope=project)")
+    print(f"⚠ {len(low_confidence_concepts)} medium-confidence concepts (review needed, tag for review)")
 
     contradictions = [c for c in result.concepts if c.type == "contradiction"]
     if contradictions:
@@ -157,7 +157,7 @@ def main():
 
     print()
     print("Next steps:")
-    print("1. Store high-confidence concepts in OpenMemory (vault=WLT)")
+    print("1. Store high-confidence concepts in OpenMemory (category=glossary, scope=project)")
     print("2. Flag contradictions for weekly review")
     print("3. Track concept evolution over time")
     print("4. Use entity network to build knowledge graph")

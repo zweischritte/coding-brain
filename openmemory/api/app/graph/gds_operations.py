@@ -142,12 +142,26 @@ class GDSCypherBuilder:
         return """
         CALL gds.graph.project(
             $graphName,
-            ['OM_Memory', 'OM_Entity', 'OM_Tag', 'OM_Vault', 'OM_Layer'],
+            [
+                'OM_Memory',
+                'OM_Entity',
+                'OM_Tag',
+                'OM_Category',
+                'OM_Scope',
+                'OM_ArtifactType',
+                'OM_ArtifactRef',
+                'OM_Evidence',
+                'OM_App'
+            ],
             {
                 OM_ABOUT: {type: 'OM_ABOUT', orientation: 'UNDIRECTED'},
                 OM_TAGGED: {type: 'OM_TAGGED', orientation: 'UNDIRECTED'},
-                OM_IN_VAULT: {type: 'OM_IN_VAULT', orientation: 'UNDIRECTED'},
-                OM_IN_LAYER: {type: 'OM_IN_LAYER', orientation: 'UNDIRECTED'},
+                OM_IN_CATEGORY: {type: 'OM_IN_CATEGORY', orientation: 'UNDIRECTED'},
+                OM_IN_SCOPE: {type: 'OM_IN_SCOPE', orientation: 'UNDIRECTED'},
+                OM_HAS_ARTIFACT_TYPE: {type: 'OM_HAS_ARTIFACT_TYPE', orientation: 'UNDIRECTED'},
+                OM_REFERENCES_ARTIFACT: {type: 'OM_REFERENCES_ARTIFACT', orientation: 'UNDIRECTED'},
+                OM_HAS_EVIDENCE: {type: 'OM_HAS_EVIDENCE', orientation: 'UNDIRECTED'},
+                OM_WRITTEN_VIA: {type: 'OM_WRITTEN_VIA', orientation: 'UNDIRECTED'},
                 OM_SIMILAR: {
                     type: 'OM_SIMILAR',
                     orientation: 'UNDIRECTED',

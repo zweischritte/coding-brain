@@ -33,11 +33,10 @@ import { useEntitiesApi } from "@/hooks/useEntitiesApi";
 import {
   setSelectedApps,
   setSelectedCategories,
-  setVaults,
-  setLayers,
-  setVectors,
-  setCircuits,
+  setScopes,
+  setArtifactTypes,
   setEntities,
+  setSources,
   clearFilters,
 } from "@/store/filtersSlice";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
@@ -68,10 +67,9 @@ export default function FilterComponent() {
   const [tempSelectedCategories, setTempSelectedCategories] = useState<
     string[]
   >([]);
-  const [tempSelectedVaults, setTempSelectedVaults] = useState<string[]>([]);
-  const [tempSelectedLayers, setTempSelectedLayers] = useState<string[]>([]);
-  const [tempSelectedVectors, setTempSelectedVectors] = useState<string[]>([]);
-  const [tempSelectedCircuits, setTempSelectedCircuits] = useState<number[]>([]);
+  const [tempSelectedScopes, setTempSelectedScopes] = useState<string[]>([]);
+  const [tempSelectedArtifactTypes, setTempSelectedArtifactTypes] = useState<string[]>([]);
+  const [tempSelectedSources, setTempSelectedSources] = useState<string[]>([]);
   const [tempSelectedEntities, setTempSelectedEntities] = useState<string[]>([]);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -83,50 +81,29 @@ export default function FilterComponent() {
   // Available entities from API
   const [availableEntities, setAvailableEntities] = useState<string[]>([]);
 
-  // AXIS Protocol Vaults
-  const vaultOptions = [
-    { value: "SOV", label: "SOV - Sovereignty Core" },
-    { value: "WLT", label: "WLT - Wealth & Work" },
-    { value: "SIG", label: "SIG - Signal Processing" },
-    { value: "FRC", label: "FRC - Force Health" },
-    { value: "DIR", label: "DIR - Direction System" },
-    { value: "FGP", label: "FGP - Fingerprint Evolution" },
-    { value: "Q", label: "Q - Questions" },
+  const scopeOptions = [
+    { value: "session", label: "Session" },
+    { value: "user", label: "User" },
+    { value: "team", label: "Team" },
+    { value: "project", label: "Project" },
+    { value: "org", label: "Org" },
+    { value: "enterprise", label: "Enterprise" },
   ];
 
-  // AXIS Protocol Layers
-  const layerOptions = [
-    { value: "somatic", label: "Somatic" },
-    { value: "emotional", label: "Emotional" },
-    { value: "narrative", label: "Narrative" },
-    { value: "cognitive", label: "Cognitive" },
-    { value: "values", label: "Values" },
-    { value: "identity", label: "Identity" },
-    { value: "relational", label: "Relational" },
-    { value: "goals", label: "Goals" },
-    { value: "resources", label: "Resources" },
-    { value: "context", label: "Context" },
-    { value: "temporal", label: "Temporal" },
-    { value: "meta", label: "Meta" },
+  const artifactTypeOptions = [
+    { value: "repo", label: "Repo" },
+    { value: "service", label: "Service" },
+    { value: "module", label: "Module" },
+    { value: "component", label: "Component" },
+    { value: "api", label: "API" },
+    { value: "db", label: "Database" },
+    { value: "infra", label: "Infra" },
+    { value: "file", label: "File" },
   ];
 
-  // AXIS Protocol Vectors
-  const vectorOptions = [
-    { value: "say", label: "Say - What I express" },
-    { value: "want", label: "Want - What I desire" },
-    { value: "do", label: "Do - What I act on" },
-  ];
-
-  // AXIS Protocol Circuits (1-8)
-  const circuitOptions = [
-    { value: 1, label: "1 - Survival" },
-    { value: 2, label: "2 - Emotional-Territorial" },
-    { value: 3, label: "3 - Semantic-Symbolic" },
-    { value: 4, label: "4 - Social-Sexual" },
-    { value: 5, label: "5 - Neurosomatic" },
-    { value: 6, label: "6 - Neuroelectric" },
-    { value: 7, label: "7 - Neurogenetic" },
-    { value: 8, label: "8 - Quantum" },
+  const sourceOptions = [
+    { value: "user", label: "User" },
+    { value: "inference", label: "Inference" },
   ];
 
   const apps = useSelector((state: RootState) => state.apps.apps);
@@ -155,10 +132,9 @@ export default function FilterComponent() {
     if (isOpen) {
       setTempSelectedApps(filters.selectedApps);
       setTempSelectedCategories(filters.selectedCategories);
-      setTempSelectedVaults(filters.vaults || []);
-      setTempSelectedLayers(filters.layers || []);
-      setTempSelectedVectors(filters.vectors || []);
-      setTempSelectedCircuits(filters.circuits || []);
+      setTempSelectedScopes(filters.scopes || []);
+      setTempSelectedArtifactTypes(filters.artifactTypes || []);
+      setTempSelectedSources(filters.sources || []);
       setTempSelectedEntities(filters.entities || []);
       setShowArchived(filters.showArchived || false);
       // Reset search queries when dialog opens
@@ -197,10 +173,9 @@ export default function FilterComponent() {
   const handleClearFilters = async () => {
     setTempSelectedApps([]);
     setTempSelectedCategories([]);
-    setTempSelectedVaults([]);
-    setTempSelectedLayers([]);
-    setTempSelectedVectors([]);
-    setTempSelectedCircuits([]);
+    setTempSelectedScopes([]);
+    setTempSelectedArtifactTypes([]);
+    setTempSelectedSources([]);
     setTempSelectedEntities([]);
     setShowArchived(false);
     setAppSearchQuery("");
@@ -212,11 +187,6 @@ export default function FilterComponent() {
 
   const handleApplyFilters = async () => {
     try {
-      // Get category IDs for selected category names
-      const selectedCategoryIds = categories
-        .filter((cat) => tempSelectedCategories.includes(cat.name))
-        .map((cat) => cat.id);
-
       // Get app IDs for selected app names
       const selectedAppIds = apps
         .filter((app) => tempSelectedApps.includes(app.id))
@@ -225,24 +195,22 @@ export default function FilterComponent() {
       // Update the global state with temporary selections
       dispatch(setSelectedApps(tempSelectedApps));
       dispatch(setSelectedCategories(tempSelectedCategories));
-      dispatch(setVaults(tempSelectedVaults));
-      dispatch(setLayers(tempSelectedLayers));
-      dispatch(setVectors(tempSelectedVectors));
-      dispatch(setCircuits(tempSelectedCircuits));
+      dispatch(setScopes(tempSelectedScopes));
+      dispatch(setArtifactTypes(tempSelectedArtifactTypes));
       dispatch(setEntities(tempSelectedEntities));
+      dispatch(setSources(tempSelectedSources));
       dispatch({ type: "filters/setShowArchived", payload: showArchived });
 
       await fetchMemories(undefined, 1, 10, {
         apps: selectedAppIds,
-        categories: selectedCategoryIds,
+        categories: tempSelectedCategories,
         sortColumn: filters.sortColumn,
         sortDirection: filters.sortDirection,
         showArchived: showArchived,
-        vaults: tempSelectedVaults.length ? tempSelectedVaults : undefined,
-        layers: tempSelectedLayers.length ? tempSelectedLayers : undefined,
-        vectors: tempSelectedVectors.length ? tempSelectedVectors : undefined,
-        circuits: tempSelectedCircuits.length ? tempSelectedCircuits : undefined,
+        scopes: tempSelectedScopes.length ? tempSelectedScopes : undefined,
+        artifactTypes: tempSelectedArtifactTypes.length ? tempSelectedArtifactTypes : undefined,
         entities: tempSelectedEntities.length ? tempSelectedEntities : undefined,
+        sources: tempSelectedSources.length ? tempSelectedSources : undefined,
       });
       setIsOpen(false);
     } catch (error) {
@@ -256,10 +224,9 @@ export default function FilterComponent() {
       // Reset temporary selections to active filters when dialog closes without applying
       setTempSelectedApps(filters.selectedApps);
       setTempSelectedCategories(filters.selectedCategories);
-      setTempSelectedVaults(filters.vaults || []);
-      setTempSelectedLayers(filters.layers || []);
-      setTempSelectedVectors(filters.vectors || []);
-      setTempSelectedCircuits(filters.circuits || []);
+      setTempSelectedScopes(filters.scopes || []);
+      setTempSelectedArtifactTypes(filters.artifactTypes || []);
+      setTempSelectedSources(filters.sources || []);
       setTempSelectedEntities(filters.entities || []);
       setShowArchived(filters.showArchived || false);
     }
@@ -272,11 +239,6 @@ export default function FilterComponent() {
         : "asc";
     updateSort(column, newDirection);
 
-    // Get category IDs for selected category names
-    const selectedCategoryIds = categories
-      .filter((cat) => tempSelectedCategories.includes(cat.name))
-      .map((cat) => cat.id);
-
     // Get app IDs for selected app names
     const selectedAppIds = apps
       .filter((app) => tempSelectedApps.includes(app.id))
@@ -285,11 +247,13 @@ export default function FilterComponent() {
     try {
       await fetchMemories(undefined, 1, 10, {
         apps: selectedAppIds,
-        categories: selectedCategoryIds,
+        categories: tempSelectedCategories,
         sortColumn: column,
         sortDirection: newDirection,
-        vaults: tempSelectedVaults.length ? tempSelectedVaults : undefined,
-        layers: tempSelectedLayers.length ? tempSelectedLayers : undefined,
+        scopes: tempSelectedScopes.length ? tempSelectedScopes : undefined,
+        artifactTypes: tempSelectedArtifactTypes.length ? tempSelectedArtifactTypes : undefined,
+        sources: tempSelectedSources.length ? tempSelectedSources : undefined,
+        entities: tempSelectedEntities.length ? tempSelectedEntities : undefined,
       });
     } catch (error) {
       console.error("Failed to apply sorting:", error);
@@ -299,30 +263,27 @@ export default function FilterComponent() {
   const hasActiveFilters =
     filters.selectedApps.length > 0 ||
     filters.selectedCategories.length > 0 ||
-    filters.vaults.length > 0 ||
-    filters.layers.length > 0 ||
-    filters.vectors.length > 0 ||
-    filters.circuits.length > 0 ||
+    filters.scopes.length > 0 ||
+    filters.artifactTypes.length > 0 ||
     filters.entities.length > 0 ||
+    filters.sources.length > 0 ||
     filters.showArchived;
 
   const hasTempFilters =
     tempSelectedApps.length > 0 ||
     tempSelectedCategories.length > 0 ||
-    tempSelectedVaults.length > 0 ||
-    tempSelectedLayers.length > 0 ||
-    tempSelectedVectors.length > 0 ||
-    tempSelectedCircuits.length > 0 ||
+    tempSelectedScopes.length > 0 ||
+    tempSelectedArtifactTypes.length > 0 ||
+    tempSelectedSources.length > 0 ||
     tempSelectedEntities.length > 0 ||
     showArchived;
 
   const activeFilterCount =
     filters.selectedApps.length +
     filters.selectedCategories.length +
-    filters.vaults.length +
-    filters.layers.length +
-    filters.vectors.length +
-    filters.circuits.length +
+    filters.scopes.length +
+    filters.artifactTypes.length +
+    filters.sources.length +
     filters.entities.length +
     (filters.showArchived ? 1 : 0);
 
@@ -353,13 +314,13 @@ export default function FilterComponent() {
               <span>Filters</span>
             </DialogTitle>
           </DialogHeader>
-          <Tabs defaultValue="axis" className="w-full">
+          <Tabs defaultValue="metadata" className="w-full">
             <TabsList className="grid grid-cols-5 bg-zinc-800">
               <TabsTrigger
-                value="axis"
+                value="metadata"
                 className="data-[state=active]:bg-zinc-700"
               >
-                AXIS
+                Metadata
               </TabsTrigger>
               <TabsTrigger
                 value="entities"
@@ -512,168 +473,137 @@ export default function FilterComponent() {
                 </div>
               </div>
             </TabsContent>
-            <TabsContent value="axis" className="mt-4">
+            <TabsContent value="metadata" className="mt-4">
               <div className="max-h-[350px] overflow-y-auto pr-2 space-y-4">
-                {/* Vaults */}
+                {/* Scopes */}
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-zinc-300">
-                    Vaults
+                    Scope
                   </Label>
                   <div className="space-y-2">
                     <div className="flex items-center space-x-2">
                       <Checkbox
-                        id="select-all-vaults"
+                        id="select-all-scopes"
                         checked={
-                          vaultOptions.length > 0 &&
-                          tempSelectedVaults.length === vaultOptions.length
+                          scopeOptions.length > 0 &&
+                          tempSelectedScopes.length === scopeOptions.length
                         }
                         onCheckedChange={(checked) =>
-                          setTempSelectedVaults(
-                            checked ? vaultOptions.map(v => v.value) : []
+                          setTempSelectedScopes(
+                            checked ? scopeOptions.map(s => s.value) : []
                           )
                         }
                         className="border-zinc-600 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                       />
                       <Label
-                        htmlFor="select-all-vaults"
+                        htmlFor="select-all-scopes"
                         className="text-sm font-normal text-zinc-300 cursor-pointer"
                       >
                         Select All
                       </Label>
                     </div>
-                    {vaultOptions.map((vault) => (
-                      <div key={vault.value} className="flex items-center space-x-2">
+                    {scopeOptions.map((scope) => (
+                      <div key={scope.value} className="flex items-center space-x-2">
                         <Checkbox
-                          id={`vault-${vault.value}`}
-                          checked={tempSelectedVaults.includes(vault.value)}
+                          id={`scope-${scope.value}`}
+                          checked={tempSelectedScopes.includes(scope.value)}
                           onCheckedChange={() =>
-                            setTempSelectedVaults((prev) =>
-                              prev.includes(vault.value)
-                                ? prev.filter((v) => v !== vault.value)
-                                : [...prev, vault.value]
+                            setTempSelectedScopes((prev) =>
+                              prev.includes(scope.value)
+                                ? prev.filter((s) => s !== scope.value)
+                                : [...prev, scope.value]
                             )
                           }
                           className="border-zinc-600 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                         />
                         <Label
-                          htmlFor={`vault-${vault.value}`}
+                          htmlFor={`scope-${scope.value}`}
                           className="text-sm font-normal text-zinc-300 cursor-pointer"
                         >
-                          {vault.label}
+                          {scope.label}
                         </Label>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Layers */}
+                {/* Artifact Types */}
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-zinc-300">
-                    Layers
+                    Artifact Type
                   </Label>
                   <div className="space-y-2">
                     <div className="flex items-center space-x-2">
                       <Checkbox
-                        id="select-all-layers"
+                        id="select-all-artifact-types"
                         checked={
-                          layerOptions.length > 0 &&
-                          tempSelectedLayers.length === layerOptions.length
+                          artifactTypeOptions.length > 0 &&
+                          tempSelectedArtifactTypes.length === artifactTypeOptions.length
                         }
                         onCheckedChange={(checked) =>
-                          setTempSelectedLayers(
-                            checked ? layerOptions.map(l => l.value) : []
+                          setTempSelectedArtifactTypes(
+                            checked ? artifactTypeOptions.map(t => t.value) : []
                           )
                         }
                         className="border-zinc-600 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                       />
                       <Label
-                        htmlFor="select-all-layers"
+                        htmlFor="select-all-artifact-types"
                         className="text-sm font-normal text-zinc-300 cursor-pointer"
                       >
                         Select All
                       </Label>
                     </div>
-                    {layerOptions.map((layer) => (
-                      <div key={layer.value} className="flex items-center space-x-2">
+                    {artifactTypeOptions.map((artifactType) => (
+                      <div key={artifactType.value} className="flex items-center space-x-2">
                         <Checkbox
-                          id={`layer-${layer.value}`}
-                          checked={tempSelectedLayers.includes(layer.value)}
+                          id={`artifact-type-${artifactType.value}`}
+                          checked={tempSelectedArtifactTypes.includes(artifactType.value)}
                           onCheckedChange={() =>
-                            setTempSelectedLayers((prev) =>
-                              prev.includes(layer.value)
-                                ? prev.filter((l) => l !== layer.value)
-                                : [...prev, layer.value]
+                            setTempSelectedArtifactTypes((prev) =>
+                              prev.includes(artifactType.value)
+                                ? prev.filter((t) => t !== artifactType.value)
+                                : [...prev, artifactType.value]
                             )
                           }
                           className="border-zinc-600 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                         />
                         <Label
-                          htmlFor={`layer-${layer.value}`}
+                          htmlFor={`artifact-type-${artifactType.value}`}
                           className="text-sm font-normal text-zinc-300 cursor-pointer"
                         >
-                          {layer.label}
+                          {artifactType.label}
                         </Label>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Vectors */}
+                {/* Sources */}
                 <div className="space-y-2">
                   <Label className="text-sm font-medium text-zinc-300">
-                    Vectors (Say/Want/Do)
+                    Source
                   </Label>
                   <div className="space-y-2">
-                    {vectorOptions.map((vector) => (
-                      <div key={vector.value} className="flex items-center space-x-2">
+                    {sourceOptions.map((source) => (
+                      <div key={source.value} className="flex items-center space-x-2">
                         <Checkbox
-                          id={`vector-${vector.value}`}
-                          checked={tempSelectedVectors.includes(vector.value)}
+                          id={`source-${source.value}`}
+                          checked={tempSelectedSources.includes(source.value)}
                           onCheckedChange={() =>
-                            setTempSelectedVectors((prev) =>
-                              prev.includes(vector.value)
-                                ? prev.filter((v) => v !== vector.value)
-                                : [...prev, vector.value]
+                            setTempSelectedSources((prev) =>
+                              prev.includes(source.value)
+                                ? prev.filter((s) => s !== source.value)
+                                : [...prev, source.value]
                             )
                           }
                           className="border-zinc-600 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                         />
                         <Label
-                          htmlFor={`vector-${vector.value}`}
+                          htmlFor={`source-${source.value}`}
                           className="text-sm font-normal text-zinc-300 cursor-pointer"
                         >
-                          {vector.label}
-                        </Label>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Circuits */}
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium text-zinc-300">
-                    Circuits
-                  </Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {circuitOptions.map((circuit) => (
-                      <div key={circuit.value} className="flex items-center space-x-2">
-                        <Checkbox
-                          id={`circuit-${circuit.value}`}
-                          checked={tempSelectedCircuits.includes(circuit.value)}
-                          onCheckedChange={() =>
-                            setTempSelectedCircuits((prev) =>
-                              prev.includes(circuit.value)
-                                ? prev.filter((c) => c !== circuit.value)
-                                : [...prev, circuit.value]
-                            )
-                          }
-                          className="border-zinc-600 data-[state=checked]:bg-primary data-[state=checked]:border-primary"
-                        />
-                        <Label
-                          htmlFor={`circuit-${circuit.value}`}
-                          className="text-sm font-normal text-zinc-300 cursor-pointer"
-                        >
-                          {circuit.label}
+                          {source.label}
                         </Label>
                       </div>
                     ))}

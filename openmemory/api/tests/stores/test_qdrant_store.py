@@ -182,8 +182,8 @@ def sample_payload():
     return {
         "content": "This is a test memory",
         "memory_id": str(uuid.uuid4()),
-        "vault": "WLT",
-        "layer": "cognitive",
+        "category": "architecture",
+        "scope": "project",
     }
 
 
@@ -278,7 +278,7 @@ class TestTenantQdrantStoreUpsert:
         collection = mock_qdrant_client._collections["embeddings_test-model"]
         stored_payload = collection["points"][point_id]["payload"]
         assert stored_payload["content"] == sample_payload["content"]
-        assert stored_payload["vault"] == sample_payload["vault"]
+        assert stored_payload["category"] == sample_payload["category"]
 
     def test_upsert_stores_vector(self, mock_qdrant_client, sample_vector, sample_payload):
         """upsert() should store the embedding vector."""
@@ -375,16 +375,16 @@ class TestTenantQdrantStoreSearch:
             embedding_dim=TEST_EMBEDDING_DIM,
         )
 
-        # Add points with different vaults
-        store.upsert("point-1", sample_vector, {"content": "Content 1", "vault": "WLT"})
-        store.upsert("point-2", sample_vector, {"content": "Content 2", "vault": "SOV"})
+        # Add points with different categories
+        store.upsert("point-1", sample_vector, {"content": "Content 1", "category": "workflow"})
+        store.upsert("point-2", sample_vector, {"content": "Content 2", "category": "security"})
 
-        results = store.search(sample_vector, limit=10, filters={"vault": "WLT"})
+        results = store.search(sample_vector, limit=10, filters={"category": "workflow"})
 
-        # Should only find WLT vault point
+        # Should only find workflow category point
         for result in results:
-            if result.payload.get("vault"):  # Only check if vault is in payload
-                assert result.payload["vault"] == "WLT"
+            if result.payload.get("category"):
+                assert result.payload["category"] == "workflow"
 
 
 class TestTenantQdrantStoreDelete:

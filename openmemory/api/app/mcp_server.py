@@ -23,18 +23,11 @@ import uuid
 
 from app.database import SessionLocal
 from app.models import Memory, MemoryAccessLog, MemoryState, MemoryStatusHistory
-from app.utils.axis_tags import (
-    process_memory_input_auto,
-    VAULT_CODES,
-    is_ai_observation,
-    get_confidence,
-    is_silent,
-    is_question,
-)
 from app.utils.structured_memory import (
     build_structured_memory,
     validate_update_fields,
     apply_metadata_updates,
+    validate_text,
     StructuredMemoryError,
 )
 from app.utils.reranking import (
@@ -97,7 +90,7 @@ from app.security.session_binding import get_session_binding_store
 # Load environment variables
 load_dotenv()
 
-# Initialize MCP for AXIS tools
+# Initialize MCP for memory tools
 mcp = FastMCP("mem0-mcp-server")
 
 # Initialize separate MCP for Business Concept tools (reduces context window bloat)
@@ -132,7 +125,7 @@ mcp_router = APIRouter(prefix="/mcp")
 # Create a separate router for Business Concept endpoints
 concept_router = APIRouter(prefix="/concepts")
 
-# Initialize SSE transport for AXIS tools (with session ID capture)
+# Initialize SSE transport for MCP tools (with session ID capture)
 sse = SessionAwareSseTransport("/mcp/messages/")
 
 
@@ -378,37 +371,29 @@ def _check_tool_scope(required_scope: str) -> str | None:
 
 Required:
 - text: Pure content, no markers
-- vault: SOV (identity), WLT (business), SIG (pattern), FRC (health), DIR (system), FGP (evolution), Q (questions)
-- layer: somatic, emotional, narrative, cognitive, values, identity, relational, goals, resources, context, temporal, meta
-
-Optional structure:
-- circuit: 1-8
-- vector: say, want, do
+- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
+- scope: session | user | team | project | org | enterprise
 
 Optional metadata:
-- entity: Reference entity (e.g., "BMG")
+- artifact_type: repo | service | module | component | api | db | infra | file
+- artifact_ref: reference string (repo name, file path, symbol, service)
+- entity: team/service/component/person
 - source: user (default) or inference
-- was: Previous state
-- origin: Origin reference
-- evidence: List of evidence items
-
-Optional tags:
-- tags: Dict with string keys (e.g., {"trigger": true, "intensity": 7})
+- evidence: List of ADR/PR/issue refs
+- tags: Dict with string keys
 
 Examples:
-- add_memories(text="Kritik triggert Wut", vault="FRC", layer="emotional", circuit=2, vector="say", entity="BMG", tags={"trigger": true, "intensity": 7})
-- add_memories(text="OBSERVE: 90% Pattern", vault="FGP", layer="meta", circuit=7, source="inference", tags={"ai": true, "conf": 0.8, "silent": true}, evidence=["projekt-a", "projekt-b"])
+- add_memories(text="Use module boundaries for auth clients", category="architecture", scope="org", artifact_type="module", artifact_ref="auth/clients", entity="Platform", tags={"decision": true})
+- add_memories(text="Always run python -m pytest before merge", category="workflow", scope="team", entity="Backend", evidence=["ADR-014"])
 """)
 async def add_memories(
     text: str,
-    vault: str,
-    layer: str,
-    circuit: int = None,
-    vector: str = None,
+    category: str,
+    scope: str,
+    artifact_type: str = None,
+    artifact_ref: str = None,
     entity: str = None,
     source: str = "user",
-    was: str = None,
-    origin: str = None,
     evidence: list = None,
     tags: dict = None,
 ) -> str:
@@ -427,16 +412,14 @@ async def add_memories(
 
     # Validate and build structured memory
     try:
-        clean_text, axis_metadata = build_structured_memory(
+        clean_text, structured_metadata = build_structured_memory(
             text=text,
-            vault=vault,
-            layer=layer,
-            circuit=circuit,
-            vector=vector,
+            category=category,
+            scope=scope,
+            artifact_type=artifact_type,
+            artifact_ref=artifact_ref,
             entity=entity,
             source=source,
-            was=was,
-            origin=origin,
             evidence=evidence,
             tags=tags,
         )
@@ -446,7 +429,7 @@ async def add_memories(
     combined_metadata = {
         "source_app": "openmemory",
         "mcp_client": client_name,
-        **axis_metadata,
+        **structured_metadata,
     }
 
     # Get memory client safely
@@ -490,20 +473,12 @@ async def add_memories(
                                 content=result['memory'],
                                 metadata_=combined_metadata,
                                 state=MemoryState.active,
-                                # AXIS 3.4 indexed fields
-                                vault=combined_metadata.get("vault"),
-                                layer=combined_metadata.get("layer"),
-                                axis_vector=combined_metadata.get("vector"),
                             )
                             db.add(memory)
                         else:
                             memory.state = MemoryState.active
                             memory.content = result['memory']
                             memory.metadata_ = combined_metadata
-                            # Update AXIS 3.4 indexed fields
-                            memory.vault = combined_metadata.get("vault")
-                            memory.layer = combined_metadata.get("layer")
-                            memory.axis_vector = combined_metadata.get("vector")
 
                         # Create history entry
                         history = MemoryStatusHistory(
@@ -552,7 +527,7 @@ async def add_memories(
                                         memory_id=result['id'],
                                         user_id=uid,
                                         content=result.get('memory', ''),
-                                        existing_entity=combined_metadata.get('re'),
+                                        existing_entity=combined_metadata.get('entity'),
                                     )
                                     logging.info(f"Entity bridge: {bridge_result.get('entities_bridged', 0)} entities, "
                                                 f"{bridge_result.get('relations_created', 0)} relations")
@@ -580,7 +555,7 @@ async def add_memories(
                 # Format response using the new lean format
                 formatted_response = format_add_memories_response(
                     results=results,
-                    axis_metadata=axis_metadata,
+                    structured_metadata=structured_metadata,
                 )
                 return json.dumps(formatted_response)
 
@@ -595,7 +570,7 @@ async def add_memories(
 
 @mcp.tool(description="""Search memories with semantic search and metadata-based re-ranking.
 
-BOOST parameters (entity, layer, vault, vector, circuit, tags) influence
+BOOST parameters (category, scope, artifact_type, artifact_ref, entity, tags) influence
 ranking but do NOT exclude results. All semantically relevant memories
 are returned, with contextually matching ones ranked higher.
 
@@ -609,11 +584,11 @@ explicit time windows like "last week" or "Q4 2025".
 
 Parameters:
 - query: Search query (required)
-- entity: Boost memories about this entity (matches metadata.re)
-- layer: Boost memories in this layer (e.g., "emotional", "strategic")
-- vault: Boost memories in this vault (e.g., "FRC", "WLT", "CNV")
-- vector: Boost memories with this vector (e.g., "say", "want", "do")
-- circuit: Boost memories in this circuit (1-8)
+- category: Boost memories with this category (decision, convention, etc.)
+- scope: Boost memories with this scope (team, project, org, etc.)
+- artifact_type: Boost memories for this artifact type (repo, api, file, etc.)
+- artifact_ref: Boost memories for this artifact reference
+- entity: Boost memories about this entity
 - tags: Comma-separated tags to boost (e.g., "trigger,important")
 - recency_weight: How much to prioritize recent memories (0.0-1.0)
                   0.0 = off (default), 0.4 = moderate, 0.7 = strong
@@ -644,11 +619,11 @@ Returns lean JSON optimized for LLM processing:
 - results[].id: UUID for chaining with update_memory/delete_memories
 - results[].memory: The actual content
 - results[].score: Final relevance score (2 decimals)
-- results[].vault: Short code (FRC, SOV, WLT, SIG, DIR, FGP, Q)
-- results[].layer: Content domain (emotional, cognitive, etc.)
-- results[].circuit: Activation level 1-8 (if present)
-- results[].vector: say/want/do (if present)
-- results[].entity: Reference object (if present)
+- results[].category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
+- results[].scope: session | user | team | project | org | enterprise
+- results[].artifact_type: repo | service | module | component | api | db | infra | file
+- results[].artifact_ref: reference string (if present)
+- results[].entity: team/service/component/person (if present)
 - results[].tags: Qualitative info (if present)
 - results[].created_at: Berlin time (Europe/Berlin)
 - results[].updated_at: Berlin time (if present)
@@ -669,11 +644,11 @@ Examples:
 async def search_memory(
     query: str,
     # BOOST context (soft ranking - does NOT exclude)
+    category: str = None,
+    scope: str = None,
+    artifact_type: str = None,
+    artifact_ref: str = None,
     entity: str = None,
-    layer: str = None,
-    vault: str = None,
-    vector: str = None,
-    circuit: int = None,
     tags: str = None,
     # RECENCY boost (soft ranking - does NOT exclude)
     recency_weight: float = 0.0,
@@ -733,15 +708,14 @@ async def search_memory(
             allowed = set(str(mid) for mid in accessible_memory_ids)
 
             # Build search context for boosting
-            vault_full = VAULT_CODES.get(vault, vault) if vault else None
             boost_tags = [t.strip() for t in tags.split(",")] if tags else []
 
             context = SearchContext(
+                category=category,
+                scope=scope,
+                artifact_type=artifact_type,
+                artifact_ref=artifact_ref,
                 entity=entity,
-                layer=layer,
-                vault=vault_full,
-                vector=vector,
-                circuit=circuit,
                 tags=boost_tags,
                 recency_weight=recency_weight,
                 recency_halflife_days=recency_halflife_days,
@@ -991,12 +965,14 @@ async def search_memory(
                         "final": round(final_score, 4),
                     },
                     "metadata": {
-                        "vault": metadata.get("vault"),
-                        "layer": metadata.get("layer"),
-                        "vector": metadata.get("vector"),
-                        "circuit": metadata.get("circuit"),
+                        "category": metadata.get("category"),
+                        "scope": metadata.get("scope"),
+                        "artifact_type": metadata.get("artifact_type"),
+                        "artifact_ref": metadata.get("artifact_ref"),
+                        "source": metadata.get("source"),
+                        "evidence": metadata.get("evidence"),
                         "tags": stored_tags,
-                        "entity": metadata.get("re"),
+                        "entity": metadata.get("entity"),
                     },
                     "created_at": payload.get("created_at"),
                     "updated_at": payload.get("updated_at"),
@@ -1056,10 +1032,12 @@ async def search_memory(
                                         "graph_similarity": fr.original_score,
                                     },
                                     "metadata": {
-                                        "vault": gp.get("vault"),
-                                        "layer": gp.get("layer"),
-                                        "vector": gp.get("vector"),
-                                        "circuit": gp.get("circuit"),
+                                        "category": gp.get("category"),
+                                        "scope": gp.get("scope"),
+                                        "artifact_type": gp.get("artifact_type"),
+                                        "artifact_ref": gp.get("artifact_ref"),
+                                        "source": gp.get("source"),
+                                        "evidence": gp.get("evidence"),
                                         "tags": {},
                                         "entity": None,
                                     },
@@ -1127,16 +1105,16 @@ async def search_memory(
             if verbose:
                 # Build verbose response metadata
                 context_applied = {}
+                if category:
+                    context_applied["category"] = category
+                if scope:
+                    context_applied["scope"] = scope
+                if artifact_type:
+                    context_applied["artifact_type"] = artifact_type
+                if artifact_ref:
+                    context_applied["artifact_ref"] = artifact_ref
                 if entity:
                     context_applied["entity"] = entity
-                if layer:
-                    context_applied["layer"] = layer
-                if vault_full:
-                    context_applied["vault"] = vault_full
-                if vector:
-                    context_applied["vector"] = vector
-                if circuit is not None:
-                    context_applied["circuit"] = circuit
                 if boost_tags:
                     context_applied["tags"] = boost_tags
                 if recency_weight > 0:
@@ -1247,7 +1225,7 @@ projected from your Qdrant/OpenMemory metadata.
 Parameters:
 - memory_id: UUID of the seed memory (required)
 - via: Optional comma-separated list of dimensions to traverse:
-       tag, entity, vault, layer, vector, circuit, origin, evidence, app
+       tag, entity, category, scope, artifact_type, artifact_ref, evidence, app
        (you can also pass explicit OM_* relationship types)
 - limit: Max related memories to return (default: 10, max: 100)
 
@@ -1425,7 +1403,7 @@ async def graph_subgraph(
 @mcp.tool(description="""Aggregate memories by a Neo4j metadata dimension.
 
 Parameters:
-- group_by: vault | layer | tag | entity | app | vector | circuit | origin | evidence | source | state
+- group_by: category | scope | artifact_type | artifact_ref | tag | entity | app | evidence | source | state
 - limit: max buckets to return (default: 20)
 """)
 async def graph_aggregate(group_by: str, limit: int = 20) -> str:
@@ -1536,7 +1514,7 @@ async def graph_tag_cooccurrence(limit: int = 20, min_count: int = 2, sample_siz
 @mcp.tool(description="""Find a shortest path between two entities through the Neo4j metadata graph.
 
 Parameters:
-- entity_a: Name of entity A (matches metadata.re projection)
+- entity_a: Name of entity A (matches metadata.entity projection)
 - entity_b: Name of entity B
 - max_hops: cap for traversal (default: 6, max: 12)
 """)
@@ -1587,11 +1565,11 @@ async def graph_path_between_entities(entity_a: str, entity_b: str, max_hops: in
 Returns lean JSON optimized for LLM processing:
 - id: UUID for chaining with update_memory/delete_memories
 - memory: The actual content
-- vault: Short code (FRC, SOV, WLT, SIG, DIR, FGP, Q)
-- layer: Content domain (emotional, cognitive, etc.)
-- circuit: Activation level 1-8 (if present)
-- vector: say/want/do (if present)
-- entity: Reference object (if present)
+- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
+- scope: session | user | team | project | org | enterprise
+- artifact_type: repo | service | module | component | api | db | infra | file
+- artifact_ref: reference string (if present)
+- entity: team/service/component/person (if present)
 - tags: Qualitative info (if present)
 - created_at: Berlin time (Europe/Berlin)
 - updated_at: Berlin time (if present)
@@ -1629,15 +1607,17 @@ async def list_memories() -> str:
             accessible_memory_ids = [memory.id for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
 
             def extract_memory_data(memory_data: dict, md: dict) -> dict:
-                """Extract and normalize memory data with AXIS fields."""
+                """Extract and normalize memory data with structured fields."""
                 return {
                     "id": memory_data.get("id"),
                     "memory": memory_data.get("memory"),
-                    "vault": md.get("vault"),
-                    "layer": md.get("layer"),
-                    "circuit": md.get("circuit"),
-                    "vector": md.get("vector"),
-                    "entity": md.get("re"),
+                    "category": md.get("category"),
+                    "scope": md.get("scope"),
+                    "artifact_type": md.get("artifact_type"),
+                    "artifact_ref": md.get("artifact_ref"),
+                    "entity": md.get("entity"),
+                    "source": md.get("source"),
+                    "evidence": md.get("evidence"),
                     "tags": md.get("tags"),
                     "created_at": memory_data.get("created_at"),
                     "updated_at": memory_data.get("updated_at"),
@@ -1868,16 +1848,14 @@ Optional content:
 - text: New content text
 
 Optional structure (only provided fields are updated):
-- vault: SOV|WLT|SIG|FRC|DIR|FGP|Q
-- layer: somatic|emotional|narrative|cognitive|values|identity|relational|goals|resources|context|temporal|meta
-- circuit: 1-8
-- vector: say|want|do
+- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
+- scope: session | user | team | project | org | enterprise
+- artifact_type: repo | service | module | component | api | db | infra | file
+- artifact_ref: reference string (path, symbol, service)
 
 Optional metadata:
 - entity: Reference entity
 - source: user|inference
-- was: Previous state
-- origin: Origin reference
 - evidence: List of evidence items
 
 Tag operations:
@@ -1889,7 +1867,7 @@ Maintenance mode:
 
 Examples:
 - update_memory(memory_id="abc-123", text="Kritik triggert jetzt Neugier", add_tags={"evolved": true})
-- update_memory(memory_id="abc-123", vault="SOV", layer="identity", preserve_timestamps=true)
+- update_memory(memory_id="abc-123", category="decision", scope="project", preserve_timestamps=true)
 - update_memory(memory_id="abc-123", add_tags={"confirmed": true})
 - update_memory(memory_id="abc-123", remove_tags=["silent"])
 """)
@@ -1898,15 +1876,13 @@ async def update_memory(
     # Content
     text: str = None,
     # Structure
-    vault: str = None,
-    layer: str = None,
-    circuit: int = None,
-    vector: str = None,
+    category: str = None,
+    scope: str = None,
+    artifact_type: str = None,
+    artifact_ref: str = None,
     # Metadata
     entity: str = None,
     source: str = None,
-    was: str = None,
-    origin: str = None,
     evidence: list = None,
     # Tag operations
     add_tags: dict = None,
@@ -1930,19 +1906,23 @@ async def update_memory(
     # Validate update fields
     try:
         validated_fields = validate_update_fields(
-            text=text,
-            vault=vault,
-            layer=layer,
-            circuit=circuit,
-            vector=vector,
+            category=category,
+            scope=scope,
+            artifact_type=artifact_type,
+            artifact_ref=artifact_ref,
             entity=entity,
             source=source,
-            was=was,
-            origin=origin,
             evidence=evidence,
         )
     except StructuredMemoryError as e:
         return json.dumps({"error": str(e)})
+
+    content_text = None
+    if text is not None:
+        try:
+            content_text = validate_text(text)
+        except StructuredMemoryError as e:
+            return json.dumps({"error": str(e)})
 
     try:
         db = SessionLocal()
@@ -1970,20 +1950,12 @@ async def update_memory(
 
             # Update content if provided
             content_updated = False
-            if "text" in validated_fields:
-                memory.content = validated_fields["text"]
+            if content_text is not None:
+                memory.content = content_text
                 content_updated = True
 
             # Update metadata
             memory.metadata_ = updated_metadata
-
-            # Update indexed fields if changed
-            if "vault_full" in validated_fields:
-                memory.vault = validated_fields["vault_full"]
-            if "layer" in validated_fields:
-                memory.layer = validated_fields["layer"]
-            if "vector" in validated_fields:
-                memory.axis_vector = validated_fields["vector"]
 
             # Handle timestamps
             if not preserve_timestamps:
@@ -1994,7 +1966,7 @@ async def update_memory(
                 memory_client = get_memory_client_safe()
                 if memory_client:
                     try:
-                        memory_client.update(str(memory_id), validated_fields["text"])
+                        memory_client.update(str(memory_id), content_text)
                     except Exception as vs_error:
                         logging.warning(f"Failed to update vector store: {vs_error}")
 
@@ -2004,7 +1976,10 @@ async def update_memory(
                 app_id=app.id,
                 access_type="update",
                 metadata_={
-                    "fields_updated": list(validated_fields.keys()),
+                    "fields_updated": (
+                        list(validated_fields.keys())
+                        + (["text"] if content_text is not None else [])
+                    ),
                     "add_tags": add_tags,
                     "remove_tags": remove_tags,
                     "preserve_timestamps": preserve_timestamps,
@@ -2576,7 +2551,7 @@ Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
 Parameters:
 - memory_id: UUID of the memory to extract from (required if content not provided)
 - content: Text content to extract from (required if memory_id not provided)
-- vault: Optional vault for concept scoping (WLT, FRC, etc.)
+- category: Optional category for concept scoping
 - store: Whether to store extracted concepts in graph (default: true)
 
 Returns:
@@ -2590,7 +2565,7 @@ Returns:
 async def extract_business_concepts(
     memory_id: str = None,
     content: str = None,
-    vault: str = None,
+    category: str = None,
     store: bool = True,
 ) -> str:
     uid = user_id_var.get(None)
@@ -2621,7 +2596,8 @@ async def extract_business_concepts(
                 if not memory:
                     return json.dumps({"error": f"Memory {memory_id} not found"})
                 content = memory.content
-                vault = vault or memory.vault
+                if category is None and isinstance(memory.metadata_, dict):
+                    category = memory.metadata_.get("category")
             finally:
                 db.close()
 
@@ -2634,7 +2610,7 @@ async def extract_business_concepts(
             memory_id=effective_memory_id,
             user_id=uid,
             content=content,
-            vault=vault,
+            category=category,
             store_in_graph=store,
         )
 
@@ -2650,18 +2626,18 @@ async def extract_business_concepts(
 Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
 
 Parameters:
-- vault: Filter by vault (WLT, FRC, etc.)
+- category: Filter by category
 - concept_type: Filter by type (causal, pattern, comparison, trend, contradiction, hypothesis, fact)
 - min_confidence: Minimum confidence threshold (0.0-1.0)
 - limit: Maximum results (default: 50)
 - offset: Pagination offset
 
 Returns:
-- concepts[]: List of concepts with name, type, confidence, vault, etc.
+- concepts[]: List of concepts with name, type, confidence, category, etc.
 - count: Number of concepts returned
 """)
 async def list_business_concepts(
-    vault: str = None,
+    category: str = None,
     concept_type: str = None,
     min_confidence: float = None,
     limit: int = 50,
@@ -2687,7 +2663,7 @@ async def list_business_concepts(
 
         concepts = list_concepts(
             user_id=uid,
-            vault=vault,
+            category=category,
             concept_type=concept_type,
             min_confidence=min_confidence,
             limit=limit,
@@ -3012,7 +2988,7 @@ Requires BUSINESS_CONCEPTS_ENABLED=true and BUSINESS_CONCEPTS_CONTRADICTION_DETE
 
 Parameters:
 - concept_name: Optional concept to analyze (if omitted, finds all contradictions)
-- vault: Optional vault filter
+- category: Optional category filter
 - min_severity: Minimum severity threshold 0.0-1.0 (default: 0.5)
 
 Returns:
@@ -3021,7 +2997,7 @@ Returns:
 """)
 async def find_concept_contradictions(
     concept_name: str = None,
-    vault: str = None,
+    category: str = None,
     min_severity: float = 0.5,
 ) -> str:
     uid = user_id_var.get(None)
@@ -3054,7 +3030,7 @@ async def find_concept_contradictions(
         else:
             contradictions = find_all_contradictions(
                 user_id=uid,
-                vault=vault,
+                category=category,
                 min_severity=min_severity,
             )
 
@@ -3084,7 +3060,7 @@ Returns:
 - convergence_score: Overall convergence score 0.0-1.0
 - is_strong: Whether meets strong convergence threshold
 - temporal_spread_days: Days between first and last evidence
-- vault_diversity: Diversity of evidence sources
+- category_diversity: Diversity of evidence sources
 - recommended_confidence: Suggested confidence boost
 - evidence_count: Number of supporting memories
 """)
@@ -3364,7 +3340,7 @@ async def handle_post_message(request: Request):
 # BUSINESS CONCEPTS MCP ENDPOINT - /concepts/claude/sse/{user_id}
 # =============================================================================
 # This separate endpoint keeps Business Concept tools isolated from the
-# main AXIS memory tools to reduce context window bloat in daily use.
+# main memory tools to reduce context window bloat in daily use.
 
 
 @concept_router.get("/{client_name}/sse/{user_id}")
@@ -3560,7 +3536,7 @@ def setup_mcp_server(app: FastAPI):
     mcp._mcp_server.name = "mem0-mcp-server"
     concept_mcp._mcp_server.name = "business-concepts-mcp-server"
 
-    # Include MCP router in the FastAPI app (AXIS tools)
+    # Include MCP router in the FastAPI app
     app.include_router(mcp_router)
 
     # Include Business Concepts router (separate endpoint for concept tools)

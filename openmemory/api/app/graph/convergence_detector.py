@@ -31,7 +31,7 @@ class ConvergenceEvidence:
 
     memory_id: str
     content: str
-    vault: str
+    category: str
     created_at: datetime
     entities: List[str]
     origin: Optional[str] = None
@@ -49,7 +49,7 @@ class ConvergenceResult:
     evidence: List[ConvergenceEvidence]
     convergence_score: float
     temporal_spread_days: int
-    vault_diversity: float
+    category_diversity: float
     source_diversity: float
     entity_path_diversity: float
     recommended_confidence: float
@@ -62,13 +62,13 @@ class ConvergenceResult:
         Strong convergence criteria:
         - Convergence score >= 0.7 (highly independent sources)
         - Temporal spread >= 14 days (not immediate echo)
-        - Vault diversity >= 0.5 (crosses domains)
+        - Category diversity >= 0.5 (crosses categories)
         - At least 3 pieces of evidence
         """
         return (
             self.convergence_score >= 0.7
             and self.temporal_spread_days >= 14
-            and self.vault_diversity >= 0.5
+            and self.category_diversity >= 0.5
             and len(self.evidence) >= 3
         )
 
@@ -79,7 +79,7 @@ class ConvergenceResult:
             "evidence_count": len(self.evidence),
             "convergence_score": round(self.convergence_score, 3),
             "temporal_spread_days": self.temporal_spread_days,
-            "vault_diversity": round(self.vault_diversity, 3),
+            "category_diversity": round(self.category_diversity, 3),
             "source_diversity": round(self.source_diversity, 3),
             "entity_path_diversity": round(self.entity_path_diversity, 3),
             "recommended_confidence": round(self.recommended_confidence, 3),
@@ -106,7 +106,7 @@ class ConvergenceDetector:
         # Find emerging consensus
         emerging = detector.find_emerging_consensus(
             min_temporal_spread=30,
-            min_vault_diversity=0.5
+            min_category_diversity=0.5
         )
     """
 
@@ -127,7 +127,7 @@ class ConvergenceDetector:
 
         Fetches supporting memories and calculates convergence metrics:
         - Temporal spread (days between earliest/latest evidence)
-        - Vault diversity (how many different vaults)
+        - Category diversity (how many different categories)
         - Source diversity (how many different origins)
         - Entity path diversity (how different are the entity networks)
 
@@ -150,9 +150,9 @@ class ConvergenceDetector:
         RETURN
             m.id AS memory_id,
             m.content AS content,
-            m.vault AS vault,
+            m.category AS category,
             m.createdAt AS created_at,
-            COALESCE(m.origin, 'unknown') AS origin,
+            COALESCE(m.source, 'unknown') AS origin,
             COALESCE(m.confidence, 0.5) AS confidence,
             entities
         ORDER BY m.createdAt ASC
@@ -178,7 +178,7 @@ class ConvergenceDetector:
             ConvergenceEvidence(
                 memory_id=r["memory_id"],
                 content=r["content"],
-                vault=r["vault"],
+                category=r["category"],
                 created_at=r["created_at"],
                 entities=r["entities"] or [],
                 origin=r["origin"],
@@ -189,15 +189,15 @@ class ConvergenceDetector:
 
         # Calculate convergence metrics
         temporal_spread = self._calculate_temporal_spread(evidence)
-        vault_diversity = self._calculate_vault_diversity(evidence)
+        category_diversity = self._calculate_category_diversity(evidence)
         source_diversity = self._calculate_source_diversity(evidence)
         entity_path_diversity = self._calculate_entity_path_diversity(evidence)
 
         # Overall convergence score (weighted combination)
-        # Weights: temporal=25%, vault=30%, entity=25%, source=20%
+        # Weights: temporal=25%, category=30%, entity=25%, source=20%
         convergence_score = (
             0.25 * min(1.0, temporal_spread / 90.0)
-            + 0.30 * vault_diversity
+            + 0.30 * category_diversity
             + 0.25 * entity_path_diversity
             + 0.20 * source_diversity
         )
@@ -212,7 +212,7 @@ class ConvergenceDetector:
             f"Convergence analysis for '{concept_name}': "
             f"score={convergence_score:.3f}, "
             f"temporal_spread={temporal_spread}d, "
-            f"vault_diversity={vault_diversity:.3f}"
+            f"category_diversity={category_diversity:.3f}"
         )
 
         return ConvergenceResult(
@@ -220,7 +220,7 @@ class ConvergenceDetector:
             evidence=evidence,
             convergence_score=convergence_score,
             temporal_spread_days=temporal_spread,
-            vault_diversity=vault_diversity,
+            category_diversity=category_diversity,
             source_diversity=source_diversity,
             entity_path_diversity=entity_path_diversity,
             recommended_confidence=recommended_confidence,
@@ -228,9 +228,9 @@ class ConvergenceDetector:
 
     def find_emerging_consensus(
         self,
-        vault: Optional[str] = None,
+        category: Optional[str] = None,
         min_temporal_spread: int = 30,
-        min_vault_diversity: float = 0.5,
+        min_category_diversity: float = 0.5,
         limit: int = 50,
     ) -> List[ConvergenceResult]:
         """
@@ -239,12 +239,12 @@ class ConvergenceDetector:
         Identifies concepts with:
         - Multiple supporting memories
         - Evidence spread over time (not all at once)
-        - Evidence from different vaults (cross-domain)
+        - Evidence from different categories (cross-category)
 
         Args:
-            vault: Optional vault filter (e.g., 'WLT', 'FRC')
+            category: Optional category filter
             min_temporal_spread: Minimum days between first and last evidence (default: 30)
-            min_vault_diversity: Minimum vault diversity score 0.0-1.0 (default: 0.5)
+            min_category_diversity: Minimum category diversity score 0.0-1.0 (default: 0.5)
             limit: Maximum results to return (default: 50)
 
         Returns:
@@ -254,16 +254,16 @@ class ConvergenceDetector:
         MATCH (concept:OM_Concept {userId: $userId})
         MATCH (concept)<-[:SUPPORTS]-(m:OM_Memory)
 
-        // Filter by vault if specified
-        WHERE $vault IS NULL OR concept.vault = $vault
+        // Filter by category if specified
+        WHERE $category IS NULL OR concept.category = $category
 
         WITH concept,
              COLLECT({
                  id: m.id,
                  content: m.content,
-                 vault: m.vault,
+                 category: m.category,
                  created: m.createdAt,
-                 origin: COALESCE(m.origin, 'unknown'),
+                 origin: COALESCE(m.source, 'unknown'),
                  confidence: COALESCE(m.confidence, 0.5)
              }) AS memories
 
@@ -277,21 +277,21 @@ class ConvergenceDetector:
 
         WHERE temporal_spread >= $minTemporalSpread
 
-        // Calculate vault diversity
+        // Calculate category diversity
         WITH concept, memories, temporal_spread,
              SIZE(memories) AS total,
-             SIZE(COLLECT(DISTINCT [m IN memories | m.vault])) AS unique_vaults
+             SIZE(COLLECT(DISTINCT [m IN memories | m.category])) AS unique_categories
         WITH concept, memories, temporal_spread,
-             unique_vaults * 1.0 / total AS vault_diversity
+             unique_categories * 1.0 / total AS category_diversity
 
-        WHERE vault_diversity >= $minVaultDiversity
+        WHERE category_diversity >= $minCategoryDiversity
 
         RETURN
             concept.name AS concept_name,
             memories,
             temporal_spread,
-            vault_diversity
-        ORDER BY vault_diversity DESC, temporal_spread DESC
+            category_diversity
+        ORDER BY category_diversity DESC, temporal_spread DESC
         LIMIT $limit
         """
 
@@ -300,9 +300,9 @@ class ConvergenceDetector:
                 cypher,
                 {
                     "userId": self.user_id,
-                    "vault": vault,
+                    "category": category,
                     "minTemporalSpread": min_temporal_spread,
-                    "minVaultDiversity": min_vault_diversity,
+                    "minCategoryDiversity": min_category_diversity,
                     "limit": limit,
                 },
             )
@@ -317,7 +317,7 @@ class ConvergenceDetector:
                 ConvergenceEvidence(
                     memory_id=m["id"],
                     content=m["content"],
-                    vault=m["vault"],
+                    category=m["category"],
                     created_at=m["created"],
                     entities=[],  # Not fetched in this query for performance
                     origin=m["origin"],
@@ -332,7 +332,7 @@ class ConvergenceDetector:
 
             convergence_score = (
                 0.25 * min(1.0, r["temporal_spread"] / 90.0)
-                + 0.30 * r["vault_diversity"]
+                + 0.30 * r["category_diversity"]
                 + 0.25 * entity_path_diversity
                 + 0.20 * source_diversity
             )
@@ -351,7 +351,7 @@ class ConvergenceDetector:
                     evidence=evidence,
                     convergence_score=convergence_score,
                     temporal_spread_days=r["temporal_spread"],
-                    vault_diversity=r["vault_diversity"],
+                    category_diversity=r["category_diversity"],
                     source_diversity=source_diversity,
                     entity_path_diversity=entity_path_diversity,
                     recommended_confidence=recommended_confidence,
@@ -360,7 +360,7 @@ class ConvergenceDetector:
 
         logger.info(
             f"Found {len(convergence_results)} concepts with emerging consensus "
-            f"(vault={vault}, min_temporal_spread={min_temporal_spread}d)"
+            f"(category={category}, min_temporal_spread={min_temporal_spread}d)"
         )
 
         return sorted(
@@ -368,17 +368,17 @@ class ConvergenceDetector:
         )
 
     def detect_cross_domain_bridges(
-        self, vault_a: str, vault_b: str, min_common_memories: int = 3
+        self, category_a: str, category_b: str, min_common_memories: int = 3
     ) -> List[Tuple[str, str, float, int]]:
         """
-        Find concepts from different vaults with shared evidence.
+        Find concepts from different categories with shared evidence.
 
         Identifies potential cross-domain synthesis opportunities using
         Adamic Adar scoring (weighted by rarity of shared connections).
 
         Args:
-            vault_a: First vault (e.g., 'WLT' for business)
-            vault_b: Second vault (e.g., 'FRC' for emotional)
+            category_a: First category
+            category_b: Second category
             min_common_memories: Minimum shared supporting memories (default: 3)
 
         Returns:
@@ -386,9 +386,9 @@ class ConvergenceDetector:
             sorted by adamic_adar_score descending
         """
         cypher = """
-        // Find concepts from different vaults sharing supporting memories
-        MATCH (c1:OM_Concept {userId: $userId, vault: $vaultA})
-        MATCH (c2:OM_Concept {userId: $userId, vault: $vaultB})
+        // Find concepts from different categories sharing supporting memories
+        MATCH (c1:OM_Concept {userId: $userId, category: $categoryA})
+        MATCH (c2:OM_Concept {userId: $userId, category: $categoryB})
         MATCH (c1)<-[:SUPPORTS]-(m:OM_Memory)-[:SUPPORTS]->(c2)
 
         WHERE c1 <> c2
@@ -419,8 +419,8 @@ class ConvergenceDetector:
                 cypher,
                 {
                     "userId": self.user_id,
-                    "vaultA": vault_a,
-                    "vaultB": vault_b,
+                    "categoryA": category_a,
+                    "categoryB": category_b,
                     "minCommon": min_common_memories,
                 },
             )
@@ -432,7 +432,7 @@ class ConvergenceDetector:
 
             logger.info(
                 f"Found {len(bridges)} cross-domain bridges between "
-                f"{vault_a} and {vault_b}"
+                f"{category_a} and {category_b}"
             )
 
             return bridges
@@ -568,17 +568,17 @@ class ConvergenceDetector:
         delta = max(timestamps) - min(timestamps)
         return delta.days
 
-    def _calculate_vault_diversity(self, evidence: List[ConvergenceEvidence]) -> float:
+    def _calculate_category_diversity(self, evidence: List[ConvergenceEvidence]) -> float:
         """
-        Calculate vault diversity score (0.0-1.0).
+        Calculate category diversity score (0.0-1.0).
 
-        Formula: unique_vaults / total_evidence
+        Formula: unique_categories / total_evidence
 
         Returns:
-            Diversity score between 0.0 (all same vault) and 1.0 (all different vaults)
+            Diversity score between 0.0 (all same category) and 1.0 (all different categories)
         """
-        unique_vaults = len(set(e.vault for e in evidence))
-        return unique_vaults / len(evidence)
+        unique_categories = len(set(e.category for e in evidence))
+        return unique_categories / len(evidence)
 
     def _calculate_source_diversity(self, evidence: List[ConvergenceEvidence]) -> float:
         """
@@ -811,7 +811,7 @@ class ContradictionDetector:
 
     def find_all_contradictions(
         self,
-        vault: Optional[str] = None,
+        category: Optional[str] = None,
         min_severity: float = 0.5,
         limit: int = 50,
     ) -> List[ContradictionResult]:
@@ -819,7 +819,7 @@ class ContradictionDetector:
         Find all contradictions in the concept graph.
 
         Args:
-            vault: Optional vault filter
+            category: Optional category filter
             min_severity: Minimum severity threshold (0.0-1.0)
             limit: Maximum results
 
@@ -829,7 +829,7 @@ class ContradictionDetector:
         # Query existing CONTRADICTS relationships
         cypher = """
         MATCH (c1:OM_Concept {userId: $userId})-[r:CONTRADICTS]-(c2:OM_Concept {userId: $userId})
-        WHERE ($vault IS NULL OR c1.vault = $vault OR c2.vault = $vault)
+        WHERE ($category IS NULL OR c1.category = $category OR c2.category = $category)
           AND r.severity >= $minSeverity
           AND r.resolved = false
         RETURN
@@ -847,7 +847,7 @@ class ContradictionDetector:
                 cypher,
                 {
                     "userId": self.user_id,
-                    "vault": vault,
+                    "category": category,
                     "minSeverity": min_severity,
                     "limit": limit,
                 },
@@ -1140,7 +1140,7 @@ def detect_contradictions_for_concept(
 
 def find_all_contradictions(
     user_id: str,
-    vault: Optional[str] = None,
+    category: Optional[str] = None,
     min_severity: float = 0.5,
 ) -> List[Dict]:
     """
@@ -1148,7 +1148,7 @@ def find_all_contradictions(
 
     Args:
         user_id: User ID for scoping
-        vault: Optional vault filter
+        category: Optional category filter
         min_severity: Minimum severity threshold
 
     Returns:
@@ -1156,7 +1156,7 @@ def find_all_contradictions(
     """
     detector = ContradictionDetector(user_id)
     contradictions = detector.find_all_contradictions(
-        vault=vault,
+        category=category,
         min_severity=min_severity,
     )
     return [c.to_dict() for c in contradictions]

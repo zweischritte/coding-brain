@@ -13,7 +13,7 @@ Security model:
 - Superusers bypass RLS for administrative operations
 
 Revision ID: add_rls_policies
-Revises: axis_34_fields
+Revises: structured_memory_cleanup
 Create Date: 2025-12-27
 
 """
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'add_rls_policies'
-down_revision = 'axis_34_fields'
+down_revision = 'structured_memory_cleanup'
 branch_labels = None
 depends_on = None
 

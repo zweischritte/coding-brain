@@ -362,7 +362,7 @@ class DeepScanner:
         ):
             recommendations.extend([
                 "Revoke and regenerate the private key",
-                "Store private keys in a secure vault",
+                "Store private keys in a secure secret store",
                 "Never commit private keys to version control",
             ])
         elif secret_type == SecretType.DATABASE_URL:

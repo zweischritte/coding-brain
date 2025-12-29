@@ -18,13 +18,19 @@ from app.models import (
 from app.schemas import MemoryResponse
 from app.security.dependencies import get_current_principal, require_scopes
 from app.security.types import Principal, Scope
-from app.utils.axis_tags import process_memory_input
+from app.utils.structured_memory import (
+    StructuredMemoryError,
+    apply_metadata_updates,
+    normalize_metadata_for_create,
+    validate_text,
+    validate_update_fields,
+)
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, String, cast, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -216,7 +222,7 @@ async def get_categories(
 
 class CreateMemoryRequest(BaseModel):
     text: str
-    metadata: dict = {}
+    metadata: dict = Field(default_factory=dict)
     infer: bool = True
     app: str = "openmemory"
 
@@ -247,7 +253,11 @@ async def create_memory(
     # Log what we're about to do
     logging.info(f"Creating memory for user_id: {principal.user_id} with app: {request.app}")
     
-    clean_text, axis_metadata = process_memory_input(request.text)
+    try:
+        clean_text = validate_text(request.text)
+        normalized_metadata = normalize_metadata_for_create(request.metadata)
+    except StructuredMemoryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Try to get memory client safely
     try:
@@ -266,8 +276,7 @@ async def create_memory(
         combined_metadata = {
             "source_app": "openmemory",
             "mcp_client": request.app,
-            **request.metadata,
-            **axis_metadata,
+            **normalized_metadata,
         }
         qdrant_response = memory_client.add(
             clean_text,
@@ -352,15 +361,17 @@ async def get_memory(
     if not user or memory.user_id != user.id:
         raise HTTPException(status_code=404, detail="Memory not found")
 
-    # Extract AXIS metadata from metadata_ dict for frontend
+    # Extract structured metadata for frontend
     metadata = {}
     if memory.metadata_:
         metadata = {
-            "vault": memory.metadata_.get("vault"),
-            "layer": memory.metadata_.get("layer"),
-            "circuit": memory.metadata_.get("circuit"),
-            "vector": memory.metadata_.get("vector"),
-            "re": memory.metadata_.get("re"),
+            "category": memory.metadata_.get("category"),
+            "scope": memory.metadata_.get("scope"),
+            "artifact_type": memory.metadata_.get("artifact_type"),
+            "artifact_ref": memory.metadata_.get("artifact_ref"),
+            "entity": memory.metadata_.get("entity"),
+            "source": memory.metadata_.get("source"),
+            "evidence": memory.metadata_.get("evidence"),
             "tags": memory.metadata_.get("tags"),
         }
         # Remove None values
@@ -547,44 +558,14 @@ async def get_memory_access_log(
 
 class UpdateMemoryRequest(BaseModel):
     memory_content: Optional[str] = None
-    vault: Optional[str] = None
-    layer: Optional[str] = None
-    circuit: Optional[int] = None
-    vector: Optional[str] = None
+    category: Optional[str] = None
+    scope: Optional[str] = None
+    artifact_type: Optional[str] = None
+    artifact_ref: Optional[str] = None
     entity: Optional[str] = None
+    source: Optional[str] = None
+    evidence: Optional[List[str]] = None
     tags: Optional[dict] = None
-
-    @classmethod
-    def validate_vault(cls, v):
-        if v is not None:
-            valid_vaults = ["SOV", "WLT", "SIG", "FRC", "DIR", "FGP", "Q"]
-            if v not in valid_vaults:
-                raise ValueError(f"vault must be one of {valid_vaults}")
-        return v
-
-    @classmethod
-    def validate_layer(cls, v):
-        if v is not None:
-            valid_layers = ["somatic", "emotional", "narrative", "cognitive",
-                          "values", "identity", "relational", "goals",
-                          "resources", "context", "temporal", "meta"]
-            if v not in valid_layers:
-                raise ValueError(f"layer must be one of {valid_layers}")
-        return v
-
-    @classmethod
-    def validate_circuit(cls, v):
-        if v is not None and (v < 1 or v > 8):
-            raise ValueError("circuit must be between 1 and 8")
-        return v
-
-    @classmethod
-    def validate_vector(cls, v):
-        if v is not None:
-            valid_vectors = ["say", "want", "do"]
-            if v not in valid_vectors:
-                raise ValueError(f"vector must be one of {valid_vectors}")
-        return v
 
 # Update a memory
 @router.put("/{memory_id}")
@@ -606,8 +587,6 @@ async def update_memory(
         refresh_co_mention_edges_for_entities,
     )
     from app.graph.entity_bridge import bridge_entities_to_om_graph
-    from app.utils.structured_memory import validate_update_fields, apply_metadata_updates
-
     user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -634,11 +613,13 @@ async def update_memory(
     current_metadata = memory.metadata_ or {}
     try:
         validated_fields = validate_update_fields(
-            vault=request.vault,
-            layer=request.layer,
-            circuit=request.circuit,
-            vector=request.vector,
+            category=request.category,
+            scope=request.scope,
+            artifact_type=request.artifact_type,
+            artifact_ref=request.artifact_ref,
             entity=request.entity,
+            source=request.source,
+            evidence=request.evidence,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -651,14 +632,6 @@ async def update_memory(
     )
 
     new_content = request.memory_content if request.memory_content is not None else memory.content
-
-    # Update indexed fields if provided (keeps SQL filters fast + consistent)
-    if "vault_full" in validated_fields:
-        memory.vault = validated_fields["vault_full"]
-    if "layer" in validated_fields:
-        memory.layer = validated_fields["layer"]
-    if "vector" in validated_fields:
-        memory.axis_vector = validated_fields["vector"]
 
     memory.content = new_content
     memory.metadata_ = updated_metadata
@@ -752,7 +725,7 @@ async def update_memory(
                     memory_id=str(memory_id),
                     user_id=principal.user_id,
                     content=new_content,
-                    existing_entity=updated_metadata.get("re"),
+                    existing_entity=updated_metadata.get("entity"),
                 )
                 entity_bridge_ran = True
             except Exception as e:
@@ -816,8 +789,11 @@ class FilterMemoriesRequest(BaseModel):
     from_date: Optional[int] = None
     to_date: Optional[int] = None
     show_archived: Optional[bool] = False
-    vaults: Optional[List[str]] = None
-    layers: Optional[List[str]] = None
+    memory_categories: Optional[List[str]] = None
+    scopes: Optional[List[str]] = None
+    artifact_types: Optional[List[str]] = None
+    entities: Optional[List[str]] = None
+    sources: Optional[List[str]] = None
 
 @router.post("/filter", response_model=Page[MemoryResponse])
 async def filter_memories(
@@ -847,12 +823,17 @@ async def filter_memories(
     if request.app_ids:
         query = query.filter(Memory.app_id.in_(request.app_ids))
 
-    # Apply vault/layer filters from indexed columns (database-agnostic)
-    # Note: Memory model has vault/layer as indexed columns for fast queries
-    if request.vaults:
-        query = query.filter(Memory.vault.in_(request.vaults))
-    if request.layers:
-        query = query.filter(Memory.layer.in_(request.layers))
+    # Apply structured metadata filters
+    if request.memory_categories:
+        query = query.filter(cast(Memory.metadata_["category"], String).in_(request.memory_categories))
+    if request.scopes:
+        query = query.filter(cast(Memory.metadata_["scope"], String).in_(request.scopes))
+    if request.artifact_types:
+        query = query.filter(cast(Memory.metadata_["artifact_type"], String).in_(request.artifact_types))
+    if request.entities:
+        query = query.filter(cast(Memory.metadata_["entity"], String).in_(request.entities))
+    if request.sources:
+        query = query.filter(cast(Memory.metadata_["source"], String).in_(request.sources))
 
     # Add joins for app and categories
     query = query.outerjoin(App, Memory.app_id == App.id)

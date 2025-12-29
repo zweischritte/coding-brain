@@ -128,19 +128,19 @@ export function MemoryTable() {
               </div>
             </TableHead>
             <TableHead className="w-[110px] border-zinc-700 text-center">
-              Vault
+              Category
             </TableHead>
             <TableHead className="w-[100px] border-zinc-700 text-center">
-              Layer
+              Scope
             </TableHead>
             <TableHead className="w-[120px] border-zinc-700 text-center">
               Entity
             </TableHead>
             <TableHead className="w-[80px] border-zinc-700 text-center">
-              Vector
+              Artifact
             </TableHead>
             <TableHead className="w-[80px] border-zinc-700 text-center">
-              Circuit
+              Source
             </TableHead>
             <TableHead className="w-[140px] border-zinc-700">
               <div className="flex items-center w-full justify-center">
@@ -216,7 +216,7 @@ export function MemoryTable() {
                   variant="secondary"
                   className="bg-zinc-800 text-zinc-200 border border-zinc-700"
                 >
-                  {memory.metadata?.vault ?? "—"}
+                  {memory.metadata?.category ?? "—"}
                 </Badge>
               </TableCell>
               <TableCell className="w-[100px] text-center">
@@ -224,44 +224,44 @@ export function MemoryTable() {
                   variant="secondary"
                   className="bg-zinc-800 text-zinc-200 border border-zinc-700"
                 >
-                  {memory.metadata?.layer ?? "—"}
+                  {memory.metadata?.scope ?? "—"}
                 </Badge>
               </TableCell>
               <TableCell className="w-[120px] text-center">
-                {memory.metadata?.re ? (
+                {memory.metadata?.entity ? (
                   <Badge
                     variant="secondary"
                     className="bg-primary/20 text-primary border border-primary/50 cursor-pointer hover:bg-primary/30"
                     onClick={(e) => {
                       e.stopPropagation();
-                      router.push(`/entity/${encodeURIComponent(memory.metadata?.re || "")}`);
+                      router.push(`/entity/${encodeURIComponent(memory.metadata?.entity || "")}`);
                     }}
                   >
-                    {memory.metadata.re}
+                    {memory.metadata.entity}
                   </Badge>
                 ) : (
                   <span className="text-zinc-500">—</span>
                 )}
               </TableCell>
               <TableCell className="w-[80px] text-center">
-                {memory.metadata?.vector ? (
+                {memory.metadata?.artifact_type ? (
                   <Badge
                     variant="secondary"
                     className="bg-amber-900/30 text-amber-300 border border-amber-700"
                   >
-                    {memory.metadata.vector}
+                    {memory.metadata.artifact_type}
                   </Badge>
                 ) : (
                   <span className="text-zinc-500">—</span>
                 )}
               </TableCell>
               <TableCell className="w-[80px] text-center">
-                {memory.metadata?.circuit ? (
+                {memory.metadata?.source ? (
                   <Badge
                     variant="secondary"
                     className="bg-green-900/30 text-green-300 border border-green-700"
                   >
-                    C{memory.metadata.circuit}
+                    {memory.metadata.source}
                   </Badge>
                 ) : (
                   <span className="text-zinc-500">—</span>

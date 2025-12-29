@@ -165,8 +165,8 @@ def sample_document():
     return {
         "content": "This is a test memory about Python programming",
         "memory_id": str(uuid.uuid4()),
-        "vault": "WLT",
-        "layer": "cognitive",
+        "category": "workflow",
+        "scope": "project",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -281,7 +281,7 @@ class TestTenantOpenSearchStoreIndex:
             if doc_id in idx["docs"]:
                 doc = idx["docs"][doc_id]
                 assert doc["content"] == sample_document["content"]
-                assert doc["vault"] == sample_document["vault"]
+                assert doc["category"] == sample_document["category"]
                 break
 
     def test_index_uses_tenant_alias(self, mock_opensearch_client, sample_document):

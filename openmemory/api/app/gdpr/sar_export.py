@@ -355,13 +355,20 @@ class SARExporter:
 
     def _serialize_memory(self, memory: Any) -> Dict[str, Any]:
         """Serialize a Memory model to dictionary."""
+        metadata = getattr(memory, 'metadata_', None) or {}
         return {
             "id": str(memory.id),
             "content": memory.content,
             "state": memory.state.value if hasattr(memory.state, 'value') else str(memory.state),
-            "metadata": getattr(memory, 'metadata_', None),
-            "vault": getattr(memory, 'vault', None),
-            "layer": getattr(memory, 'layer', None),
+            "metadata": metadata,
+            "category": metadata.get("category"),
+            "scope": metadata.get("scope"),
+            "artifact_type": metadata.get("artifact_type"),
+            "artifact_ref": metadata.get("artifact_ref"),
+            "entity": metadata.get("entity"),
+            "source": metadata.get("source"),
+            "evidence": metadata.get("evidence"),
+            "tags": metadata.get("tags"),
             "created_at": memory.created_at.isoformat() if memory.created_at else None,
             "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
         }

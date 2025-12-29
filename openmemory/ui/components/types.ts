@@ -1,20 +1,35 @@
 export type Category = "personal" | "work" | "health" | "finance" | "travel" | "education" | "preferences" | "relationships"
 export type Client = "chrome" | "chatgpt" | "cursor" | "windsurf" | "terminal" | "api"
 
-// AXIS Protocol Types
-export type Vault = "SOV" | "WLT" | "SIG" | "FRC" | "DIR" | "FGP" | "Q"
-export type Layer = "somatic" | "emotional" | "narrative" | "cognitive" | "values" | "identity" | "relational" | "goals" | "resources" | "context" | "temporal" | "meta"
-export type Vector = "say" | "want" | "do"
-export type Circuit = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8
+// Structured memory metadata types
+export type StructuredCategory =
+  | "decision"
+  | "convention"
+  | "architecture"
+  | "dependency"
+  | "workflow"
+  | "testing"
+  | "security"
+  | "performance"
+  | "runbook"
+  | "glossary"
+
+export type MemoryScope = "session" | "user" | "team" | "project" | "org" | "enterprise"
+
+export type ArtifactType = "repo" | "service" | "module" | "component" | "api" | "db" | "infra" | "file"
+
+export type SourceType = "user" | "inference"
 
 export interface MemoryMetadata {
-  vault?: Vault
-  layer?: Layer
-  circuit?: Circuit
-  vector?: Vector
-  re?: string  // entity reference
+  category?: StructuredCategory
+  scope?: MemoryScope
+  artifact_type?: ArtifactType
+  artifact_ref?: string
+  entity?: string
+  source?: SourceType
+  evidence?: string[]
   tags?: Record<string, any>
-  [key: string]: any  // Allow other metadata
+  [key: string]: any
 }
 
 export interface Memory {
@@ -87,10 +102,11 @@ export interface SimilarMemory {
   content: string
   similarity_score: number
   rank: number
-  vault?: Vault
-  layer?: Layer
-  circuit?: Circuit
-  vector?: Vector
+  category?: StructuredCategory
+  scope?: MemoryScope
+  artifact_type?: ArtifactType
+  artifact_ref?: string
+  entity?: string
   created_at?: string
   updated_at?: string
 }
@@ -102,10 +118,11 @@ export interface GraphNode {
   memory_id?: string
   content?: string
   value?: string | number
-  vault?: Vault
-  layer?: Layer
-  vector?: Vector
-  circuit?: Circuit
+  category?: StructuredCategory
+  scope?: MemoryScope
+  artifact_type?: ArtifactType
+  artifact_ref?: string
+  entity?: string
   created_at?: string
   updated_at?: string
   shared_count?: number
@@ -131,10 +148,12 @@ export interface MemorySubgraph {
 export interface MemoryUpdateRequest {
   user_id: string
   memory_content?: string
-  vault?: Vault
-  layer?: Layer
-  circuit?: Circuit
-  vector?: Vector
+  category?: StructuredCategory
+  scope?: MemoryScope
+  artifact_type?: ArtifactType
+  artifact_ref?: string
   entity?: string
+  source?: SourceType
+  evidence?: string[]
   tags?: Record<string, any>
 }
