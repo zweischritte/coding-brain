@@ -8,7 +8,7 @@ This document is a developer-focused overview of the Coding Brain system (an Ope
 
 Coding Brain is a memory and code-intelligence backend for development assistants. It exposes:
 - REST APIs for memory, search, graph, feedback, experiments, and ops flows
-- MCP servers over SSE for memory tools, business concepts, and AXIS guidance
+- MCP servers over SSE for memory tools, business concepts, and guidance
 - A Next.js UI for browsing memories
 
 It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and Valkey.
@@ -43,8 +43,8 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - Backup/export and GDPR endpoints
 - Prometheus metric helpers (mountable if you add the metrics app)
 
-### AXIS Guidance
-- Separate MCP SSE endpoint for serving AXIS protocol guides on demand
+### Guidance
+- Separate MCP SSE endpoint for serving guidance documents on demand
 
 ---
 
@@ -107,7 +107,7 @@ make up
 ## MCP Endpoints
 - Memory MCP: `/mcp/<client>/sse/<user_id>`
 - Business Concepts MCP: `/concepts/<client>/sse/<user_id>` (requires `BUSINESS_CONCEPTS_ENABLED=true`)
-- AXIS Guidance MCP: `/axis/<client>/sse/<user_id>`
+- Guidance MCP: `/guidance/<client>/sse/<user_id>`
 
 SSE uses a `session_id` query parameter for POSTs. All MCP calls require
 `Authorization: Bearer <JWT>` and optional `DPoP` headers.

@@ -6,6 +6,7 @@ Tests should fail until implementation is complete.
 """
 
 import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timedelta, timezone
 import json
@@ -47,6 +48,12 @@ def create_test_token(
     return jose_jwt.encode(payload, TEST_SECRET_KEY, algorithm=TEST_ALGORITHM)
 
 
+@asynccontextmanager
+async def _noop_sse_connect(*_args, **_kwargs):
+    """Avoid streaming during SSE auth tests."""
+    yield (None, None)
+
+
 class TestMCPSSEAuthRequired:
     """Tests for MCP SSE endpoint authentication."""
 
@@ -80,15 +87,19 @@ class TestMCPSSEAuthRequired:
             }
 
             token = create_test_token(sub="token-user")
-            response = client.get(
-                "/mcp/test-client/sse/attacker-user",
-                headers={"Authorization": f"Bearer {token}"}
-            )
-            # The authenticated user should be "token-user", not "attacker-user"
+            with patch("app.mcp_server.sse.connect_sse", new=_noop_sse_connect), \
+                patch("app.mcp_server.mcp._mcp_server.run", new=AsyncMock()):
+                response = client.get(
+                    "/mcp/test-client/sse/attacker-user",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                assert response.status_code < 500
 
     def test_sse_messages_endpoint_requires_auth(self, client):
         """MCP SSE messages endpoint should require auth."""
-        response = client.post("/mcp/test-client/sse/some-user/messages/")
+        response = client.post(
+            "/mcp/test-client/sse/some-user/messages/?session_id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        )
         assert response.status_code == 401
 
 
@@ -186,7 +197,9 @@ class TestMCPConceptsAuth:
 
     def test_concepts_messages_requires_auth(self, client):
         """Concepts messages endpoint should require auth."""
-        response = client.post("/concepts/test-client/sse/some-user/messages/")
+        response = client.post(
+            "/concepts/test-client/sse/some-user/messages/?session_id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        )
         assert response.status_code == 401
 
 
@@ -236,8 +249,10 @@ class TestMCPErrorResponses:
 
             # Token with insufficient scopes
             token = create_test_token(scopes=["stats:read"])
-            response = client.get(
-                "/mcp/test-client/sse/some-user",
-                headers={"Authorization": f"Bearer {token}"}
-            )
+            with patch("app.mcp_server.sse.connect_sse", new=_noop_sse_connect), \
+                patch("app.mcp_server.mcp._mcp_server.run", new=AsyncMock()):
+                response = client.get(
+                    "/mcp/test-client/sse/some-user",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
             # If 403, should include scope information

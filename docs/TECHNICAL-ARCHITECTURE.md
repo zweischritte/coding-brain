@@ -11,7 +11,7 @@ Coding Brain is a multi-store memory and code-intelligence system. It exposes RE
 - Memory plane: structured memories stored in Postgres and Qdrant, enriched with a Neo4j metadata graph.
 - Code intelligence plane: indexing and CODE_* graph modules with tri-hybrid retrieval and analysis tooling.
 
-Optional subsystems include business concept extraction and AXIS guidance via a separate MCP endpoint.
+Optional subsystems include business concept extraction and guidance via a separate MCP endpoint.
 
 ---
 
@@ -217,7 +217,7 @@ Key routers under `/api/v1`:
 ### MCP
 - Memory MCP: `/mcp/<client>/sse/<user_id>`
 - Business Concepts MCP: `/concepts/<client>/sse/<user_id>`
-- AXIS Guidance MCP: `/axis/<client>/sse/<user_id>`
+- Guidance MCP: `/guidance/<client>/sse/<user_id>`
 
 ---
 
@@ -279,4 +279,3 @@ Graph and search operations are designed to fail gracefully:
 - If Neo4j is unavailable, graph operations return empty results and do not block memory CRUD.
 - If OpenSearch is unavailable, REST search returns empty results or 503 responses.
 - If Qdrant is unavailable, Mem0 can fall back to database-only mode for memory storage.
-

@@ -1,32 +1,60 @@
-# Mintlify Starter Kit
+# Coding Brain Documentation
 
-Click on `Use this template` to copy the Mintlify starter kit. The starter kit contains examples including
+This documentation site uses [Docsify](https://docsify.js.org/) to dynamically render all markdown files in the project.
 
-- Guide pages
-- Navigation
-- Customizations
-- API Reference pages
-- Use of popular components
+## Quick Start
 
-### Development
+### View Documentation (with Docker Compose)
 
-Install the [Mintlify CLI](https://www.npmjs.com/package/mintlify) to preview the documentation changes locally. To install, use the following command
+The docs server starts automatically when you run:
 
-```
-npm i -g mintlify
+```bash
+cd openmemory && make up
 ```
 
-Run the following command at the root of your documentation (where mint.json is)
+Then open: <http://localhost:3080/docs/>
 
+### View Documentation (standalone)
+
+From the project root, run:
+
+```bash
+python -m http.server 3000
 ```
-mintlify dev
+
+Then open: <http://localhost:3000/docs/>
+
+### Update Sidebar
+
+When you add, remove, or rename markdown files, regenerate the sidebar:
+
+```bash
+./scripts/generate-docs-sidebar.sh
 ```
 
-### Publishing Changes
+## Structure
 
-Install our Github App to auto propagate changes from your repo to your deployment. Changes will be deployed to production automatically after pushing to the default branch. Find the link to install on your dashboard. 
+The sidebar is auto-generated and includes markdown files from:
 
-#### Troubleshooting
+- `/` - Project root (README, CONTRIBUTING, etc.)
+- `/docs/` - Core documentation
+- `/openmemory/` - OpenMemory component docs
+- `/openmemory/api/app/guidance/` - Guidance documents
+- `/embedchain/` - Embedchain docs and examples
+- `/mem0-ts/` - TypeScript SDK docs
+- And more...
 
-- Mintlify dev isn't running - Run `mintlify install` it'll re-install dependencies.
-- Page loads as a 404 - Make sure you are running in a folder with `mint.json`
+## Files
+
+| File                               | Purpose                     |
+| ---------------------------------- | --------------------------- |
+| `docs/index.html`                  | Docsify entry point         |
+| `docs/_sidebar.md`                 | Auto-generated navigation   |
+| `scripts/generate-docs-sidebar.sh` | Sidebar generation script   |
+
+## Features
+
+- Full-text search across all documentation
+- Syntax highlighting for code blocks
+- No build step required - edits are visible immediately on refresh
+- Works with any static file server

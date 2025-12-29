@@ -1,6 +1,6 @@
 # Coding Brain (OpenMemory Fork)
 
-A customized fork of OpenMemory with AXIS integration, Neo4j graph support, and enhanced memory features. This system runs on different ports to avoid conflicts with the upstream OpenMemory installation.
+A customized fork of OpenMemory with Guidance MCP integration, Neo4j graph support, and enhanced memory features. This system runs on different ports to avoid conflicts with the upstream OpenMemory installation.
 
 **Port Configuration:**
 - UI: http://localhost:3433

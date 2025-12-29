@@ -6,21 +6,21 @@ structured metadata.
 ## People and roles
 ```python
 add_memories(
-    text="Renate attends day care twice per week.",
+    text="Alex is the platform on-call lead this quarter.",
     category="glossary",
-    scope="user",
-    entity="Renate",
-    tags={"routine": True},
+    scope="team",
+    entity="Alex",
+    tags={"role": "oncall-lead"},
 )
 ```
 
 ```python
 add_memories(
-    text="Stefan Thimmel coordinates subtitle funding at RLS.",
+    text="Security reviews are owned by the AppSec team.",
     category="glossary",
     scope="org",
-    entity="Stefan Thimmel",
-    evidence=["Email thread 2025-01-10"],
+    entity="AppSec",
+    evidence=["Security handbook v2"],
 )
 ```
 

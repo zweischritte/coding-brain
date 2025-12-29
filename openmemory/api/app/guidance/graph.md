@@ -20,8 +20,8 @@ OpenMemory uses a **dual-graph architecture**:
 
 When Neo4j is unavailable:
 - All graph_* tools return `{"graph_enabled": false}`
-- search_memory falls back to pure vector search
-- No errors, just reduced functionality
+- search_memory continues with vector-only results
+- Responses do not include `graph_enabled`, but may omit graph enrichment
 
 ---
 
@@ -32,45 +32,58 @@ Query arrives
     │
     ├─ Semantic search → search_memory (Hybrid default)
     │
-    ├─ "Wer ist mit X verbunden?" → graph_entity_network
+    ├─ "Who is connected to X?" → graph_entity_network
     │
-    ├─ "Welche Beziehung hat X zu Y?" → graph_entity_relations OR graph_path_between_entities
+    ├─ "How is X related to Y?" → graph_entity_relations OR graph_path_between_entities
     │
-    ├─ "Ähnliche Memories" → graph_similar_memories (after initial search)
+    ├─ "Similar memories" → graph_similar_memories (after initial search)
     │
-    ├─ "Pattern-Verteilung" → graph_aggregate
+    ├─ "Pattern distribution" → graph_aggregate
     │
-    ├─ "Tags wie X" → graph_related_tags
+    ├─ "Tags related to X" → graph_related_tags
     │
-    └─ "Tags die zusammen vorkommen" → graph_tag_cooccurrence
+    └─ "Tags that co-occur" → graph_tag_cooccurrence
 ```
 
 ---
 
 ## Hybrid Retrieval (search_memory)
 
-New parameters:
+Parameters:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `use_rrf` | true | RRF Multi-Source Fusion |
+| `use_rrf` | true | RRF multi-source fusion |
 | `graph_seed_count` | 5 | Seeds for graph traversal |
-| `auto_route` | true | Intelligent query routing |
+| `auto_route` | true | Internal query routing; routing metadata appears in verbose responses |
 
-### Query Routing
+### Query Routing (Internal)
 
-| Entities Detected | Route | Description |
-|-------------------|-------|-------------|
-| 0 | VECTOR_ONLY | Pure semantic search |
-| 1 | HYBRID | Balanced vector + graph |
-| 2+ | GRAPH_PRIMARY | Graph-preferred |
+| Entities Detected | Relationship Keywords | Route | Description |
+|-------------------|-----------------------|-------|-------------|
+| 0 | No | VECTOR_ONLY | Pure semantic search |
+| 0 | Yes | HYBRID | Relationship terms without entities |
+| 1 | No | HYBRID | Balanced vector + graph |
+| 1 | Yes | GRAPH_PRIMARY | Graph-preferred |
+| 2+ | Any | GRAPH_PRIMARY | Graph-preferred |
+
+Notes:
+- Entity detection uses the Neo4j fulltext index `om_entity_name`.
+- If entity detection is unavailable, routing falls back to relationship keyword signals only.
 
 ### Verbose Mode
 
-With `verbose=True`, search_memory returns:
-- `hybrid_retrieval.detected_entities`: Detected entities with scores
-- `hybrid_retrieval.route`: Chosen strategy
-- `hybrid_retrieval.rrf_stats`: Fusion statistics (vector_candidates, graph_candidates, etc.)
+With `verbose=True`, search_memory returns additional debug fields:
+- `query`
+- `context_applied`
+- `filters_applied`
+- `total_candidates`
+- `hybrid_retrieval` (when `use_rrf` or `auto_route`): routing, RRF stats, graph boost, entity expansion (when available)
+
+If graph is available, search_memory may also include:
+- `meta_relations` (deterministic OM_* relations)
+- `relations` (Mem0 LLM-extracted relations)
+These graph enrichment fields can appear in non-verbose responses too.
 
 ---
 
@@ -85,7 +98,7 @@ graph_similar_memories(
     min_score=0.0,         # Default 0.0, recommended: 0.7 for quality
     limit=10               # Max results (default: 10)
 )
-# Returns: [{id, content, category, scope, artifact_type, artifact_ref, similarity_score, rank}]
+# Returns: [{id, content, category, scope, artifactType, artifactRef, source, createdAt, similarityScore, rank}]
 ```
 
 ### graph_entity_network
@@ -93,11 +106,11 @@ Entity co-mention network via OM_CO_MENTIONED.
 
 ```python
 graph_entity_network(
-    entity_name="BMG",     # Required
+    entity_name="Platform",     # Required
     min_count=1,           # Default: 1
     limit=20               # Max connections (default: 20)
 )
-# Returns: [{entity, count, memory_ids}]
+# Returns: {entity, connections: [{entity, count, memoryIds}], total, graph_enabled}
 ```
 
 ### graph_entity_relations
@@ -105,7 +118,7 @@ Typed semantic relations via OM_RELATION.
 
 ```python
 graph_entity_relations(
-    entity_name="Grischa", # Required
+    entity_name="Platform", # Required
     relation_types=None,   # Filter: "schwester_von,bruder_von"
     category="family",     # family|social|work|location|creative|membership|travel
     direction="both",      # outgoing|incoming|both (default: both)
@@ -132,7 +145,7 @@ graph_related_tags(
     min_count=1,           # Default: 1
     limit=20               # default: 20
 )
-# Returns: [{tag, count, pmi, npmi}]
+# Returns: [{tag, count, pmi}]
 ```
 
 ### graph_biography_timeline
@@ -140,7 +153,7 @@ Biographical events from OM_TemporalEvent.
 
 ```python
 graph_biography_timeline(
-    entity_name="Grischa", # Optional — if empty, all events
+    entity_name="Alex",    # Optional — if empty, all events
     event_types="project", # residence|education|work|project|relationship|health|travel|milestone
     start_year=2014,       # Optional
     end_year=2018,         # Optional
@@ -168,8 +181,8 @@ Semantic path between entities.
 
 ```python
 graph_path_between_entities(
-    entity_a="BMG",
-    entity_b="Matthias",
+    entity_a="Platform",
+    entity_b="Security",
     max_hops=6             # default: 6
 )
 # Returns: Path with relationship types
@@ -185,7 +198,7 @@ graph_tag_cooccurrence(
     min_count=2,           # default: 2
     sample_size=3          # Example memory IDs per pair
 )
-# Returns: [{tag1, tag2, count, sample_memory_ids}]
+# Returns: [{tag1, tag2, count, exampleMemoryIds}]
 ```
 
 ---
@@ -195,21 +208,21 @@ graph_tag_cooccurrence(
 ### 1. Explore Entity Network
 
 ```python
-# Who is connected to BMG?
-graph_entity_network(entity_name="BMG")
+# Who is connected to Platform?
+graph_entity_network(entity_name="Platform")
 
 # Typed relationships
-graph_entity_relations(entity_name="BMG", category="work")
+graph_entity_relations(entity_name="Platform", category="work")
 
 # Path to specific person
-graph_path_between_entities(entity_a="BMG", entity_b="Charlie")
+graph_path_between_entities(entity_a="Platform", entity_b="Security")
 ```
 
 ### 2. Memory Expansion
 
 ```python
 # Start with search
-results = search_memory(query="Kritik-Pattern")
+results = search_memory(query="review feedback")
 
 # Expand high-signal result
 graph_similar_memories(memory_id=results[0]["id"], min_score=0.75)
@@ -234,13 +247,12 @@ graph_aggregate(group_by="entity", limit=30)
 
 ---
 
-## Auto-Triggers
+## Routing Signals (search_memory)
 
-| Pattern in Query | Auto-Action |
-|------------------|-------------|
-| New entity stored | `graph_path_between_entities` |
-| "Fingerprint" | `graph_aggregate` by category+scope |
-| Pattern language | `graph_tag_cooccurrence` |
-| "Netzwerk" / "Verbindungen" | `graph_entity_network` |
-| "Beziehung" / "Relation" | `graph_entity_relations` |
-| Multiple entity names | Route to GRAPH_PRIMARY |
+Routing only affects `search_memory` and does not auto-invoke graph tools.
+
+| Pattern in Query | Expected Route |
+|------------------|----------------|
+| Relationship keywords (e.g., "connected to", "related to", "between", "path", "network", "relationship", "verbunden mit", "beziehung", "zwischen", "who knows", "wer kennt") | GRAPH_PRIMARY if entities are detected, otherwise HYBRID |
+| Multiple entity names | GRAPH_PRIMARY |
+| No entities + no relationship keywords | VECTOR_ONLY |

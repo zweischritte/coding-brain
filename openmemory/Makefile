@@ -18,6 +18,10 @@ help:
 	@echo "  make ui-start  - Start the frontend development server"
 	@echo "  make ui-dev    - Install dependencies and start the frontend in dev mode"
 	@echo "  make ui        - Install dependencies and start the frontend in production mode"
+	@echo ""
+	@echo "Documentation:"
+	@echo "  Docs server starts automatically with 'make up' at http://localhost:3080/docs/"
+	@echo "  Run ../scripts/generate-docs-sidebar.sh to update sidebar after adding docs"
 
 env:
 	cd api && cp .env.example .env

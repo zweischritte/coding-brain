@@ -5,7 +5,7 @@ This system is a production-grade memory and code-intelligence backend for devel
 
 Current runtime shape
 - FastAPI app with REST endpoints under `/api/v1` and health probes under `/health`
-- MCP SSE endpoints for memory tools (`/mcp`), business concepts (`/concepts`), and AXIS guidance (`/axis`)
+- MCP SSE endpoints for memory tools (`/mcp`), business concepts (`/concepts`), and guidance (`/guidance`)
 - Data stores: PostgreSQL, Qdrant, OpenSearch, Neo4j, Valkey
 - Next.js UI in `openmemory/ui`
 
