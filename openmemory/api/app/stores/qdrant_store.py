@@ -23,6 +23,8 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
+    MatchText,
     MatchValue,
     PointIdsList,
     PointStruct,
@@ -63,6 +65,7 @@ class TenantQdrantStoreConfig:
         "artifact_ref",
         "entity",
         "source",
+        "access_entity",  # Multi-user memory routing
     )
 
 
@@ -192,6 +195,117 @@ class TenantQdrantStore:
                 )
 
         return Filter(must=conditions)
+
+    def _create_access_entity_filter(
+        self,
+        access_entities: Optional[List[str]] = None,
+        additional_filters: Optional[Dict[str, Any]] = None,
+    ) -> Filter:
+        """
+        Create a filter with org_id constraint and access_entity-based access control.
+
+        Access entities support OR logic: a memory is accessible if its access_entity
+        matches ANY of the provided access_entities.
+
+        Args:
+            access_entities: List of access_entity values the principal can access
+            additional_filters: Optional additional filter conditions
+
+        Returns:
+            Filter with org_id, access_entity OR conditions, and additional filters
+        """
+        must_conditions = [
+            FieldCondition(key="org_id", match=MatchValue(value=self.org_id))
+        ]
+
+        # Add access_entity filter using MatchAny (OR logic)
+        if access_entities:
+            must_conditions.append(
+                FieldCondition(
+                    key="access_entity",
+                    match=MatchAny(any=access_entities)
+                )
+            )
+
+        # Add additional filters
+        if additional_filters:
+            for key, value in additional_filters.items():
+                must_conditions.append(
+                    FieldCondition(key=key, match=MatchValue(value=value))
+                )
+
+        return Filter(must=must_conditions)
+
+    def search_with_access_control(
+        self,
+        query_vector: List[float],
+        access_entities: List[str],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]:
+        """
+        Search for similar vectors with access_entity-based access control.
+
+        Only returns memories where the access_entity matches one of the provided
+        access_entities (OR logic).
+
+        Args:
+            query_vector: The query embedding vector
+            access_entities: List of access_entity values the principal can access
+            limit: Maximum number of results
+            filters: Optional additional filters
+
+        Returns:
+            List of matching points with scores, filtered by access_entity
+        """
+        query_filter = self._create_access_entity_filter(access_entities, filters)
+
+        try:
+            results = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_vector,
+                query_filter=query_filter,
+                limit=limit,
+            )
+            return results.points
+        except Exception as e:
+            logger.error(f"Search with access control failed: {e}")
+            return []
+
+    def list_with_access_control(
+        self,
+        access_entities: List[str],
+        limit: int = 100,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]:
+        """
+        List points with access_entity-based access control.
+
+        Only returns memories where the access_entity matches one of the provided
+        access_entities (OR logic).
+
+        Args:
+            access_entities: List of access_entity values the principal can access
+            limit: Maximum number of results
+            filters: Optional additional filters
+
+        Returns:
+            List of points accessible by the principal
+        """
+        query_filter = self._create_access_entity_filter(access_entities, filters)
+
+        try:
+            results, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+            return results
+        except Exception as e:
+            logger.error(f"List with access control failed: {e}")
+            return []
 
     def upsert(
         self,

@@ -382,10 +382,13 @@ Optional metadata:
 - source: user (default) or inference
 - evidence: List of ADR/PR/issue refs
 - tags: Dict with string keys
+- access_entity: Access control entity (required for shared scopes: team, project, org, enterprise)
+  Format: <prefix>:<value> where prefix is user, team, project, org, client, or service
+  Examples: user:grischa, team:cloudfactory/acme/billing/backend, org:cloudfactory
 
 Examples:
-- add_memories(text="Use module boundaries for auth clients", category="architecture", scope="org", artifact_type="module", artifact_ref="auth/clients", entity="Platform", tags={"decision": true})
-- add_memories(text="Always run python -m pytest before merge", category="workflow", scope="team", entity="Backend", evidence=["ADR-014"])
+- add_memories(text="Use module boundaries for auth clients", category="architecture", scope="org", artifact_type="module", artifact_ref="auth/clients", entity="Platform", access_entity="org:cloudfactory", tags={"decision": true})
+- add_memories(text="Always run python -m pytest before merge", category="workflow", scope="team", entity="Backend", access_entity="team:cloudfactory/backend", evidence=["ADR-014"])
 """)
 async def add_memories(
     text: str,
@@ -397,6 +400,7 @@ async def add_memories(
     source: str = "user",
     evidence: list = None,
     tags: dict = None,
+    access_entity: str = None,
 ) -> str:
     # Check scope - requires memories:write
     scope_error = _check_tool_scope("memories:write")
@@ -411,6 +415,20 @@ async def add_memories(
     if not client_name:
         return json.dumps({"error": "client_name not provided"})
 
+    # Default access_entity to user:<uid> for personal scopes
+    if access_entity is None and scope in ("user", "session"):
+        access_entity = f"user:{uid}"
+
+    # Access control check: verify principal can create memory with this access_entity
+    principal = principal_var.get(None)
+    if principal and access_entity:
+        from app.security.access import check_create_access
+        if not check_create_access(principal, access_entity):
+            return json.dumps({
+                "error": f"Access denied: you don't have permission to create memories with access_entity='{access_entity}'",
+                "code": "FORBIDDEN",
+            })
+
     # Validate and build structured memory
     try:
         clean_text, structured_metadata = build_structured_memory(
@@ -420,6 +438,7 @@ async def add_memories(
             artifact_type=artifact_type,
             artifact_ref=artifact_ref,
             entity=entity,
+            access_entity=access_entity,
             source=source,
             evidence=evidence,
             tags=tags,
@@ -700,12 +719,33 @@ async def search_memory(
             # Get or create user and app
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            # ACL check - get accessible memory IDs
+            # ACL check - get accessible memory IDs based on access_entity grants
+            principal = principal_var.get(None)
             user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
+
+            # Filter by app access permissions first
+            app_accessible = [
+                memory for memory in user_memories
                 if check_memory_access_permissions(db, memory, app.id)
             ]
+
+            # Then filter by access_entity permissions (multi-user routing)
+            if principal:
+                from app.security.access import can_read_access_entity
+
+                accessible_memory_ids = []
+                for memory in app_accessible:
+                    access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+                    if access_entity:
+                        # Memory has access_entity - check if principal can access it
+                        if can_read_access_entity(principal, access_entity):
+                            accessible_memory_ids.append(memory.id)
+                    else:
+                        # Legacy memory without access_entity - only owner can access
+                        accessible_memory_ids.append(memory.id)
+            else:
+                accessible_memory_ids = [memory.id for memory in app_accessible]
+
             allowed = set(str(mid) for mid in accessible_memory_ids)
 
             # Build search context for boosting
@@ -1603,9 +1643,26 @@ async def list_memories() -> str:
             memories = memory_client.get_all(user_id=uid)
             raw_memories = []
 
-            # Filter memories based on permissions
+            # Filter memories based on app permissions first
             user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [memory.id for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+            app_accessible = [memory for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+
+            # Then filter by access_entity permissions (multi-user routing)
+            principal = principal_var.get(None)
+            if principal:
+                from app.security.access import can_read_access_entity
+
+                accessible_memory_ids = []
+                for memory in app_accessible:
+                    access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+                    if access_entity:
+                        if can_read_access_entity(principal, access_entity):
+                            accessible_memory_ids.append(memory.id)
+                    else:
+                        # Legacy memory without access_entity - only owner can access
+                        accessible_memory_ids.append(memory.id)
+            else:
+                accessible_memory_ids = [memory.id for memory in app_accessible]
 
             def extract_memory_data(memory_data: dict, md: dict) -> dict:
                 """Extract and normalize memory data with structured fields."""
@@ -1699,7 +1756,26 @@ async def delete_memories(memory_ids: list[str]) -> str:
             # Convert string IDs to UUIDs and filter accessible ones
             requested_ids = [uuid.UUID(mid) for mid in memory_ids]
             user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [memory.id for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+
+            # Filter by app access permissions
+            accessible_by_app = [memory for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+
+            # Filter by access_entity permissions (multi-user routing)
+            principal = principal_var.get(None)
+            if principal:
+                from app.security.access import can_write_to_access_entity
+
+                accessible_memory_ids = []
+                for memory in accessible_by_app:
+                    access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+                    if access_entity:
+                        if can_write_to_access_entity(principal, access_entity):
+                            accessible_memory_ids.append(memory.id)
+                    else:
+                        # Legacy memory without access_entity - only owner can delete
+                        accessible_memory_ids.append(memory.id)
+            else:
+                accessible_memory_ids = [memory.id for memory in accessible_by_app]
 
             # Only delete memories that are both requested and accessible
             ids_to_delete = [mid for mid in requested_ids if mid in accessible_memory_ids]
@@ -1853,6 +1929,8 @@ Optional structure (only provided fields are updated):
 - scope: session | user | team | project | org | enterprise
 - artifact_type: repo | service | module | component | api | db | infra | file
 - artifact_ref: reference string (path, symbol, service)
+- access_entity: Access control entity (format: <prefix>:<value>)
+  When changing access_entity, you must have permission for both the old AND new access_entity
 
 Optional metadata:
 - entity: Reference entity
@@ -1871,6 +1949,7 @@ Examples:
 - update_memory(memory_id="abc-123", category="decision", scope="project", preserve_timestamps=true)
 - update_memory(memory_id="abc-123", add_tags={"confirmed": true})
 - update_memory(memory_id="abc-123", remove_tags=["silent"])
+- update_memory(memory_id="abc-123", access_entity="team:cloudfactory/backend")
 """)
 async def update_memory(
     memory_id: str,
@@ -1881,6 +1960,7 @@ async def update_memory(
     scope: str = None,
     artifact_type: str = None,
     artifact_ref: str = None,
+    access_entity: str = None,
     # Metadata
     entity: str = None,
     source: str = None,
@@ -1912,6 +1992,7 @@ async def update_memory(
             artifact_type=artifact_type,
             artifact_ref=artifact_ref,
             entity=entity,
+            access_entity=access_entity,
             source=source,
             evidence=evidence,
         )
@@ -1938,8 +2019,32 @@ async def update_memory(
             if not memory:
                 return json.dumps({"error": f"Memory '{memory_id}' not found"})
 
-            # Get current metadata
+            # Access control check: verify principal can write to memory's access_entity
+            principal = principal_var.get(None)
             current_metadata = memory.metadata_ or {}
+            current_access_entity = current_metadata.get("access_entity")
+
+            if principal:
+                from app.security.access import can_write_to_access_entity
+
+                # Check write access to current access_entity
+                if current_access_entity:
+                    if not can_write_to_access_entity(principal, current_access_entity):
+                        return json.dumps({
+                            "error": f"Access denied: you don't have permission to update memories with access_entity='{current_access_entity}'",
+                            "code": "FORBIDDEN",
+                        })
+
+                # If changing access_entity, also check access to new access_entity
+                new_access_entity = validated_fields.get("access_entity")
+                if new_access_entity and new_access_entity != current_access_entity:
+                    if not can_write_to_access_entity(principal, new_access_entity):
+                        return json.dumps({
+                            "error": f"Access denied: you don't have permission to set access_entity='{new_access_entity}'",
+                            "code": "FORBIDDEN",
+                        })
+
+            # Get current metadata
 
             # Apply metadata updates
             updated_metadata = apply_metadata_updates(
