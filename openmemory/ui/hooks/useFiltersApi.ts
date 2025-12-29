@@ -60,7 +60,7 @@ export const useFiltersApi = (): UseFiltersApiReturn => {
       setIsLoading(false);
       throw new Error(errorMessage);
     }
-  }, [dispatch, user_id]);
+  }, [dispatch]);
 
   const updateApps = useCallback((apps: string[]) => {
     dispatch(setSelectedApps(apps));
