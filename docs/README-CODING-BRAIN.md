@@ -119,6 +119,28 @@ Install for a local MCP client:
 npx @openmemory/install local http://localhost:8865/mcp/<client>/sse/<user_id> --client <client>
 ```
 
+### Claude Code Configuration
+
+On macOS, Claude Code stores MCP settings in `~/.claude.json`. Add the following to connect to Coding Brain:
+
+```json
+{
+  "mcpServers": {
+    "coding-brain-memory": {
+      "type": "sse",
+      "url": "http://localhost:8865/mcp/claude-code/sse/<user_id>",
+      "headers": {
+        "Authorization": "Bearer <your-jwt-token>"
+      }
+    }
+  }
+}
+```
+
+Replace `<user_id>` with your configured user (default: `default_user`) and `<your-jwt-token>` with the token from `openmemory/.env` (`NEXT_PUBLIC_API_TOKEN`).
+
+After adding this configuration, restart Claude Code. You should then have access to memory tools like `add_memories`, `search_memory`, `list_memories`, and the `graph_*` tools.
+
 ---
 
 ## REST API Surface (Selected)
