@@ -8,7 +8,7 @@ TBD: summarize the next milestone and goal.
 
 ## Decisions
 - Access control field is `access_entity`; `entity` stays semantic.
-- Write policy for shared memories: TBD (creator-only vs group-editable).
+- Write policy for shared memories: group-editable (audit logs/backups for recovery).
 - Add any new decisions here.
 
 ## Completed Work (since last prompt)

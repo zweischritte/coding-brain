@@ -20,6 +20,7 @@ def test_build_structured_memory_validates():
         artifact_type="service",
         artifact_ref="deploy-service",
         entity="platform-team",
+        access_entity="org:cloudfactory",  # Required for scope=org
         source="user",
         evidence=["ADR-101"],
         tags={"rollout": True},
@@ -31,6 +32,7 @@ def test_build_structured_memory_validates():
     assert metadata["artifact_type"] == "service"
     assert metadata["artifact_ref"] == "deploy-service"
     assert metadata["entity"] == "platform-team"
+    assert metadata["access_entity"] == "org:cloudfactory"
     assert metadata["source"] == "user"
     assert metadata["evidence"] == ["ADR-101"]
     assert metadata["tags"] == {"rollout": True}
@@ -48,6 +50,7 @@ def test_normalize_metadata_validates_and_preserves_extras():
         "artifact_type": "repo",
         "artifact_ref": "coding-brain",
         "entity": "security-team",
+        "access_entity": "project:cloudfactory/security/coding-brain",  # Required for scope=project
         "evidence": ["PR-99"],
         "tags": {"auth": True},
         "source": "inference",
@@ -60,6 +63,7 @@ def test_normalize_metadata_validates_and_preserves_extras():
     assert metadata["artifact_type"] == "repo"
     assert metadata["artifact_ref"] == "coding-brain"
     assert metadata["entity"] == "security-team"
+    assert metadata["access_entity"] == "project:cloudfactory/security/coding-brain"
     assert metadata["evidence"] == ["PR-99"]
     assert metadata["tags"] == {"auth": True}
     assert metadata["source"] == "inference"

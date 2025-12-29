@@ -92,6 +92,18 @@ Optional: adjust `USER`, `NEXT_PUBLIC_API_URL`, and CORS settings.
 For the UI, set `NEXT_PUBLIC_API_TOKEN` to a JWT whose `sub` matches `USER`
 and includes the scopes you need (see Troubleshooting).
 
+Generate a token with all scopes:
+```bash
+cd openmemory/api
+python scripts/generate_jwt.py
+```
+Or with specific scopes:
+
+```bash
+python scripts/generate_jwt.py --scopes "memories:read code:read code:write"
+python scripts/generate_jwt.py --list-scopes  # show available scopes
+```
+
 2) Build and run
 ```bash
 make build

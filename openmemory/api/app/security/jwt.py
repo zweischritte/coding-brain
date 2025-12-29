@@ -145,6 +145,14 @@ def validate_jwt(token: str) -> TokenClaims:
         scope_str = payload.get("scope", "")
         scopes: Set[str] = set(scope_str.split()) if scope_str else set()
 
+        # Parse grants from list (access_entity values user can access)
+        grants_list = payload.get("grants", [])
+        grants: Set[str] = set(grants_list) if isinstance(grants_list, list) else set()
+
+        # Always include user grant based on sub claim
+        user_id = payload["sub"]
+        grants.add(f"user:{user_id}")
+
         # Build TokenClaims
         return TokenClaims(
             sub=payload["sub"],
@@ -155,6 +163,7 @@ def validate_jwt(token: str) -> TokenClaims:
             jti=payload["jti"],
             org_id=payload["org_id"],
             scopes=scopes,
+            grants=grants,
             email=payload.get("email"),
             name=payload.get("name"),
         )

@@ -37,11 +37,11 @@ Read access:
 - `scope!=user` -> access_entity must be in resolved grants
 
 Write access (decision):
-- Option A (default): only creator can edit/delete shared memories
-- Option B: any member of access_entity can edit/delete (requires stronger audit)
+- Decision: group-editable. Any member of access_entity can edit/delete.
 
 ### Access Key Field (decision)
 Decision: add `access_entity` in metadata to avoid overloading `entity` (used for semantic graph).
+Decision: group-editable shared memories. Rely on audit logs/backups for recovery.
 
 ### Grant Expansion
 JWT includes a `grants` list (`team:...`, `project:...`, `org:...`).

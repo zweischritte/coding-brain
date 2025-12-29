@@ -99,6 +99,7 @@ class TokenClaims:
     # Custom claims
     org_id: str  # Organization/tenant ID
     scopes: Set[str] = field(default_factory=set)  # Granted scopes
+    grants: Set[str] = field(default_factory=set)  # Access entity grants
 
     # Optional claims
     email: Optional[str] = None
@@ -116,6 +117,14 @@ class TokenClaims:
     def has_all_scopes(self, scopes: Set[Scope | str]) -> bool:
         """Check if the token has all of the specified scopes."""
         return all(self.has_scope(s) for s in scopes)
+
+    def has_grant(self, grant: str) -> bool:
+        """Check if the token has a specific grant."""
+        return grant in self.grants
+
+    def has_any_grant(self, grants: Set[str]) -> bool:
+        """Check if the token has any of the specified grants."""
+        return any(self.has_grant(g) for g in grants)
 
 
 @dataclass
@@ -164,3 +173,73 @@ class Principal:
         """Raise AuthorizationError if any scope is missing."""
         for scope in scopes:
             self.require_scope(scope)
+
+    def has_grant(self, grant: str) -> bool:
+        """Check if the principal has a specific grant."""
+        return self.claims.has_grant(grant)
+
+    def has_any_grant(self, grants: Set[str]) -> bool:
+        """Check if the principal has any of the specified grants."""
+        return self.claims.has_any_grant(grants)
+
+    def get_allowed_access_entities(self) -> Set[str]:
+        """Get all access_entity values this principal can access.
+
+        Always includes user:<user_id> plus any explicit grants.
+        """
+        allowed = set(self.claims.grants)
+        # Always include user grant based on user_id
+        allowed.add(f"user:{self.user_id}")
+        return allowed
+
+    def can_access(self, access_entity: str) -> bool:
+        """Check if the principal can access a memory with the given access_entity.
+
+        This implements hierarchical grant expansion:
+        - org:X grant allows access to org:X, project:X/*, team:X/*, client:X/*
+        - project:X grant allows access to project:X, team:X/*
+        - team:X grant allows access to team:X only
+        - user:X grant allows access to user:X only
+        """
+        if not access_entity or ":" not in access_entity:
+            return False
+
+        # Direct match
+        if access_entity in self.claims.grants:
+            return True
+
+        # Always have access to own user scope
+        if access_entity == f"user:{self.user_id}":
+            return True
+
+        # Hierarchical expansion
+        prefix, path = access_entity.split(":", 1)
+
+        for grant in self.claims.grants:
+            if ":" not in grant:
+                continue
+
+            grant_prefix, grant_path = grant.split(":", 1)
+
+            # org grant expands to project/team/client under that org
+            if grant_prefix == "org":
+                # org:cloudfactory allows project:cloudfactory/*
+                if prefix in ("project", "team", "client") and path.startswith(f"{grant_path}/"):
+                    return True
+                # org:cloudfactory also allows org:cloudfactory itself
+                if prefix == "org" and path == grant_path:
+                    return True
+
+            # project grant expands to teams under that project
+            elif grant_prefix == "project":
+                # project:cloudfactory/acme/billing allows team:cloudfactory/acme/billing/*
+                if prefix == "team" and path.startswith(f"{grant_path}/"):
+                    return True
+                # project:X also allows project:X itself
+                if prefix == "project" and path == grant_path:
+                    return True
+
+            # team grant - exact match only (already checked above)
+            # user grant - exact match only (already checked above)
+
+        return False
