@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import api from '@/lib/api';
-import { useDispatch, useSelector } from 'react-redux';
-import { AppDispatch, RootState } from '@/store/store';
+import { useDispatch } from 'react-redux';
+import { AppDispatch } from '@/store/store';
 import {
   App,
   AppDetails,
@@ -65,7 +65,6 @@ export const useAppsApi = (): UseAppsApiReturn => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const dispatch = useDispatch<AppDispatch>();
-  const user_id = useSelector((state: RootState) => state.profile.userId);
 
   const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 

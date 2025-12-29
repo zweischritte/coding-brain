@@ -146,7 +146,6 @@ export interface MemorySubgraph {
 
 // Update Request Type
 export interface MemoryUpdateRequest {
-  user_id: string
   memory_content?: string
   category?: StructuredCategory
   scope?: MemoryScope

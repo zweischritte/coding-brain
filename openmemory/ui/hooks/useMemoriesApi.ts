@@ -153,7 +153,6 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
   const [error, setError] = useState<string | null>(null);
   const [hasUpdates, setHasUpdates] = useState<number>(0);
   const dispatch = useDispatch<AppDispatch>();
-  const user_id = useSelector((state: RootState) => state.profile.userId);
   const memories = useSelector((state: RootState) => state.memories.memories);
   const selectedMemory = useSelector((state: RootState) => state.memories.selectedMemory);
 
@@ -181,7 +180,6 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       const response = await api.post<ApiResponse>(
         `${URL}/api/v1/memories/filter`,
         {
-          user_id: user_id,
           page: page,
           size: size,
           search_query: query,
@@ -220,12 +218,11 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       setIsLoading(false);
       throw new Error(errorMessage);
     }
-  }, [user_id, dispatch]);
+  }, [dispatch]);
 
   const createMemory = async (text: string): Promise<void> => {
     try {
       const memoryData = {
-        user_id: user_id,
         text: text,
         infer: false,
         app: "openmemory",
@@ -242,7 +239,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
   const deleteMemories = async (memory_ids: string[]) => {
     try {
       await api.delete(`${URL}/api/v1/memories/`, {
-        data: { memory_ids, user_id }
+        data: { memory_ids }
       });
       dispatch(setMemoriesSuccess(memories.filter((memory: Memory) => !memory_ids.includes(memory.id))));
     } catch (err: any) {
@@ -261,7 +258,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await api.get<SimpleMemory>(
-        `${URL}/api/v1/memories/${memoryId}?user_id=${user_id}`
+        `${URL}/api/v1/memories/${memoryId}`
       );
       setIsLoading(false);
       dispatch(setSelectedMemory(response.data));
@@ -301,7 +298,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await api.get<RelatedMemoriesResponse>(
-        `${URL}/api/v1/memories/${memoryId}/related?user_id=${user_id}`
+        `${URL}/api/v1/memories/${memoryId}/related`
       );
 
       const adaptedMemories: Memory[] = response.data.items.map((item: RelatedMemoryItem) => ({
@@ -335,7 +332,6 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
       await api.put(`${URL}/api/v1/memories/${memoryId}`, {
         memory_id: memoryId,
         memory_content: content,
-        user_id: user_id
       });
       setIsLoading(false);
       setHasUpdates(hasUpdates + 1);
@@ -367,9 +363,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const payload: MemoryUpdateRequest = {
-        user_id: user_id,
-      };
+      const payload: MemoryUpdateRequest = {};
       if (updates.content !== undefined) payload.memory_content = updates.content;
       if (updates.category !== undefined) payload.category = updates.category;
       if (updates.scope !== undefined) payload.scope = updates.scope;
@@ -403,7 +397,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await api.get<SimilarMemoriesResponse>(
-        `${URL}/api/v1/memories/${memoryId}/similar?user_id=${user_id}&min_score=${minScore}&limit=${limit}`
+        `${URL}/api/v1/memories/${memoryId}/similar?min_score=${minScore}&limit=${limit}`
       );
       setIsLoading(false);
       return response.data.similar_memories || [];
@@ -425,7 +419,7 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await api.get<MemoryGraphContextResponse>(
-        `${URL}/api/v1/memories/${memoryId}/graph?user_id=${user_id}`
+        `${URL}/api/v1/memories/${memoryId}/graph`
       );
       setIsLoading(false);
       return response.data;
@@ -448,7 +442,6 @@ export const useMemoriesApi = (): UseMemoriesApiReturn => {
         memory_ids: memoryIds,
         all_for_app: true,
         state: state,
-        user_id: user_id
       });
       dispatch(setMemoriesSuccess(memories.map((memory: Memory) => {
         if (memoryIds.includes(memory.id)) {

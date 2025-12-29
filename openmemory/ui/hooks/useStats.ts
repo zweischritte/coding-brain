@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import api from '@/lib/api';
-import { useDispatch, useSelector } from 'react-redux';
-import { AppDispatch, RootState } from '@/store/store';
+import { useDispatch } from 'react-redux';
+import { AppDispatch } from '@/store/store';
 import { setApps, setTotalApps } from '@/store/profileSlice';
 import { setTotalMemories } from '@/store/profileSlice';
 
@@ -33,8 +33,6 @@ export const useStats = (): UseMemoriesApiReturn => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const dispatch = useDispatch<AppDispatch>();
-  const user_id = useSelector((state: RootState) => state.profile.userId);
-
   const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 
   const fetchStats = async () => {
@@ -42,7 +40,7 @@ export const useStats = (): UseMemoriesApiReturn => {
     setError(null);
     try {
       const response = await api.get<APIStatsResponse>(
-        `${URL}/api/v1/stats?user_id=${user_id}`
+        `${URL}/api/v1/stats`
       );
       dispatch(setTotalMemories(response.data.total_memories));
       dispatch(setTotalApps(response.data.total_apps));

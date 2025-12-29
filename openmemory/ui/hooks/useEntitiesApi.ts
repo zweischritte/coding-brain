@@ -1,7 +1,5 @@
 import { useState, useCallback } from 'react';
 import api from '@/lib/api';
-import { useSelector } from 'react-redux';
-import { RootState } from '@/store/store';
 import {
   Entity,
   EntityNetwork,
@@ -82,8 +80,6 @@ interface UseEntitiesApiReturn {
 export const useEntitiesApi = (): UseEntitiesApiReturn => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const user_id = useSelector((state: RootState) => state.profile.userId);
-
   const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 
   const listEntities = useCallback(async (
@@ -94,7 +90,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setError(null);
     try {
       const response = await api.get<EntityListResponse>(
-        `${URL}/api/v1/entities?user_id=${user_id}&limit=${limit}&min_memories=${minMemories}`
+        `${URL}/api/v1/entities?limit=${limit}&min_memories=${minMemories}`
       );
       setIsLoading(false);
       return response.data.entities.map(e => ({
@@ -107,7 +103,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getEntity = useCallback(async (
     entityName: string
@@ -116,7 +112,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setError(null);
     try {
       const response = await api.get<EntityDetailResponse>(
-        `${URL}/api/v1/entities/${encodeURIComponent(entityName)}?user_id=${user_id}`
+        `${URL}/api/v1/entities/${encodeURIComponent(entityName)}`
       );
       setIsLoading(false);
       return response.data;
@@ -126,7 +122,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return null;
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getEntityNetwork = useCallback(async (
     entityName: string,
@@ -137,7 +133,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setError(null);
     try {
       const response = await api.get<EntityNetwork>(
-        `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/network?user_id=${user_id}&min_count=${minCount}&limit=${limit}`
+        `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/network?min_count=${minCount}&limit=${limit}`
       );
       setIsLoading(false);
       return response.data;
@@ -147,7 +143,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return null;
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getEntityRelations = useCallback(async (
     entityName: string,
@@ -156,7 +152,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const queryParams = new URLSearchParams({ user_id });
+      const queryParams = new URLSearchParams();
       if (params?.relationTypes) queryParams.append('relation_types', params.relationTypes);
       if (params?.category) queryParams.append('category', params.category);
       if (params?.direction) queryParams.append('direction', params.direction);
@@ -173,7 +169,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getEntityMemories = useCallback(async (
     entityName: string,
@@ -183,7 +179,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setError(null);
     try {
       const response = await api.get<EntityMemoriesResponse>(
-        `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/memories?user_id=${user_id}&limit=${limit}`
+        `${URL}/api/v1/entities/${encodeURIComponent(entityName)}/memories?limit=${limit}`
       );
       setIsLoading(false);
       return response.data.memories || [];
@@ -193,7 +189,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getCentrality = useCallback(async (
     limit: number = 20
@@ -202,7 +198,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setError(null);
     try {
       const response = await api.get<{ entities: CentralityEntity[] }>(
-        `${URL}/api/v1/entities/analytics/centrality?user_id=${user_id}&limit=${limit}`
+        `${URL}/api/v1/entities/analytics/centrality?limit=${limit}`
       );
       setIsLoading(false);
       return response.data.entities || [];
@@ -212,7 +208,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const findPath = useCallback(async (
     entityA: string,
@@ -223,7 +219,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
     setError(null);
     try {
       const response = await api.get<PathResponse>(
-        `${URL}/api/v1/entities/path/${encodeURIComponent(entityA)}/${encodeURIComponent(entityB)}?user_id=${user_id}&max_hops=${maxHops}`
+        `${URL}/api/v1/entities/path/${encodeURIComponent(entityA)}/${encodeURIComponent(entityB)}?max_hops=${maxHops}`
       );
       setIsLoading(false);
       return response.data;
@@ -233,14 +229,14 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return null;
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const findDuplicates = useCallback(async (): Promise<DuplicateGroup[]> => {
     setIsLoading(true);
     setError(null);
     try {
       const response = await api.get<{ duplicates: DuplicateGroup[] }>(
-        `${URL}/api/v1/entities/normalization/duplicates?user_id=${user_id}`
+        `${URL}/api/v1/entities/normalization/duplicates`
       );
       setIsLoading(false);
       return response.data.duplicates || [];
@@ -250,7 +246,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const mergeDuplicates = useCallback(async (
     canonical: string,
@@ -263,7 +259,6 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       const response = await api.post(
         `${URL}/api/v1/entities/normalization/merge`,
         {
-          user_id,
           canonical,
           variants,
           dry_run: dryRun,
@@ -277,7 +272,7 @@ export const useEntitiesApi = (): UseEntitiesApiReturn => {
       setIsLoading(false);
       throw new Error(errorMessage);
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   return {
     listEntities,

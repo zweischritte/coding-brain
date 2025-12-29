@@ -1,7 +1,5 @@
 import { useState, useCallback } from 'react';
 import api from '@/lib/api';
-import { useSelector } from 'react-redux';
-import { RootState } from '@/store/store';
 import {
   GraphStats,
   AggregationBucket,
@@ -73,8 +71,6 @@ interface UseGraphApiReturn {
 export const useGraphApi = (): UseGraphApiReturn => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const user_id = useSelector((state: RootState) => state.profile.userId);
-
   const URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8765";
 
   const getStats = useCallback(async (): Promise<GraphStats> => {
@@ -82,7 +78,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setError(null);
     try {
       const response = await api.get<GraphStats>(
-        `${URL}/api/v1/graph/stats?user_id=${user_id}`
+        `${URL}/api/v1/graph/stats`
       );
       setIsLoading(false);
       return response.data;
@@ -92,7 +88,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return { enabled: false, message: errorMessage };
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getHealth = useCallback(async (): Promise<GraphHealthResponse> => {
     setIsLoading(true);
@@ -124,7 +120,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setError(null);
     try {
       const response = await api.get<AggregateResponse>(
-        `${URL}/api/v1/graph/aggregate/${dimension}?user_id=${user_id}&limit=${limit}`
+        `${URL}/api/v1/graph/aggregate/${dimension}?limit=${limit}`
       );
       setIsLoading(false);
       return response.data.buckets;
@@ -134,7 +130,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getTagCooccurrence = useCallback(async (
     limit: number = 20,
@@ -144,7 +140,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setError(null);
     try {
       const response = await api.get<TagCooccurrenceResponse>(
-        `${URL}/api/v1/graph/tags/cooccurrence?user_id=${user_id}&limit=${limit}&min_count=${minCount}`
+        `${URL}/api/v1/graph/tags/cooccurrence?limit=${limit}&min_count=${minCount}`
       );
       setIsLoading(false);
       return response.data.pairs;
@@ -154,7 +150,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getRelatedTags = useCallback(async (
     tagKey: string,
@@ -165,7 +161,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setError(null);
     try {
       const response = await api.get(
-        `${URL}/api/v1/graph/tags/${encodeURIComponent(tagKey)}/related?user_id=${user_id}&min_count=${minCount}&limit=${limit}`
+        `${URL}/api/v1/graph/tags/${encodeURIComponent(tagKey)}/related?min_count=${minCount}&limit=${limit}`
       );
       setIsLoading(false);
       return response.data.related || [];
@@ -175,7 +171,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const getTimeline = useCallback(async (params?: {
     entityName?: string;
@@ -187,7 +183,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setIsLoading(true);
     setError(null);
     try {
-      const queryParams = new URLSearchParams({ user_id });
+      const queryParams = new URLSearchParams();
       if (params?.entityName) queryParams.append('entity_name', params.entityName);
       if (params?.eventTypes) queryParams.append('event_types', params.eventTypes);
       if (params?.startYear) queryParams.append('start_year', params.startYear.toString());
@@ -205,7 +201,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const searchMemories = useCallback(async (
     query: string,
@@ -215,7 +211,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setError(null);
     try {
       const response = await api.get(
-        `${URL}/api/v1/graph/search/memories?query=${encodeURIComponent(query)}&user_id=${user_id}&limit=${limit}`
+        `${URL}/api/v1/graph/search/memories?query=${encodeURIComponent(query)}&limit=${limit}`
       );
       setIsLoading(false);
       return response.data.results || [];
@@ -225,7 +221,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   const searchEntities = useCallback(async (
     query: string,
@@ -235,7 +231,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
     setError(null);
     try {
       const response = await api.get(
-        `${URL}/api/v1/graph/search/entities?query=${encodeURIComponent(query)}&user_id=${user_id}&limit=${limit}`
+        `${URL}/api/v1/graph/search/entities?query=${encodeURIComponent(query)}&limit=${limit}`
       );
       setIsLoading(false);
       return response.data.results || [];
@@ -245,7 +241,7 @@ export const useGraphApi = (): UseGraphApiReturn => {
       setIsLoading(false);
       return [];
     }
-  }, [user_id, URL]);
+  }, [URL]);
 
   return {
     getStats,
