@@ -60,6 +60,17 @@ class EvidenceChain:
             source = f"{source} ({self.timestamp})"
         return f"[{index}] {source}"
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize evidence for JSON-friendly output."""
+        return {
+            "memory_id": self.memory_id,
+            "content_snippet": self.content_snippet,
+            "source_type": self.source_type,
+            "entity": self.entity,
+            "timestamp": self.timestamp,
+            "confidence": self.confidence,
+        }
+
 
 @dataclass
 class SectionContent:
@@ -132,6 +143,17 @@ class SectionContent:
             lines.append("")
 
         return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize section data for JSON-friendly output."""
+        return {
+            "title": self.title,
+            "content": self.content,
+            "confidence": self.confidence.name,
+            "evidence": [ev.to_dict() for ev in self.evidence],
+            "gaps": self.gaps,
+            "contradictions": self.contradictions,
+        }
 
 
 class OutputGenerator(ABC):
@@ -330,7 +352,7 @@ class BusinessModelCanvasGenerator(OutputGenerator):
             "format": OutputFormat.BMC.value,
             "generated_at": datetime.now().isoformat(),
             "overall_confidence": sum(overall_confidence) / len(overall_confidence),
-            "sections": {k: v.__dict__ for k, v in sections.items()},
+            "sections": {k: v.to_dict() for k, v in sections.items()},
             "markdown": markdown
         }
 
@@ -466,7 +488,7 @@ class LeanCanvasGenerator(OutputGenerator):
             "entity": entity,
             "format": OutputFormat.LEAN_CANVAS.value,
             "generated_at": datetime.now().isoformat(),
-            "sections": {k: v.__dict__ for k, v in sections.items()},
+            "sections": {k: v.to_dict() for k, v in sections.items()},
             "markdown": markdown
         }
 
@@ -600,7 +622,7 @@ class StrategyOnePagerGenerator(OutputGenerator):
             "entity": entity,
             "format": OutputFormat.STRATEGY_ONE_PAGER.value,
             "generated_at": datetime.now().isoformat(),
-            "sections": {k: v.__dict__ for k, v in sections.items()},
+            "sections": {k: v.to_dict() for k, v in sections.items()},
             "markdown": markdown
         }
 
@@ -699,7 +721,7 @@ class WeeklyDigestGenerator(OutputGenerator):
             "format": OutputFormat.WEEKLY_DIGEST.value,
             "generated_at": datetime.now().isoformat(),
             "period": f"{days_back} days",
-            "sections": {k: v.__dict__ for k, v in sections.items()},
+            "sections": {k: v.to_dict() for k, v in sections.items()},
             "markdown": markdown
         }
 

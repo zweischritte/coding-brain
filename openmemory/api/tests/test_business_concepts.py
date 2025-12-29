@@ -523,14 +523,42 @@ class TestConstants:
 
     def test_concept_types(self):
         """Should have all required concept types."""
-        expected = {"causal", "pattern", "comparison", "trend",
-                    "contradiction", "hypothesis", "fact"}
+        expected = {
+            "causal",
+            "pattern",
+            "comparison",
+            "trend",
+            "contradiction",
+            "hypothesis",
+            "fact",
+            "implementation",
+            "product_architecture",
+            "market_structure",
+            "success_story",
+            "mental_model",
+            "pricing_insight",
+        }
         assert CONCEPT_TYPES == expected
 
     def test_entity_types(self):
         """Should have all required entity types."""
-        expected = {"company", "person", "product", "market",
-                    "metric", "business_model", "technology", "strategy"}
+        expected = {
+            "company",
+            "person",
+            "product",
+            "market",
+            "metric",
+            "business_model",
+            "technology",
+            "strategy",
+            "tactic",
+            "case_study",
+            "product_idea",
+            "framework",
+            "competitive_intel",
+            "pricing",
+            "tool_config",
+        }
         assert ENTITY_TYPES == expected
 
     def test_source_types(self):

@@ -515,14 +515,14 @@ def should_exclude(
         Tuple of (should_exclude, reason_or_none)
     """
     # State exclusion
-    memory_state = metadata.get("state", "active")
+    memory_state = metadata.get("state") or payload.get("state") or "active"
     if memory_state in filters.exclude_states:
-        return True, f"state:{memory_state}"
+        return True, "state"
 
     # Tag exclusion
     for tag in filters.exclude_tags:
         if stored_tags.get(tag):
-            return True, f"excluded_tag:{tag}"
+            return True, "tag"
 
     # Silent tag default exclusion (unless explicitly boosted)
     if stored_tags.get("silent") and "silent" not in filters.boost_tags:

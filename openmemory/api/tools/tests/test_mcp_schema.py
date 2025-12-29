@@ -39,7 +39,9 @@ def schema_path() -> Path:
 def schema(schema_path: Path) -> dict[str, Any]:
     """Load the MCP tools schema."""
     with open(schema_path) as f:
-        return json.load(f)
+        schema = json.load(f)
+    schema["$id"] = schema_path.resolve().as_uri()
+    return schema
 
 
 @pytest.fixture
