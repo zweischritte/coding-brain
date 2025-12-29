@@ -21,7 +21,9 @@ from app.security.types import Principal, Scope
 from app.security.access import (
     can_read_access_entity,
     can_write_to_access_entity,
-    filter_memories_by_access,
+    build_access_entity_patterns,
+    check_create_access,
+    get_default_access_entity,
 )
 from app.utils.structured_memory import (
     StructuredMemoryError,
@@ -36,7 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi_pagination import Page, Params
 from fastapi_pagination.ext.sqlalchemy import paginate as sqlalchemy_paginate
 from pydantic import BaseModel, Field
-from sqlalchemy import func, String, cast, text
+from sqlalchemy import func, String, cast, text, and_, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
@@ -138,6 +140,18 @@ def _check_memory_access(principal: Principal, memory: Memory) -> bool:
         return False
 
 
+def _apply_access_entity_filter(query, principal: Principal, user: User):
+    exact_matches, like_patterns = build_access_entity_patterns(principal)
+    access_entity_col = cast(Memory.metadata_["access_entity"], String)
+    legacy_owner_filter = and_(
+        or_(Memory.metadata_.is_(None), access_entity_col.is_(None)),
+        Memory.user_id == user.id,
+    )
+    access_clauses = [access_entity_col.in_(exact_matches), legacy_owner_filter]
+    access_clauses.extend(access_entity_col.like(pattern) for pattern in like_patterns)
+    return query.filter(or_(*access_clauses))
+
+
 # List all memories with filtering
 @router.get("/", response_model=Page[MemoryResponse])
 async def list_memories(
@@ -167,7 +181,6 @@ async def list_memories(
 
     # Build base query
     query = db.query(Memory).filter(
-        Memory.user_id == user.id,
         Memory.state != MemoryState.deleted,
         Memory.state != MemoryState.archived,
         Memory.content.ilike(f"%{search_query}%") if search_query else True
@@ -203,6 +216,9 @@ async def list_memories(
         selectinload(Memory.user)
     )
 
+    # Apply access_entity filtering to include shared memories
+    query = _apply_access_entity_filter(query, principal, user)
+
     # Get paginated results with transformer that includes access_entity filtering
     return sqlalchemy_paginate(
         query,
@@ -236,7 +252,12 @@ async def get_categories(
 
     # Get unique categories associated with the user's memories
     # Get all memories
-    memories = db.query(Memory).filter(Memory.user_id == user.id, Memory.state != MemoryState.deleted, Memory.state != MemoryState.archived).all()
+    memories_query = db.query(Memory).filter(
+        Memory.state != MemoryState.deleted,
+        Memory.state != MemoryState.archived,
+    )
+    memories_query = _apply_access_entity_filter(memories_query, principal, user)
+    memories = memories_query.all()
     # Get all categories from memories
     categories = [category for memory in memories for category in memory.categories]
     # Get unique categories
@@ -287,6 +308,14 @@ async def create_memory(
     except StructuredMemoryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Default access_entity for personal scopes
+    if normalized_metadata.get("scope") in ("user", "session") and "access_entity" not in normalized_metadata:
+        normalized_metadata["access_entity"] = get_default_access_entity(principal)
+
+    access_entity = normalized_metadata.get("access_entity")
+    if access_entity and not check_create_access(principal, access_entity):
+        raise HTTPException(status_code=403, detail="Cannot create memory for this access_entity")
+
     # Try to get memory client safely
     try:
         memory_client = get_memory_client()
@@ -304,6 +333,7 @@ async def create_memory(
         combined_metadata = {
             "source_app": "openmemory",
             "mcp_client": request.app,
+            "org_id": principal.org_id,
             **normalized_metadata,
         }
         qdrant_response = memory_client.add(
@@ -882,7 +912,6 @@ async def filter_memories(
 
     # Build base query
     query = db.query(Memory).filter(
-        Memory.user_id == user.id,
         Memory.state != MemoryState.deleted,
     )
 
@@ -956,6 +985,9 @@ async def filter_memories(
         selectinload(Memory.user)
     )
 
+    # Apply access_entity filtering to include shared memories
+    query = _apply_access_entity_filter(query, principal, user)
+
     # Use fastapi-pagination's paginate function with access_entity filtering
     return sqlalchemy_paginate(
         query,
@@ -1010,7 +1042,6 @@ async def get_related_memories(
     
     # Build query for related memories
     query = db.query(Memory).distinct(Memory.id).filter(
-        Memory.user_id == user.id,
         Memory.id != memory_id,
         Memory.state != MemoryState.deleted
     ).join(Memory.categories).filter(
@@ -1023,6 +1054,9 @@ async def get_related_memories(
         func.count(Category.id).desc(),
         Memory.created_at.desc()
     ).group_by(Memory.id)
+
+    # Apply access_entity filtering to include shared memories
+    query = _apply_access_entity_filter(query, principal, user)
 
     # ⚡ Force page size to be 5
     params = Params(page=params.page, size=5)

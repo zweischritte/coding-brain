@@ -187,16 +187,18 @@ class TenantOpenSearchStore:
     def _create_access_entity_filter(
         self,
         access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         additional_filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Create a filter with org_id + access_entity-based access control.
 
         Access entities support OR logic: a memory is accessible if its access_entity
-        matches ANY of the provided access_entities.
+        matches ANY of the provided access_entities or access_entity_prefixes.
 
         Args:
             access_entities: List of access_entity values the principal can access
+            access_entity_prefixes: List of access_entity prefixes for hierarchical grants
             additional_filters: Optional additional filter conditions
 
         Returns:
@@ -204,9 +206,25 @@ class TenantOpenSearchStore:
         """
         filter_clauses = [self._create_org_filter()]
 
-        # Add access_entity filter using "terms" (OR logic - matches any value in list)
-        if access_entities:
-            filter_clauses.append({"terms": {"access_entity": access_entities}})
+        # Add access_entity filter using bool/should (OR logic across exact + prefixes)
+        if access_entities or access_entity_prefixes:
+            should_clauses: List[Dict[str, Any]] = []
+            if access_entities:
+                if len(access_entities) == 1:
+                    should_clauses.append({"term": {"access_entity": access_entities[0]}})
+                else:
+                    should_clauses.append({"terms": {"access_entity": access_entities}})
+            if access_entity_prefixes:
+                for prefix in access_entity_prefixes:
+                    if prefix:
+                        should_clauses.append({"prefix": {"access_entity": prefix}})
+            if should_clauses:
+                filter_clauses.append({
+                    "bool": {
+                        "should": should_clauses,
+                        "minimum_should_match": 1,
+                    }
+                })
 
         # Add additional filters
         if additional_filters:
@@ -422,6 +440,7 @@ class TenantOpenSearchStore:
         self,
         query_text: str,
         access_entities: List[str],
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
@@ -434,13 +453,18 @@ class TenantOpenSearchStore:
         Args:
             query_text: The search query
             access_entities: List of access_entity values the principal can access
+            access_entity_prefixes: List of access_entity prefixes for hierarchical grants
             limit: Maximum number of results
             filters: Optional additional filters
 
         Returns:
             List of matching documents, filtered by access_entity
         """
-        filter_clauses = self._create_access_entity_filter(access_entities, filters)
+        filter_clauses = self._create_access_entity_filter(
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+            additional_filters=filters,
+        )
 
         body = {
             "size": limit,
@@ -466,6 +490,7 @@ class TenantOpenSearchStore:
         query_text: str,
         query_vector: List[float],
         access_entities: List[str],
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 10,
         filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
@@ -479,13 +504,18 @@ class TenantOpenSearchStore:
             query_text: The text query
             query_vector: The embedding vector
             access_entities: List of access_entity values the principal can access
+            access_entity_prefixes: List of access_entity prefixes for hierarchical grants
             limit: Maximum number of results
             filters: Optional additional filters
 
         Returns:
             List of matching documents with combined scores, filtered by access_entity
         """
-        filter_clauses = self._create_access_entity_filter(access_entities, filters)
+        filter_clauses = self._create_access_entity_filter(
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+            additional_filters=filters,
+        )
 
         # Hybrid query combining lexical and kNN
         body = {

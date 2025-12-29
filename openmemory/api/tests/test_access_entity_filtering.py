@@ -432,10 +432,9 @@ class TestBuildAccessFilterQuery:
         # Org grant should be in exact matches
         assert "org:cloudfactory" in exact_matches
 
-        # Should generate LIKE patterns for child projects, teams, and clients
+        # Should generate LIKE patterns for child projects and teams
         assert "project:cloudfactory/%" in like_patterns
         assert "team:cloudfactory/%" in like_patterns
-        assert "client:cloudfactory/%" in like_patterns
 
     def test_filter_expands_project_grant_to_match_teams(self):
         """Query filter should expand project grant to match child teams."""
@@ -553,13 +552,83 @@ class TestListMemoriesFiltering:
 
     @pytest.mark.asyncio
     async def test_list_returns_personal_and_shared_memories(self):
-        """list_memories should return both personal and shared memories."""
-        pass  # Placeholder
+        """list_memories should apply access_entity filtering (structural check)."""
+        import ast
+        from pathlib import Path
+
+        router_path = Path("/Users/grischadallmer/git/coding-brain/openmemory/api/app/routers/memories.py")
+        source = router_path.read_text()
+        tree = ast.parse(source)
+
+        list_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "list_memories":
+                list_node = node
+                break
+
+        assert list_node is not None
+        list_source = ast.get_source_segment(source, list_node) or ""
+        assert "_apply_access_entity_filter" in list_source
 
     @pytest.mark.asyncio
     async def test_list_excludes_memories_without_grant(self):
-        """list_memories should exclude memories user lacks grant for."""
-        pass  # Placeholder
+        """filter_memories should apply access_entity filtering (structural check)."""
+        import ast
+        from pathlib import Path
+
+        router_path = Path("/Users/grischadallmer/git/coding-brain/openmemory/api/app/routers/memories.py")
+        source = router_path.read_text()
+        tree = ast.parse(source)
+
+        filter_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "filter_memories":
+                filter_node = node
+                break
+
+        assert filter_node is not None
+        filter_source = ast.get_source_segment(source, filter_node) or ""
+        assert "_apply_access_entity_filter" in filter_source
+
+    @pytest.mark.asyncio
+    async def test_related_memories_apply_access_entity_filtering(self):
+        """get_related_memories should apply access_entity filtering (structural check)."""
+        import ast
+        from pathlib import Path
+
+        router_path = Path("/Users/grischadallmer/git/coding-brain/openmemory/api/app/routers/memories.py")
+        source = router_path.read_text()
+        tree = ast.parse(source)
+
+        related_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_related_memories":
+                related_node = node
+                break
+
+        assert related_node is not None
+        related_source = ast.get_source_segment(source, related_node) or ""
+        assert "_apply_access_entity_filter" in related_source
+
+    @pytest.mark.asyncio
+    async def test_categories_apply_access_entity_filtering(self):
+        """get_categories should apply access_entity filtering (structural check)."""
+        import ast
+        from pathlib import Path
+
+        router_path = Path("/Users/grischadallmer/git/coding-brain/openmemory/api/app/routers/memories.py")
+        source = router_path.read_text()
+        tree = ast.parse(source)
+
+        categories_node = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "get_categories":
+                categories_node = node
+                break
+
+        assert categories_node is not None
+        categories_source = ast.get_source_segment(source, categories_node) or ""
+        assert "_apply_access_entity_filter" in categories_source
 
 
 class TestOpenSearchAccessEntityFiltering:
@@ -627,15 +696,21 @@ class TestOpenSearchAccessEntityFiltering:
         # Get the filter clauses
         filter_clauses = search_body["query"]["bool"]["filter"]
 
-        # Find the access_entity filter (uses "terms" for OR logic)
-        access_filter = None
-        for clause in filter_clauses:
-            if "terms" in clause and "access_entity" in clause["terms"]:
-                access_filter = clause
-                break
+        # Find the access_entity filter (bool should with term/terms)
+        access_filter = next(
+            (c for c in filter_clauses if "bool" in c and "should" in c["bool"]),
+            None,
+        )
 
         assert access_filter is not None
-        assert set(access_filter["terms"]["access_entity"]) == set(access_entities)
+        should_clauses = access_filter["bool"]["should"]
+        found = set()
+        for clause in should_clauses:
+            if "term" in clause and "access_entity" in clause["term"]:
+                found.add(clause["term"]["access_entity"])
+            if "terms" in clause and "access_entity" in clause["terms"]:
+                found.update(clause["terms"]["access_entity"])
+        assert set(access_entities).issubset(found)
 
     def test_search_with_access_control_uses_or_logic(self):
         """search_with_access_control should return results matching ANY access_entity."""
@@ -670,22 +745,19 @@ class TestOpenSearchAccessEntityFiltering:
             limit=10,
         )
 
-        # Verify the query uses "terms" (which is OR logic in OpenSearch)
+        # Verify the query uses OR logic across access entities
         call_args = mock_client.search.call_args
         search_body = call_args[1]["body"]
         filter_clauses = search_body["query"]["bool"]["filter"]
 
-        # Find the terms filter
-        terms_filter = None
-        for clause in filter_clauses:
-            if "terms" in clause:
-                terms_filter = clause
-                break
+        # Find the access_entity bool filter
+        access_filter = next(
+            (c for c in filter_clauses if "bool" in c and "should" in c["bool"]),
+            None,
+        )
 
-        assert terms_filter is not None
-        # "terms" query in OpenSearch means match ANY of the values (OR logic)
-        assert "access_entity" in terms_filter["terms"]
-        assert len(terms_filter["terms"]["access_entity"]) == 2
+        assert access_filter is not None
+        assert access_filter["bool"].get("minimum_should_match") == 1
 
     def test_hybrid_search_with_access_control_filters_by_access_entity(self):
         """hybrid_search_with_access_control should filter by access_entity."""
@@ -723,14 +795,20 @@ class TestOpenSearchAccessEntityFiltering:
         filter_clauses = search_body["query"]["bool"]["filter"]
 
         # Find the access_entity filter
-        access_filter = None
-        for clause in filter_clauses:
-            if "terms" in clause and "access_entity" in clause["terms"]:
-                access_filter = clause
-                break
+        access_filter = next(
+            (c for c in filter_clauses if "bool" in c and "should" in c["bool"]),
+            None,
+        )
 
         assert access_filter is not None
-        assert set(access_filter["terms"]["access_entity"]) == set(access_entities)
+        should_clauses = access_filter["bool"]["should"]
+        found = set()
+        for clause in should_clauses:
+            if "term" in clause and "access_entity" in clause["term"]:
+                found.add(clause["term"]["access_entity"])
+            if "terms" in clause and "access_entity" in clause["terms"]:
+                found.update(clause["terms"]["access_entity"])
+        assert set(access_entities).issubset(found)
 
         # Also verify the hybrid search has both lexical and vector components
         should_clauses = search_body["query"]["bool"]["should"]
@@ -764,9 +842,49 @@ class TestOpenSearchAccessEntityFiltering:
         org_filters = [c for c in filter_clauses if "term" in c and "org_id" in c.get("term", {})]
         assert len(org_filters) == 1
 
-        # Verify access_entity filter is present
-        access_filters = [c for c in filter_clauses if "terms" in c and "access_entity" in c.get("terms", {})]
+        # Verify access_entity bool filter is present
+        access_filters = [c for c in filter_clauses if "bool" in c and "should" in c["bool"]]
         assert len(access_filters) == 1
+
+    def test_search_with_access_control_supports_prefixes(self):
+        """search_with_access_control should include prefix filters when provided."""
+        from app.stores.opensearch_store import TenantOpenSearchStore
+
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+        mock_client.indices.get_alias.return_value = {"tenant_test-org": {}}
+        mock_client.search.return_value = {"hits": {"hits": []}}
+
+        store = TenantOpenSearchStore(
+            client=mock_client,
+            org_id="test-org",
+        )
+
+        access_entities = ["user:grischa"]
+        access_entity_prefixes = ["team:cloudfactory/"]
+
+        store.search_with_access_control(
+            query_text="test query",
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+            limit=10,
+        )
+
+        mock_client.search.assert_called_once()
+        call_args = mock_client.search.call_args
+        search_body = call_args[1]["body"]
+
+        filter_clauses = search_body["query"]["bool"]["filter"]
+        access_filter = next(
+            (c for c in filter_clauses if "bool" in c and "should" in c["bool"]),
+            None,
+        )
+        assert access_filter is not None
+        should_clauses = access_filter["bool"]["should"]
+        assert any(
+            "prefix" in clause and clause["prefix"].get("access_entity") == "team:cloudfactory/"
+            for clause in should_clauses
+        )
 
     def test_search_with_access_control_empty_access_entities(self):
         """search_with_access_control should work with empty access_entities list."""
@@ -797,9 +915,24 @@ class TestOpenSearchAccessEntityFiltering:
         # Should only have org_id filter (no access_entity filter when list is empty)
         filter_clauses = search_body["query"]["bool"]["filter"]
 
-        # Empty access_entities means no terms filter added
-        terms_filters = [c for c in filter_clauses if "terms" in c]
-        assert len(terms_filters) == 0
+        # Empty access_entities means no access_entity bool filter added
+        access_filters = [c for c in filter_clauses if "bool" in c and "should" in c["bool"]]
+        assert len(access_filters) == 0
+
+
+class TestRESTSearchAccessEntityFiltering:
+    """Tests for REST search access_entity filtering."""
+
+    def test_search_routes_use_access_entity_filters(self):
+        """REST search endpoints should use access_entity filters (structural check)."""
+        from pathlib import Path
+
+        router_path = Path("/Users/grischadallmer/git/coding-brain/openmemory/api/app/routers/search.py")
+        source = router_path.read_text()
+
+        assert "build_access_entity_patterns" in source
+        assert "search_with_access_control" in source
+        assert "hybrid_search_with_access_control" in source
 
 
 class TestGraphQueryAccessEntityFiltering:

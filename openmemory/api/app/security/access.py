@@ -67,14 +67,13 @@ def get_default_access_entity(principal: Principal) -> str:
     return f"user:{principal.user_id}"
 
 
-def build_access_entity_patterns(principal: Principal) -> list[str]:
+def build_access_entity_patterns(principal: Principal) -> tuple[list[str], list[str]]:
     """Build SQL LIKE patterns for access_entity filtering with hierarchy expansion.
 
     For org grants, we need to match:
     - org:X (exact match)
     - project:X/* (all projects under org)
     - team:X/* (all teams under org)
-    - client:X/* (all clients under org)
 
     For project grants:
     - project:X (exact match)
@@ -84,7 +83,7 @@ def build_access_entity_patterns(principal: Principal) -> list[str]:
         principal: The authenticated principal
 
     Returns:
-        List of (exact_matches, like_patterns) for SQL WHERE clause
+        Tuple of (exact_matches, like_patterns) for SQL WHERE clause
     """
     exact_matches = set()
     like_patterns = set()
@@ -92,18 +91,21 @@ def build_access_entity_patterns(principal: Principal) -> list[str]:
     # Always include user grant
     exact_matches.add(f"user:{principal.user_id}")
 
+    allowed_prefixes = {"user", "team", "project", "org"}
+
     for grant in principal.claims.grants:
         if ":" not in grant:
             continue
 
         prefix, path = grant.split(":", 1)
+        if prefix not in allowed_prefixes:
+            continue
         exact_matches.add(grant)
 
         if prefix == "org":
-            # org:cloudfactory allows project:cloudfactory/*, team:cloudfactory/*, client:cloudfactory/*
+            # org:cloudfactory allows project:cloudfactory/*, team:cloudfactory/*
             like_patterns.add(f"project:{path}/%")
             like_patterns.add(f"team:{path}/%")
-            like_patterns.add(f"client:{path}/%")
         elif prefix == "project":
             # project:cloudfactory/acme/billing allows team:cloudfactory/acme/billing/*
             like_patterns.add(f"team:{path}/%")

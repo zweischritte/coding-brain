@@ -23,6 +23,7 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - Vector search via Mem0 (default: Qdrant)
 - Neo4j metadata graph (OM_*), similarity edges, typed relations, tag co-occurrence
 - Optional business concept extraction with a separate concept graph and vector store
+- Multi-user memory routing via access_entity with grant-based visibility and group-editable writes
 
 ### Search and Retrieval
 - REST search endpoints backed by OpenSearch (lexical + optional vector)
@@ -45,6 +46,61 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 
 ### Guidance
 - Separate MCP SSE endpoint for serving guidance documents on demand
+
+---
+
+## Multi-User Memory Routing (access_entity)
+
+Coding Brain uses `access_entity` to control read/write access to shared memories.
+Shared memories are visible to all holders of matching grants; writes are group-editable.
+
+### Access Entity Formats
+Allowed prefixes (client/service removed):
+- `user:<user_id>` (default for `scope=user` and `scope=session`)
+- `team:<org>/<team>`
+- `project:<org>/<path>`
+- `org:<org>`
+
+Shared scopes (`team`, `project`, `org`, `enterprise`) require `access_entity`.
+
+### Grant Hierarchy
+JWT grants drive access, with hierarchical expansion:
+- `org:X` grants `org:X` plus all `project:X/*` and `team:X/*`
+- `project:X` grants `project:X` plus all `team:X/*`
+- `team:X` grants only that team
+- `user:X` grants only that user
+
+### Behavior by Surface
+- REST list/filter/related/search use `access_entity` (not creator `user_id`)
+- MCP search/list/update/delete use `access_entity` (group-editable policy)
+- Graph queries use the accessible memory IDs instead of user-only filtering
+- OpenSearch filtering supports exact + prefix matching for org/project grants
+- Legacy memories without `access_entity` remain owner-only
+
+### Token Grants
+Generate JWTs with grants using `openmemory/api/scripts/generate_jwt.py`:
+```bash
+python scripts/generate_jwt.py --user alice --org cloudfactory \
+  --grants "user:alice team:cloudfactory/backend org:cloudfactory"
+```
+
+---
+
+## Data Migrations and Backfill
+
+Multi-user routing relies on the following migrations and scripts:
+- Access entity index (Postgres): `openmemory/api/alembic/versions/add_access_entity_index.py`
+- RLS disabled for shared access: `openmemory/api/alembic/versions/disable_rls_for_shared_access.py`
+- Personal-scope backfill script: `openmemory/api/app/scripts/backfill_access_entity.py`
+
+Backfill usage:
+```bash
+cd openmemory/api
+python -m app.scripts.backfill_access_entity --dry-run
+python -m app.scripts.backfill_access_entity
+```
+
+If you backfill, re-sync vector and graph stores to reflect updated metadata.
 
 ---
 
@@ -221,6 +277,7 @@ If you are calling a secured API, add `NEXT_PUBLIC_API_TOKEN` to
 
 ## Troubleshooting
 - `401/403` on REST or MCP: check JWT issuer/audience/secret and required scopes.
+- Shared memories not visible: ensure `access_entity` is set and the JWT includes matching grants.
 - UI shows empty lists or 403s: ensure `NEXT_PUBLIC_API_TOKEN` includes
   `memories:read`, `apps:read`, `stats:read`, `entities:read`, and `graph:read`
   (plus `memories:write/delete` or `apps:write` if you edit data).

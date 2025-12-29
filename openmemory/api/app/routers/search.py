@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.security.dependencies import require_scopes
 from app.security.types import Principal, Scope
+from app.security.access import build_access_entity_patterns
 from app.stores.opensearch_store import TenantOpenSearchStore, get_tenant_opensearch_store
 
 
@@ -124,6 +125,18 @@ def _filters_to_dict(filters: Optional[SearchFilters]) -> Optional[Dict[str, Any
     return result if result else None
 
 
+def _access_entity_filters(principal: Principal) -> tuple[list[str], list[str]]:
+    """Build exact and prefix access_entity filters for OpenSearch."""
+    exact, like_patterns = build_access_entity_patterns(principal)
+    prefixes = []
+    for pattern in like_patterns:
+        if pattern.endswith("%"):
+            prefixes.append(pattern[:-1])
+        else:
+            prefixes.append(pattern)
+    return exact, prefixes
+
+
 def _format_results(hits: List[Dict[str, Any]]) -> List[SearchResult]:
     """Format OpenSearch hits into SearchResult objects."""
     results = []
@@ -181,8 +194,11 @@ async def hybrid_search(
     # Perform lexical search (hybrid requires embedding which we don't have here)
     # In production, we'd generate an embedding for the query
     filters_dict = _filters_to_dict(request.filters)
-    hits = store.search(
+    exact, prefixes = _access_entity_filters(principal)
+    hits = store.search_with_access_control(
         query_text=request.query,
+        access_entities=exact,
+        access_entity_prefixes=prefixes,
         limit=request.limit,
         filters=filters_dict,
     )
@@ -227,8 +243,11 @@ async def lexical_search(
 
     # Perform lexical search
     filters_dict = _filters_to_dict(request.filters)
-    hits = store.search(
+    exact, prefixes = _access_entity_filters(principal)
+    hits = store.search_with_access_control(
         query_text=request.query,
+        access_entities=exact,
+        access_entity_prefixes=prefixes,
         limit=request.limit,
         filters=filters_dict,
     )
@@ -274,9 +293,12 @@ async def semantic_search(
 
     # Perform hybrid search with the provided vector
     filters_dict = _filters_to_dict(request.filters)
-    hits = store.hybrid_search(
+    exact, prefixes = _access_entity_filters(principal)
+    hits = store.hybrid_search_with_access_control(
         query_text=request.query,
         query_vector=request.query_vector,
+        access_entities=exact,
+        access_entity_prefixes=prefixes,
         limit=request.limit,
         filters=filters_dict,
     )

@@ -103,6 +103,20 @@ def make_mock_app(app_id: uuid.UUID = APP_ID, app_name: str = "test-app"):
     return mock
 
 
+_UNSET = object()
+
+
+def configure_query_mock(mock_db, all_results=_UNSET, first_result=_UNSET):
+    """Configure chained query.filter().all()/first() behavior."""
+    mock_query = mock_db.query.return_value
+    mock_query.filter.return_value = mock_query
+    if all_results is not _UNSET:
+        mock_query.all.return_value = all_results
+    if first_result is not _UNSET:
+        mock_query.first.return_value = first_result
+    return mock_query
+
+
 class TestMCPAddMemoriesAccessControl:
     """Test add_memories enforces access_entity permissions."""
 
@@ -398,7 +412,7 @@ class TestMCPSearchMemoryAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = memories
+                configure_query_mock(mock_db, all_results=memories)
 
                 result = await search_memory(
                     query="test memory",
@@ -479,7 +493,7 @@ class TestMCPSearchMemoryAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = memories
+                configure_query_mock(mock_db, all_results=memories)
 
                 result = await search_memory(
                     query="test memory",
@@ -546,7 +560,7 @@ class TestMCPSearchMemoryAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = memories
+                configure_query_mock(mock_db, all_results=memories)
 
                 result = await search_memory(query="memory", limit=10)
 
@@ -876,8 +890,7 @@ class TestMCPDeleteMemoriesAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = memories
-                mock_db.query.return_value.filter.return_value.first.return_value = memories[0]
+                configure_query_mock(mock_db, all_results=memories, first_result=memories[0])
 
                 result = await delete_memories(
                     memory_ids=[str(memory1_id), str(memory2_id)]
@@ -929,8 +942,7 @@ class TestMCPDeleteMemoriesAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = [memory]
-                mock_db.query.return_value.filter.return_value.first.return_value = memory
+                configure_query_mock(mock_db, all_results=[memory], first_result=memory)
 
                 result = await delete_memories(memory_ids=[str(memory_id)])
 
@@ -970,7 +982,7 @@ class TestMCPDeleteMemoriesAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = [memory]
+                configure_query_mock(mock_db, all_results=[memory])
 
                 result = await delete_memories(memory_ids=[str(memory_id)])
 
@@ -1013,8 +1025,7 @@ class TestMCPDeleteMemoriesAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = [memory]
-                mock_db.query.return_value.filter.return_value.first.return_value = memory
+                configure_query_mock(mock_db, all_results=[memory], first_result=memory)
 
                 result = await delete_memories(memory_ids=[str(memory_id)])
 
@@ -1078,7 +1089,7 @@ class TestMCPListMemoriesAccessControl:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = memories
+                configure_query_mock(mock_db, all_results=memories)
 
                 result = await list_memories()
 
@@ -1199,7 +1210,7 @@ class TestMCPAccessControlEdgeCases:
 
                 mock_db = MagicMock()
                 mock_session_local.return_value = mock_db
-                mock_db.query.return_value.filter.return_value.all.return_value = [legacy_memory]
+                configure_query_mock(mock_db, all_results=[legacy_memory])
 
                 result = await search_memory(query="legacy", limit=10)
 
@@ -1244,13 +1255,12 @@ class TestMCPAccessControlEdgeCases:
             principal_var.reset(principal_token)
 
     @pytest.mark.asyncio
-    async def test_service_access_entity_requires_service_grant(self):
-        """service: access_entity requires explicit service grant."""
+    async def test_service_access_entity_is_rejected(self):
+        """service: access_entity is rejected as invalid."""
         from app.mcp_server import (
             add_memories, principal_var, user_id_var, client_name_var
         )
 
-        # No service grant
         principal = make_principal("grischa", grants={"user:grischa"})
 
         user_token = user_id_var.set("grischa")
@@ -1267,7 +1277,7 @@ class TestMCPAccessControlEdgeCases:
 
             response = json.loads(result)
             assert "error" in response
-            assert response.get("code") == "FORBIDDEN"
+            assert "access_entity" in response.get("error", "").lower()
 
         finally:
             user_id_var.reset(user_token)

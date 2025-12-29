@@ -24,6 +24,7 @@ from pathlib import Path
 
 from app.database import SessionLocal
 from app.models import Memory, MemoryAccessLog, MemoryState, MemoryStatusHistory
+from sqlalchemy import and_, or_, cast, String
 from app.utils.structured_memory import (
     build_structured_memory,
     validate_update_fields,
@@ -51,7 +52,6 @@ from app.utils.permissions import check_memory_access_permissions
 from app.graph.graph_ops import (
     project_memory_to_graph,
     delete_memory_from_graph,
-    delete_all_user_memories_from_graph,
     get_meta_relations_for_memories,
     find_related_memories_in_graph,
     get_memory_subgraph_from_graph,
@@ -368,6 +368,49 @@ def _check_tool_scope(required_scope: str) -> str | None:
             "required_scope": required_scope,
         })
 
+
+def _apply_access_entity_filter(query, principal: "Principal", user):
+    from app.security.access import build_access_entity_patterns
+
+    exact_matches, like_patterns = build_access_entity_patterns(principal)
+    access_entity_col = cast(Memory.metadata_["access_entity"], String)
+    legacy_owner_filter = and_(
+        or_(Memory.metadata_.is_(None), access_entity_col.is_(None)),
+        Memory.user_id == user.id,
+    )
+    access_clauses = [access_entity_col.in_(exact_matches), legacy_owner_filter]
+    access_clauses.extend(access_entity_col.like(pattern) for pattern in like_patterns)
+    return query.filter(or_(*access_clauses))
+
+
+def _get_accessible_memories(db, principal: "Principal | None", user, app, include_archived: bool = True):
+    query = db.query(Memory).filter(Memory.state != MemoryState.deleted)
+    if not include_archived:
+        query = query.filter(Memory.state != MemoryState.archived)
+
+    if principal:
+        query = _apply_access_entity_filter(query, principal, user)
+    else:
+        query = query.filter(Memory.user_id == user.id)
+
+    memories = query.all()
+
+    if principal:
+        from app.security.access import can_read_access_entity
+
+        filtered = []
+        for memory in memories:
+            access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+            if access_entity:
+                if can_read_access_entity(principal, access_entity):
+                    filtered.append(memory)
+            else:
+                if memory.user_id == user.id:
+                    filtered.append(memory)
+        memories = filtered
+
+    return [memory for memory in memories if check_memory_access_permissions(db, memory, app.id)]
+
 @mcp.tool(description="""Add a new memory with structured parameters.
 
 Required:
@@ -383,7 +426,7 @@ Optional metadata:
 - evidence: List of ADR/PR/issue refs
 - tags: Dict with string keys
 - access_entity: Access control entity (required for shared scopes: team, project, org, enterprise)
-  Format: <prefix>:<value> where prefix is user, team, project, org, client, or service
+  Format: <prefix>:<value> where prefix is user, team, project, or org
   Examples: user:grischa, team:cloudfactory/acme/billing/backend, org:cloudfactory
 
 Examples:
@@ -451,6 +494,8 @@ async def add_memories(
         "mcp_client": client_name,
         **structured_metadata,
     }
+    if principal:
+        combined_metadata["org_id"] = principal.org_id
 
     # Get memory client safely
     memory_client = get_memory_client_safe()
@@ -721,30 +766,8 @@ async def search_memory(
 
             # ACL check - get accessible memory IDs based on access_entity grants
             principal = principal_var.get(None)
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-
-            # Filter by app access permissions first
-            app_accessible = [
-                memory for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-
-            # Then filter by access_entity permissions (multi-user routing)
-            if principal:
-                from app.security.access import can_read_access_entity
-
-                accessible_memory_ids = []
-                for memory in app_accessible:
-                    access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
-                    if access_entity:
-                        # Memory has access_entity - check if principal can access it
-                        if can_read_access_entity(principal, access_entity):
-                            accessible_memory_ids.append(memory.id)
-                    else:
-                        # Legacy memory without access_entity - only owner can access
-                        accessible_memory_ids.append(memory.id)
-            else:
-                accessible_memory_ids = [memory.id for memory in app_accessible]
+            app_accessible = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            accessible_memory_ids = [memory.id for memory in app_accessible]
 
             allowed = set(str(mid) for mid in accessible_memory_ids)
 
@@ -808,11 +831,13 @@ async def search_memory(
             embeddings = memory_client.embedding_model.embed(query, "search")
             search_limit = limit * 3  # Pool for reranking
 
+            search_filters = {"user_id": uid} if not principal else None
+
             hits = memory_client.vector_store.search(
                 query=query,
                 vectors=embeddings,
                 limit=search_limit,
-                filters={"user_id": uid},
+                filters=search_filters,
             )
 
             # =========================================================
@@ -1304,12 +1329,9 @@ async def graph_related_memories(
         try:
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-            allowed = set(str(mid) for mid in accessible_memory_ids)
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            allowed = set(str(memory.id) for memory in accessible_memories)
 
             if memory_id not in allowed:
                 return json.dumps({"error": f"Memory '{memory_id}' not found or not accessible"})
@@ -1397,12 +1419,9 @@ async def graph_subgraph(
         try:
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-            allowed = set(str(mid) for mid in accessible_memory_ids)
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            allowed = set(str(memory.id) for memory in accessible_memories)
 
             if memory_id not in allowed:
                 return json.dumps({"error": f"Memory '{memory_id}' not found or not accessible"})
@@ -1466,12 +1485,9 @@ async def graph_aggregate(group_by: str, limit: int = 20) -> str:
         try:
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-            allowed = [str(mid) for mid in accessible_memory_ids]
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            allowed = [str(memory.id) for memory in accessible_memories]
 
             buckets = aggregate_memories_in_graph(
                 user_id=uid,
@@ -1526,12 +1542,9 @@ async def graph_tag_cooccurrence(limit: int = 20, min_count: int = 2, sample_siz
         try:
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-            allowed = [str(mid) for mid in accessible_memory_ids]
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            allowed = [str(memory.id) for memory in accessible_memories]
 
             pairs = tag_cooccurrence_in_graph(
                 user_id=uid,
@@ -1578,12 +1591,9 @@ async def graph_path_between_entities(entity_a: str, entity_b: str, max_hops: in
         try:
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-            allowed = [str(mid) for mid in accessible_memory_ids]
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            allowed = [str(memory.id) for memory in accessible_memories]
 
             path = path_between_entities_in_graph(
                 user_id=uid,
@@ -1628,95 +1638,43 @@ async def list_memories() -> str:
     if not client_name:
         return "Error: client_name not provided"
 
-    # Get memory client safely
-    memory_client = get_memory_client_safe()
-    if not memory_client:
-        return "Error: Memory system is currently unavailable. Please try again later."
-
     try:
         db = SessionLocal()
         try:
             # Get or create user and app
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            # Get all memories
-            memories = memory_client.get_all(user_id=uid)
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=False)
             raw_memories = []
 
-            # Filter memories based on app permissions first
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            app_accessible = [memory for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+            for memory in accessible_memories:
+                md = memory.metadata_ or {}
+                raw_memories.append(
+                    {
+                        "id": str(memory.id),
+                        "memory": memory.content,
+                        "category": md.get("category"),
+                        "scope": md.get("scope"),
+                        "artifact_type": md.get("artifact_type"),
+                        "artifact_ref": md.get("artifact_ref"),
+                        "entity": md.get("entity"),
+                        "source": md.get("source"),
+                        "evidence": md.get("evidence"),
+                        "tags": md.get("tags"),
+                        "created_at": memory.created_at.isoformat() if memory.created_at else None,
+                        "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
+                    }
+                )
 
-            # Then filter by access_entity permissions (multi-user routing)
-            principal = principal_var.get(None)
-            if principal:
-                from app.security.access import can_read_access_entity
-
-                accessible_memory_ids = []
-                for memory in app_accessible:
-                    access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
-                    if access_entity:
-                        if can_read_access_entity(principal, access_entity):
-                            accessible_memory_ids.append(memory.id)
-                    else:
-                        # Legacy memory without access_entity - only owner can access
-                        accessible_memory_ids.append(memory.id)
-            else:
-                accessible_memory_ids = [memory.id for memory in app_accessible]
-
-            def extract_memory_data(memory_data: dict, md: dict) -> dict:
-                """Extract and normalize memory data with structured fields."""
-                return {
-                    "id": memory_data.get("id"),
-                    "memory": memory_data.get("memory"),
-                    "category": md.get("category"),
-                    "scope": md.get("scope"),
-                    "artifact_type": md.get("artifact_type"),
-                    "artifact_ref": md.get("artifact_ref"),
-                    "entity": md.get("entity"),
-                    "source": md.get("source"),
-                    "evidence": md.get("evidence"),
-                    "tags": md.get("tags"),
-                    "created_at": memory_data.get("created_at"),
-                    "updated_at": memory_data.get("updated_at"),
-                }
-
-            if isinstance(memories, dict) and 'results' in memories:
-                for memory_data in memories['results']:
-                    if 'id' in memory_data:
-                        memory_id = uuid.UUID(memory_data['id'])
-                        if memory_id in accessible_memory_ids:
-                            md = memory_data.get("metadata") or memory_data.get("metadata_") or {}
-                            extracted = extract_memory_data(memory_data, md)
-                            raw_memories.append(extracted)
-
-                            # Create access log entry
-                            access_log = MemoryAccessLog(
-                                memory_id=memory_id,
-                                app_id=app.id,
-                                access_type="list",
-                                metadata_={}
-                            )
-                            db.add(access_log)
-                db.commit()
-            else:
-                for memory in memories:
-                    memory_id = uuid.UUID(memory['id'])
-                    memory_obj = db.query(Memory).filter(Memory.id == memory_id).first()
-                    if memory_obj and check_memory_access_permissions(db, memory_obj, app.id):
-                        md = memory.get("metadata") or memory.get("metadata_") or {}
-                        extracted = extract_memory_data(memory, md)
-                        raw_memories.append(extracted)
-
-                        # Create access log entry
-                        access_log = MemoryAccessLog(
-                            memory_id=memory_id,
-                            app_id=app.id,
-                            access_type="list",
-                            metadata_={}
-                        )
-                        db.add(access_log)
-                db.commit()
+                access_log = MemoryAccessLog(
+                    memory_id=memory.id,
+                    app_id=app.id,
+                    access_type="list",
+                    metadata_={},
+                )
+                db.add(access_log)
+            db.commit()
 
             # Apply lean formatting
             formatted_memories = format_memory_list(raw_memories)
@@ -1755,13 +1713,10 @@ async def delete_memories(memory_ids: list[str]) -> str:
 
             # Convert string IDs to UUIDs and filter accessible ones
             requested_ids = [uuid.UUID(mid) for mid in memory_ids]
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-
-            # Filter by app access permissions
-            accessible_by_app = [memory for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
-
-            # Filter by access_entity permissions (multi-user routing)
             principal = principal_var.get(None)
+            accessible_by_app = _get_accessible_memories(db, principal, user, app, include_archived=True)
+
+            # Filter by write permissions (group-editable policy)
             if principal:
                 from app.security.access import can_write_to_access_entity
 
@@ -1864,8 +1819,23 @@ async def delete_all_memories() -> str:
             # Get or create user and app
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [memory.id for memory in user_memories if check_memory_access_permissions(db, memory, app.id)]
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+
+            if principal:
+                from app.security.access import can_write_to_access_entity
+
+                accessible_memory_ids = []
+                for memory in accessible_memories:
+                    access_entity = memory.metadata_.get("access_entity") if memory.metadata_ else None
+                    if access_entity:
+                        if can_write_to_access_entity(principal, access_entity):
+                            accessible_memory_ids.append(memory.id)
+                    else:
+                        if memory.user_id == user.id:
+                            accessible_memory_ids.append(memory.id)
+            else:
+                accessible_memory_ids = [memory.id for memory in accessible_memories]
 
             # delete the accessible memories only
             for memory_id in accessible_memory_ids:
@@ -1902,11 +1872,14 @@ async def delete_all_memories() -> str:
 
             db.commit()
 
-            # Delete all user memories from Neo4j graph (non-blocking)
-            try:
-                delete_all_user_memories_from_graph(uid)
-            except Exception as graph_error:
-                logging.warning(f"Graph deletion failed for all memories of user {uid}: {graph_error}")
+            # Delete from Neo4j graph (non-blocking)
+            for memory_id in accessible_memory_ids:
+                try:
+                    update_entity_edges_on_memory_delete(str(memory_id), uid)
+                    delete_similarity_edges_for_memory(str(memory_id), uid)
+                    delete_memory_from_graph(str(memory_id))
+                except Exception as graph_error:
+                    logging.warning(f"Graph deletion failed for memory {memory_id}: {graph_error}")
 
             return "Successfully deleted all memories"
         finally:
@@ -2013,7 +1986,6 @@ async def update_memory(
 
             memory = db.query(Memory).filter(
                 Memory.id == uuid.UUID(memory_id),
-                Memory.user_id == user.id
             ).first()
 
             if not memory:
@@ -2023,6 +1995,9 @@ async def update_memory(
             principal = principal_var.get(None)
             current_metadata = memory.metadata_ or {}
             current_access_entity = current_metadata.get("access_entity")
+
+            if not current_access_entity and memory.user_id != user.id:
+                return json.dumps({"error": f"Memory '{memory_id}' not found"})
 
             if principal:
                 from app.security.access import can_write_to_access_entity
@@ -2174,12 +2149,9 @@ async def graph_similar_memories(
         try:
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
-            user_memories = db.query(Memory).filter(Memory.user_id == user.id).all()
-            accessible_memory_ids = [
-                memory.id for memory in user_memories
-                if check_memory_access_permissions(db, memory, app.id)
-            ]
-            allowed = [str(mid) for mid in accessible_memory_ids]
+            principal = principal_var.get(None)
+            accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
+            allowed = [str(memory.id) for memory in accessible_memories]
 
             if memory_id not in allowed:
                 return json.dumps({"error": f"Memory '{memory_id}' not found or not accessible"})

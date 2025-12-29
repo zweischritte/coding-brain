@@ -856,8 +856,8 @@ class TestEdgeCasesScenario:
         access_entities = [m.metadata_["access_entity"] for m in filtered]
         assert "org:company_c" not in access_entities
 
-    def test_service_account_with_service_grant(self):
-        """Service account with service: prefix grant."""
+    def test_unknown_prefix_grant_does_not_allow_access(self):
+        """Unknown access_entity prefixes are rejected even if granted."""
         service = make_principal(
             "indexer-service",
             grants={
@@ -866,14 +866,14 @@ class TestEdgeCasesScenario:
             }
         )
 
-        # Service can access its own scope
-        assert service.can_access("service:indexer-service") is True
+        # Unknown prefixes should be denied
+        assert service.can_access("service:indexer-service") is False
 
-        # Service can also access org resources if it has org grant
+        # Known prefixes still work
         assert service.can_access("project:cloudfactory/acme") is True
 
-    def test_client_access_entity_under_org(self):
-        """Client access_entity follows org hierarchy."""
+    def test_org_grant_does_not_allow_unknown_prefixes(self):
+        """Org grants should not expand to unknown access_entity prefixes."""
         org_admin = make_principal(
             "admin",
             grants={
@@ -882,15 +882,8 @@ class TestEdgeCasesScenario:
             }
         )
 
-        # Client under org should be accessible
-        client_entity = "client:cloudfactory/customer_abc"
-
-        assert org_admin.can_access(client_entity) is True
-
-        # Client under different org should not be accessible
-        other_client = "client:other-org/customer_xyz"
-
-        assert org_admin.can_access(other_client) is False
+        assert org_admin.can_access("client:cloudfactory/customer_abc") is False
+        assert org_admin.can_access("client:other-org/customer_xyz") is False
 
 
 class TestConcurrentAccessScenario:

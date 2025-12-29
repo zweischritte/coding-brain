@@ -11,6 +11,7 @@ from enum import Enum
 from typing import Optional, Set
 from uuid import UUID
 
+ALLOWED_ACCESS_ENTITY_PREFIXES = {"user", "team", "project", "org"}
 
 class AuthenticationError(Exception):
     """Raised when authentication fails (invalid or missing credentials)."""
@@ -196,12 +197,16 @@ class Principal:
         """Check if the principal can access a memory with the given access_entity.
 
         This implements hierarchical grant expansion:
-        - org:X grant allows access to org:X, project:X/*, team:X/*, client:X/*
+        - org:X grant allows access to org:X, project:X/*, team:X/*
         - project:X grant allows access to project:X, team:X/*
         - team:X grant allows access to team:X only
         - user:X grant allows access to user:X only
         """
         if not access_entity or ":" not in access_entity:
+            return False
+
+        prefix, path = access_entity.split(":", 1)
+        if prefix not in ALLOWED_ACCESS_ENTITY_PREFIXES:
             return False
 
         # Direct match
@@ -213,8 +218,6 @@ class Principal:
             return True
 
         # Hierarchical expansion
-        prefix, path = access_entity.split(":", 1)
-
         for grant in self.claims.grants:
             if ":" not in grant:
                 continue
@@ -224,7 +227,7 @@ class Principal:
             # org grant expands to project/team/client under that org
             if grant_prefix == "org":
                 # org:cloudfactory allows project:cloudfactory/*
-                if prefix in ("project", "team", "client") and path.startswith(f"{grant_path}/"):
+                if prefix in ("project", "team") and path.startswith(f"{grant_path}/"):
                     return True
                 # org:cloudfactory also allows org:cloudfactory itself
                 if prefix == "org" and path == grant_path:

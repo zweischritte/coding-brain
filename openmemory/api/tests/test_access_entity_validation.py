@@ -44,15 +44,15 @@ class TestAccessEntityValidation:
         result = validate_access_entity("org:cloudfactory")
         assert result == "org:cloudfactory"
 
-    def test_validate_access_entity_client_format(self):
-        """access_entity with client: prefix should be valid."""
-        result = validate_access_entity("client:cloudfactory/acme")
-        assert result == "client:cloudfactory/acme"
+    def test_validate_access_entity_client_prefix_rejected(self):
+        """access_entity with client: prefix should be rejected."""
+        with pytest.raises(StructuredMemoryError):
+            validate_access_entity("client:cloudfactory/acme")
 
-    def test_validate_access_entity_service_format(self):
-        """access_entity with service: prefix should be valid."""
-        result = validate_access_entity("service:cloudfactory/auth-gateway")
-        assert result == "service:cloudfactory/auth-gateway"
+    def test_validate_access_entity_service_prefix_rejected(self):
+        """access_entity with service: prefix should be rejected."""
+        with pytest.raises(StructuredMemoryError):
+            validate_access_entity("service:cloudfactory/auth-gateway")
 
     def test_validate_access_entity_invalid_prefix(self):
         """access_entity with invalid prefix should raise error."""

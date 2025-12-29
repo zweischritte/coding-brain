@@ -62,8 +62,6 @@ VALID_ACCESS_ENTITY_PREFIXES = [
     "team",
     "project",
     "org",
-    "client",
-    "service",
 ]
 
 # Scopes that require access_entity (shared scopes)
@@ -196,7 +194,7 @@ def validate_access_entity(access_entity: str) -> str:
     """Validate access_entity format.
 
     access_entity must have format: <prefix>:<value>
-    where prefix is one of: user, team, project, org, client, service
+    where prefix is one of: user, team, project, org
     """
     access_entity = _normalize_value(access_entity)
     if not access_entity:

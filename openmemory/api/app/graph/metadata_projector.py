@@ -81,6 +81,7 @@ class MemoryMetadata:
     source: Optional[str] = None  # user or inference
     source_app: Optional[str] = None
     mcp_client: Optional[str] = None
+    access_entity: Optional[str] = None
 
     # Tags
     tags: Dict[str, Any] = field(default_factory=dict)
@@ -132,6 +133,7 @@ class MemoryMetadata:
             source=metadata.get("source") or metadata.get("src"),
             source_app=metadata.get("source_app"),
             mcp_client=metadata.get("mcp_client"),
+            access_entity=metadata.get("access_entity"),
             tags=tags,
         )
 
@@ -229,6 +231,7 @@ class CypherBuilder:
             m.artifactRef = $artifactRef,
             m.entity = $entity,
             m.source = $source,
+            m.accessEntity = $accessEntity,
             m.projectedAt = datetime()
         RETURN m.id AS id
         """
@@ -729,6 +732,7 @@ class MetadataProjector:
                         "artifactRef": metadata.artifact_ref,
                         "entity": metadata.entity,
                         "source": metadata.source,
+                        "accessEntity": metadata.access_entity,
                     }
                 )
 
@@ -923,8 +927,13 @@ class MetadataProjector:
         """
         try:
             with self.session_factory() as session:
-                cypher = """
-                MATCH (m:OM_Memory {id: $memoryId, userId: $userId})
+                match = (
+                    "MATCH (m:OM_Memory {id: $memoryId, userId: $userId})"
+                    if allowed_memory_ids is None
+                    else "MATCH (m:OM_Memory {id: $memoryId})"
+                )
+                cypher = f"""
+                {match}
                 WHERE ($allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds)
                 RETURN m.id AS id,
                        m.userId AS userId,
@@ -997,13 +1006,24 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                cypher = """
-                MATCH (seed:OM_Memory {id: $memoryId, userId: $userId})
-                MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory {userId: $userId})
+                seed_match = (
+                    "MATCH (seed:OM_Memory {id: $memoryId, userId: $userId})"
+                    if allowed_memory_ids is None
+                    else "MATCH (seed:OM_Memory {id: $memoryId})"
+                )
+                other_match = (
+                    "MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory {userId: $userId})"
+                    if allowed_memory_ids is None
+                    else "MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory)"
+                )
+                cypher = f"""
+                {seed_match}
+                {other_match}
                 WHERE other.id <> seed.id
                   AND type(r) IN $relTypes
                   AND type(r2) = type(r)
                   AND ($allowedMemoryIds IS NULL OR other.id IN $allowedMemoryIds)
+                  AND ($allowedMemoryIds IS NULL OR seed.id IN $allowedMemoryIds)
                 WITH other,
                      collect(DISTINCT {
                         type: type(r),
@@ -1115,37 +1135,39 @@ class MetadataProjector:
         """
         group_by = (group_by or "").strip().lower()
         limit = max(1, min(int(limit or 20), 200))
+        memory_label = "m:OM_Memory {userId: $userId}" if allowed_memory_ids is None else "m:OM_Memory"
+        entity_label = "d:OM_Entity {userId: $userId}" if allowed_memory_ids is None else "d:OM_Entity"
 
         # Cypher fragments per aggregation type
         if group_by == "category":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_CATEGORY]->(d:OM_Category)"
+            match = f"MATCH ({memory_label})-[:OM_IN_CATEGORY]->(d:OM_Category)"
             key_expr = "d.name"
         elif group_by == "scope":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_IN_SCOPE]->(d:OM_Scope)"
+            match = f"MATCH ({memory_label})-[:OM_IN_SCOPE]->(d:OM_Scope)"
             key_expr = "d.name"
         elif group_by == "artifact_type":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_HAS_ARTIFACT_TYPE]->(d:OM_ArtifactType)"
+            match = f"MATCH ({memory_label})-[:OM_HAS_ARTIFACT_TYPE]->(d:OM_ArtifactType)"
             key_expr = "d.name"
         elif group_by == "artifact_ref":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_REFERENCES_ARTIFACT]->(d:OM_ArtifactRef)"
+            match = f"MATCH ({memory_label})-[:OM_REFERENCES_ARTIFACT]->(d:OM_ArtifactRef)"
             key_expr = "d.name"
         elif group_by == "tag":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_TAGGED]->(d:OM_Tag)"
+            match = f"MATCH ({memory_label})-[:OM_TAGGED]->(d:OM_Tag)"
             key_expr = "d.key"
         elif group_by == "entity":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_ABOUT]->(d:OM_Entity {userId: $userId})"
+            match = f"MATCH ({memory_label})-[:OM_ABOUT]->({entity_label})"
             key_expr = "d.name"
         elif group_by == "app":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_WRITTEN_VIA]->(d:OM_App)"
+            match = f"MATCH ({memory_label})-[:OM_WRITTEN_VIA]->(d:OM_App)"
             key_expr = "d.name"
         elif group_by == "evidence":
-            match = "MATCH (m:OM_Memory {userId: $userId})-[:OM_HAS_EVIDENCE]->(d:OM_Evidence)"
+            match = f"MATCH ({memory_label})-[:OM_HAS_EVIDENCE]->(d:OM_Evidence)"
             key_expr = "d.name"
         elif group_by == "source":
-            match = "MATCH (m:OM_Memory {userId: $userId})"
+            match = f"MATCH ({memory_label})"
             key_expr = "m.source"
         elif group_by == "state":
-            match = "MATCH (m:OM_Memory {userId: $userId})"
+            match = f"MATCH ({memory_label})"
             key_expr = "m.state"
         else:
             raise ValueError(
@@ -1207,8 +1229,9 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                cypher = """
-                MATCH (m:OM_Memory {userId: $userId})-[:OM_TAGGED]->(t1:OM_Tag)
+                memory_match = "(m:OM_Memory {userId: $userId})" if allowed_memory_ids is None else "(m:OM_Memory)"
+                cypher = f"""
+                MATCH {memory_match}-[:OM_TAGGED]->(t1:OM_Tag)
                 MATCH (m)-[:OM_TAGGED]->(t2:OM_Tag)
                 WHERE t1.key < t2.key
                   AND ($allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds)
@@ -1516,12 +1539,24 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
+                entity_a_match = (
+                    "MATCH (a:OM_Entity {userId: $userId, name: $entityA})"
+                    if allowed_memory_ids is None
+                    else "MATCH (a:OM_Entity {name: $entityA})"
+                )
+                entity_b_match = (
+                    "MATCH (b:OM_Entity {userId: $userId, name: $entityB})"
+                    if allowed_memory_ids is None
+                    else "MATCH (b:OM_Entity {name: $entityB})"
+                )
+                memory_acl_prefix = "n.userId = $userId AND " if allowed_memory_ids is None else ""
+
                 cypher = f"""
-                MATCH (a:OM_Entity {{userId: $userId, name: $entityA}})
-                MATCH (b:OM_Entity {{userId: $userId, name: $entityB}})
+                {entity_a_match}
+                {entity_b_match}
                 MATCH p = shortestPath((a)-[:{rel_types}*..{max_hops}]-(b))
                 WHERE all(n IN nodes(p) WHERE NOT n:OM_Memory OR (
-                    n.userId = $userId AND ($allowedMemoryIds IS NULL OR n.id IN $allowedMemoryIds)
+                    {memory_acl_prefix}($allowedMemoryIds IS NULL OR n.id IN $allowedMemoryIds)
                 ))
                 RETURN
                   [n IN nodes(p) | {{
@@ -1606,8 +1641,25 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
+                user_filter = "node.userId = $userId AND " if allowed_memory_ids is None else ""
+                cypher = f"""
+                CALL db.index.fulltext.queryNodes('om_memory_content', $searchText)
+                YIELD node, score
+                WHERE {user_filter}($allowedMemoryIds IS NULL OR node.id IN $allowedMemoryIds)
+                  AND node.state = 'active'
+                RETURN node.id AS id,
+                       node.content AS content,
+                       node.category AS category,
+                       node.scope AS scope,
+                       node.artifactType AS artifactType,
+                       node.artifactRef AS artifactRef,
+                       node.createdAt AS createdAt,
+                       score AS searchScore
+                ORDER BY score DESC
+                LIMIT $limit
+                """
                 result = session.run(
-                    CypherBuilder.fulltext_search_memories_query(),
+                    cypher,
                     {
                         "searchText": search_text.strip(),
                         "userId": user_id,
@@ -1749,8 +1801,28 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
+                memory_match = (
+                    "MATCH (m:OM_Memory {userId: $userId})"
+                    if allowed_memory_ids is None
+                    else "MATCH (m:OM_Memory)"
+                )
+                cypher = f"""
+                {memory_match}
+                WHERE $allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds
+                OPTIONAL MATCH (m)-[r]->(:OM_Entity)
+                WITH m, count(r) AS entityCount
+                OPTIONAL MATCH (m)-[:OM_SIMILAR]->(similar:OM_Memory)
+                WITH m, entityCount, count(similar) AS similarCount
+                RETURN m.id AS id,
+                       m.content AS content,
+                       entityCount AS entities,
+                       similarCount AS similarMemories,
+                       entityCount + similarCount AS connectivity
+                ORDER BY connectivity DESC
+                LIMIT $limit
+                """
                 result = session.run(
-                    CypherBuilder.memory_connectivity_query(),
+                    cypher,
                     {
                         "userId": user_id,
                         "allowedMemoryIds": allowed_memory_ids,
