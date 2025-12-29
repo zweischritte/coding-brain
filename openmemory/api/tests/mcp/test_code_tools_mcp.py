@@ -31,65 +31,63 @@ class TestMCPCodeToolsRegistration:
         except ImportError as e:
             pytest.skip(f"MCP server not available: {e}")
 
+    def _get_registered_tool_names(self):
+        """Get list of registered tool names from MCP server."""
+        from app.mcp_server import mcp
+        # Access internal tool manager registry (sync access)
+        if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, '_tools'):
+            return list(mcp._tool_manager._tools.keys())
+        return []
+
     def test_search_code_hybrid_tool_registered(self):
         """search_code_hybrid tool should be registered."""
         try:
-            from app.mcp_server import mcp
-            tools = mcp.list_tools()
-            tool_names = [t.name for t in tools] if hasattr(tools, '__iter__') else []
+            tool_names = self._get_registered_tool_names()
             assert "search_code_hybrid" in tool_names, (
                 f"search_code_hybrid not found in tools: {tool_names}"
             )
-        except (ImportError, AttributeError):
-            pytest.skip("MCP server tools not available")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"MCP server tools not available: {e}")
 
     def test_find_callers_tool_registered(self):
         """find_callers tool should be registered."""
         try:
-            from app.mcp_server import mcp
-            tools = mcp.list_tools()
-            tool_names = [t.name for t in tools] if hasattr(tools, '__iter__') else []
+            tool_names = self._get_registered_tool_names()
             assert "find_callers" in tool_names, (
                 f"find_callers not found in tools: {tool_names}"
             )
-        except (ImportError, AttributeError):
-            pytest.skip("MCP server tools not available")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"MCP server tools not available: {e}")
 
     def test_find_callees_tool_registered(self):
         """find_callees tool should be registered."""
         try:
-            from app.mcp_server import mcp
-            tools = mcp.list_tools()
-            tool_names = [t.name for t in tools] if hasattr(tools, '__iter__') else []
+            tool_names = self._get_registered_tool_names()
             assert "find_callees" in tool_names, (
                 f"find_callees not found in tools: {tool_names}"
             )
-        except (ImportError, AttributeError):
-            pytest.skip("MCP server tools not available")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"MCP server tools not available: {e}")
 
     def test_impact_analysis_tool_registered(self):
         """impact_analysis tool should be registered."""
         try:
-            from app.mcp_server import mcp
-            tools = mcp.list_tools()
-            tool_names = [t.name for t in tools] if hasattr(tools, '__iter__') else []
+            tool_names = self._get_registered_tool_names()
             assert "impact_analysis" in tool_names, (
                 f"impact_analysis not found in tools: {tool_names}"
             )
-        except (ImportError, AttributeError):
-            pytest.skip("MCP server tools not available")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"MCP server tools not available: {e}")
 
     def test_explain_code_tool_registered(self):
         """explain_code tool should be registered."""
         try:
-            from app.mcp_server import mcp
-            tools = mcp.list_tools()
-            tool_names = [t.name for t in tools] if hasattr(tools, '__iter__') else []
+            tool_names = self._get_registered_tool_names()
             assert "explain_code" in tool_names, (
                 f"explain_code not found in tools: {tool_names}"
             )
-        except (ImportError, AttributeError):
-            pytest.skip("MCP server tools not available")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"MCP server tools not available: {e}")
 
 
 class TestMCPCodeToolsScopeChecks:
