@@ -43,6 +43,7 @@ class CodeToolkit:
         impact_tool: Impact analysis tool instance
         adr_tool: ADR automation tool instance
         test_gen_tool: Test generation tool instance
+        pr_analysis_tool: PR analysis tool instance
     """
 
     # Dependencies
@@ -60,6 +61,7 @@ class CodeToolkit:
     impact_tool: Optional[Any] = None
     adr_tool: Optional[Any] = None
     test_gen_tool: Optional[Any] = None
+    pr_analysis_tool: Optional[Any] = None
 
     # Service availability tracking
     _available_services: Dict[str, bool] = field(default_factory=dict)
@@ -365,6 +367,25 @@ def _init_test_gen_tool(toolkit: CodeToolkit) -> None:
         logger.warning(f"Test generation tool initialization failed: {e}")
 
 
+def _init_pr_analysis_tool(toolkit: CodeToolkit) -> None:
+    """Initialize PR analysis tool."""
+    try:
+        from tools.pr_workflow.pr_analysis import create_pr_analysis_tool
+
+        toolkit.pr_analysis_tool = create_pr_analysis_tool(
+            graph_driver=toolkit.neo4j_driver,  # Optional
+            impact_tool=toolkit.impact_tool,  # Optional
+            adr_tool=toolkit.adr_tool,  # Optional
+        )
+        logger.info("PR analysis tool initialized")
+    except ImportError as e:
+        toolkit._initialization_errors["pr_analysis_tool"] = f"Import error: {e}"
+        logger.warning(f"PR analysis tool module not available: {e}")
+    except Exception as e:
+        toolkit._initialization_errors["pr_analysis_tool"] = str(e)
+        logger.warning(f"PR analysis tool initialization failed: {e}")
+
+
 @lru_cache(maxsize=1)
 def get_code_toolkit() -> CodeToolkit:
     """Get or create the code intelligence toolkit singleton.
@@ -404,6 +425,7 @@ def get_code_toolkit() -> CodeToolkit:
     _init_impact_tool(toolkit)
     _init_adr_tool(toolkit)
     _init_test_gen_tool(toolkit)
+    _init_pr_analysis_tool(toolkit)
 
     # Log summary
     available = [k for k, v in toolkit._available_services.items() if v]

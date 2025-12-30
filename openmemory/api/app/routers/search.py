@@ -7,6 +7,7 @@ semantic-only search operations with tenant isolation.
 
 import logging
 import time
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,7 @@ from app.security.dependencies import require_scopes
 from app.security.types import Principal, Scope
 from app.security.access import build_access_entity_patterns
 from app.stores.opensearch_store import TenantOpenSearchStore, get_tenant_opensearch_store
+from app.utils.memory import get_memory_client
 
 
 logger = logging.getLogger(__name__)
@@ -26,8 +28,32 @@ router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
 
 # ============================================================================
+# Enums
+# ============================================================================
+
+
+class SearchMode(str, Enum):
+    """Search mode for the hybrid search endpoint."""
+    auto = "auto"
+    lexical = "lexical"
+    semantic = "semantic"
+
+
+# ============================================================================
 # Pydantic Schemas
 # ============================================================================
+
+
+class SearchMeta(BaseModel):
+    """Metadata about the search execution."""
+    degraded_mode: bool = Field(
+        False,
+        description="True if search fell back to lexical-only due to embedding failure"
+    )
+    missing_sources: List[str] = Field(
+        default_factory=list,
+        description="List of sources that were unavailable (e.g., 'embedding')"
+    )
 
 
 class SearchFilters(BaseModel):
@@ -46,6 +72,10 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="The search query")
     limit: int = Field(10, ge=1, le=100, description="Maximum results to return")
     filters: Optional[SearchFilters] = Field(None, description="Optional filters")
+    mode: SearchMode = Field(
+        SearchMode.auto,
+        description="Search mode: auto (try embedding, fallback to lexical), lexical (text only), semantic (requires embedding)"
+    )
 
 
 class SemanticSearchRequest(BaseModel):
@@ -70,6 +100,10 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total_count: int
     took_ms: int
+    meta: SearchMeta = Field(
+        default_factory=SearchMeta,
+        description="Metadata about the search execution"
+    )
 
 
 # ============================================================================
@@ -169,10 +203,13 @@ async def hybrid_search(
     """
     Hybrid search combining lexical and semantic search.
 
-    For best results, the query should be semantically meaningful.
-    Results are automatically scoped to the authenticated org.
+    Supports three modes:
+    - auto (default): Try to generate embedding for hybrid search, fall back to lexical if unavailable
+    - lexical: Use text matching only, skip embedding
+    - semantic: Require embedding, return 503 if unavailable
 
-    If OpenSearch is unavailable, returns 503.
+    Results are automatically scoped to the authenticated org.
+    If OpenSearch is unavailable, returns empty results.
     """
     start_time = time.time()
 
@@ -189,19 +226,71 @@ async def hybrid_search(
             results=[],
             total_count=0,
             took_ms=0,
+            meta=SearchMeta(degraded_mode=False, missing_sources=[]),
         )
 
-    # Perform lexical search (hybrid requires embedding which we don't have here)
-    # In production, we'd generate an embedding for the query
     filters_dict = _filters_to_dict(request.filters)
     exact, prefixes = _access_entity_filters(principal)
-    hits = store.search_with_access_control(
-        query_text=request.query,
-        access_entities=exact,
-        access_entity_prefixes=prefixes,
-        limit=request.limit,
-        filters=filters_dict,
-    )
+
+    # Track search metadata
+    degraded_mode = False
+    missing_sources: List[str] = []
+    query_vector: Optional[List[float]] = None
+
+    # Determine if we should attempt embedding
+    should_embed = request.mode in (SearchMode.auto, SearchMode.semantic)
+
+    if should_embed:
+        # Try to get embedding
+        embedding_error = None
+        try:
+            memory_client = get_memory_client()
+            if memory_client and memory_client.embedding_model:
+                query_vector = memory_client.embedding_model.embed(request.query, "search")
+                logger.info(f"Generated embedding for search query (mode={request.mode.value})")
+            else:
+                embedding_error = "Memory client or embedding model unavailable"
+        except Exception as e:
+            embedding_error = str(e)
+            logger.warning(f"Embedding generation failed: {e}")
+
+        # Handle embedding failure based on mode
+        if query_vector is None:
+            if request.mode == SearchMode.semantic:
+                # Semantic mode requires embedding - fail with 503
+                logger.error(f"Semantic search unavailable: {embedding_error}")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Embedding service unavailable - semantic search not possible"
+                )
+            else:
+                # Auto mode - fall back to lexical
+                degraded_mode = True
+                missing_sources.append("embedding")
+                logger.info("Falling back to lexical search (embedding unavailable)")
+
+    # Perform search
+    if query_vector is not None:
+        # Use hybrid search with embedding
+        logger.info(f"Performing hybrid search (mode={request.mode.value})")
+        hits = store.hybrid_search_with_access_control(
+            query_text=request.query,
+            query_vector=query_vector,
+            access_entities=exact,
+            access_entity_prefixes=prefixes,
+            limit=request.limit,
+            filters=filters_dict,
+        )
+    else:
+        # Use lexical-only search
+        logger.info(f"Performing lexical search (mode={request.mode.value})")
+        hits = store.search_with_access_control(
+            query_text=request.query,
+            access_entities=exact,
+            access_entity_prefixes=prefixes,
+            limit=request.limit,
+            filters=filters_dict,
+        )
 
     elapsed_ms = int((time.time() - start_time) * 1000)
 
@@ -209,6 +298,10 @@ async def hybrid_search(
         results=_format_results(hits),
         total_count=len(hits),
         took_ms=elapsed_ms,
+        meta=SearchMeta(
+            degraded_mode=degraded_mode,
+            missing_sources=missing_sources,
+        ),
     )
 
 
@@ -239,6 +332,7 @@ async def lexical_search(
             results=[],
             total_count=0,
             took_ms=0,
+            meta=SearchMeta(degraded_mode=False, missing_sources=[]),
         )
 
     # Perform lexical search
@@ -258,6 +352,7 @@ async def lexical_search(
         results=_format_results(hits),
         total_count=len(hits),
         took_ms=elapsed_ms,
+        meta=SearchMeta(degraded_mode=False, missing_sources=[]),
     )
 
 
@@ -289,6 +384,7 @@ async def semantic_search(
             results=[],
             total_count=0,
             took_ms=0,
+            meta=SearchMeta(degraded_mode=False, missing_sources=[]),
         )
 
     # Perform hybrid search with the provided vector
@@ -309,4 +405,5 @@ async def semantic_search(
         results=_format_results(hits),
         total_count=len(hits),
         took_ms=elapsed_ms,
+        meta=SearchMeta(degraded_mode=False, missing_sources=[]),
     )

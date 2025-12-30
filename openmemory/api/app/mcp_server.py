@@ -3162,6 +3162,300 @@ async def impact_analysis(
         })
 
 
+@mcp.tool(description="""Analyze code changes for ADR (Architecture Decision Record) recommendation.
+
+Detects significant architectural changes that warrant documentation.
+
+Required parameters:
+- changes: List of change objects with file_path, change_type, diff, added_lines, removed_lines
+
+Optional parameters:
+- min_confidence: Minimum confidence threshold for ADR recommendation (default: 0.7)
+
+Returns:
+- should_create_adr: Whether an ADR should be created
+- confidence: Confidence score (0.0-1.0)
+- triggered_heuristics: List of detected change types (dependency, api_change, etc.)
+- reasons: Human-readable reasons for the recommendation
+- generated_adr: Generated ADR content (when should_create_adr is True)
+- code_links: Links to relevant code sections (optional)
+- impact_analysis: Impact analysis results (optional)
+- meta: Response metadata
+
+Examples:
+- adr_automation(changes=[{"file_path": "requirements.txt", "change_type": "modified", "diff": "+redis>=4.0.0"}])
+- adr_automation(changes=[...], min_confidence=0.8)
+""")
+async def adr_automation(
+    changes: list,
+    min_confidence: float = 0.7,
+) -> str:
+    """Analyze code changes for ADR recommendation."""
+    # Check scopes - needs both search:read and graph:read
+    scope_error = _check_tool_scope("search:read")
+    if scope_error:
+        return scope_error
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.adr_tool:
+        return json.dumps({
+            "should_create_adr": False,
+            "confidence": 0.0,
+            "triggered_heuristics": [],
+            "reasons": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("adr_tool") or "ADR tool not available",
+            ),
+        }, default=str)
+
+    try:
+        result = toolkit.adr_tool.execute({
+            "changes": changes,
+            "min_confidence": min_confidence,
+        })
+
+        # Build response with meta
+        response = {
+            "should_create_adr": result.get("should_create_adr", False),
+            "confidence": result.get("confidence", 0.0),
+            "triggered_heuristics": result.get("triggered_heuristics", []),
+            "reasons": result.get("reasons", []),
+            "meta": _create_code_meta(),
+        }
+
+        # Include optional fields when present
+        if result.get("should_create_adr") and result.get("generated_adr"):
+            response["generated_adr"] = result["generated_adr"]
+        if result.get("code_links"):
+            response["code_links"] = result["code_links"]
+        if result.get("impact_analysis"):
+            response["impact_analysis"] = result["impact_analysis"]
+
+        return json.dumps(response, default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in adr_automation: {e}")
+        return json.dumps({
+            "should_create_adr": False,
+            "confidence": 0.0,
+            "triggered_heuristics": [],
+            "reasons": [],
+            "meta": _create_code_meta(degraded=True, error=str(e)),
+        })
+
+
+@mcp.tool(description="""Generate test cases for a code symbol or file.
+
+Creates comprehensive test cases based on code analysis.
+
+Required parameters (at least one):
+- symbol_id: SCIP symbol ID to generate tests for
+- file_path: File path to generate tests for
+
+Optional parameters:
+- framework: Test framework to use (default: "pytest")
+- include_edge_cases: Include edge case tests (default: true)
+- include_error_cases: Include error handling tests (default: true)
+
+Returns:
+- symbol_id: The symbol that tests were generated for
+- symbol_name: Human-readable symbol name
+- test_cases: List of generated test cases with name, description, category, code
+- file_content: Rendered test file content
+- meta: Response metadata
+
+Examples:
+- test_generation(symbol_id="scip-python myapp module/my_function.")
+- test_generation(file_path="/path/to/module.py", framework="pytest")
+- test_generation(symbol_id="...", include_edge_cases=true, include_error_cases=false)
+""")
+async def test_generation(
+    symbol_id: str = None,
+    file_path: str = None,
+    framework: str = "pytest",
+    include_edge_cases: bool = True,
+    include_error_cases: bool = True,
+) -> str:
+    """Generate test cases for a code symbol or file."""
+    # Check scopes - needs both search:read and graph:read
+    scope_error = _check_tool_scope("search:read")
+    if scope_error:
+        return scope_error
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    # Validate input - at least one of symbol_id or file_path required
+    if not symbol_id and not file_path:
+        return json.dumps({
+            "error": "Either symbol_id or file_path is required",
+        })
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.test_gen_tool:
+        return json.dumps({
+            "symbol_id": symbol_id,
+            "symbol_name": None,
+            "test_cases": [],
+            "file_content": "",
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("test_gen_tool") or "Test generation tool not available",
+            ),
+        })
+
+    try:
+        # Build input for the tool (symbol_id takes precedence)
+        input_data = {
+            "framework": framework,
+            "include_edge_cases": include_edge_cases,
+            "include_error_cases": include_error_cases,
+        }
+        if symbol_id:
+            input_data["symbol_id"] = symbol_id
+        if file_path:
+            input_data["file_path"] = file_path
+
+        result = toolkit.test_gen_tool.execute(input_data)
+
+        # Build response with meta
+        response = {
+            "symbol_id": result.get("symbol_id", symbol_id),
+            "symbol_name": result.get("symbol_name"),
+            "test_cases": result.get("test_cases", []),
+            "file_content": result.get("file_content", ""),
+            "meta": _create_code_meta(),
+        }
+
+        return json.dumps(response, default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in test_generation: {e}")
+        return json.dumps({
+            "symbol_id": symbol_id,
+            "symbol_name": None,
+            "test_cases": [],
+            "file_content": "",
+            "meta": _create_code_meta(degraded=True, error=str(e)),
+        })
+
+
+@mcp.tool(description="""Analyze a pull request for issues, impact, and recommendations.
+
+Provides comprehensive PR analysis including security checks, convention compliance,
+impact analysis, and ADR recommendations.
+
+Required parameters:
+- repo_id: Repository ID (required, non-empty)
+- diff: The PR diff content (required)
+
+Optional parameters:
+- pr_number: Pull request number
+- title: PR title
+- body: PR description body
+- check_impact: Run impact analysis (default: true)
+- check_adr: Check for ADR recommendations (default: true)
+- check_security: Run security checks (default: true)
+- check_conventions: Check coding conventions (default: true)
+
+Returns:
+- summary: PR summary with files_changed, additions, deletions, languages, main_areas,
+          complexity_score, affected_files, suggested_adr, adr_reason
+- issues: List of detected issues with severity, category, file_path, line_number,
+          message, suggestion
+- meta: Response metadata
+
+Examples:
+- pr_analysis(repo_id="my-repo", diff="diff --git a/file.py...")
+- pr_analysis(repo_id="my-repo", diff="...", pr_number=123, title="Add feature")
+- pr_analysis(repo_id="my-repo", diff="...", check_security=true, check_adr=false)
+""")
+async def pr_analysis(
+    repo_id: str,
+    diff: str,
+    pr_number: int = None,
+    title: str = None,
+    body: str = None,
+    check_impact: bool = True,
+    check_adr: bool = True,
+    check_security: bool = True,
+    check_conventions: bool = True,
+) -> str:
+    """Analyze a pull request for issues and recommendations."""
+    # Check scopes - needs both search:read and graph:read
+    scope_error = _check_tool_scope("search:read")
+    if scope_error:
+        return scope_error
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    # Validate required inputs
+    if not repo_id:
+        return json.dumps({
+            "error": "repo_id is required and cannot be empty",
+        })
+
+    toolkit = get_code_toolkit()
+
+    if not toolkit.pr_analysis_tool:
+        return json.dumps({
+            "summary": None,
+            "issues": [],
+            "meta": _create_code_meta(
+                degraded=True,
+                missing=toolkit.get_missing_sources(),
+                error=toolkit.get_error("pr_analysis_tool") or "PR analysis tool not available",
+            ),
+        }, default=str)
+
+    try:
+        # Build input for the tool
+        input_data = {
+            "repo_id": repo_id,
+            "diff": diff,
+            "check_impact": check_impact,
+            "check_adr": check_adr,
+            "check_security": check_security,
+            "check_conventions": check_conventions,
+        }
+        if pr_number is not None:
+            input_data["pr_number"] = pr_number
+        if title:
+            input_data["title"] = title
+        if body:
+            input_data["body"] = body
+
+        result = toolkit.pr_analysis_tool.execute(input_data)
+
+        # Build response with meta
+        response = {
+            "summary": result.get("summary"),
+            "issues": result.get("issues", []),
+            "meta": _create_code_meta(
+                request_id=result.get("request_id"),
+            ),
+        }
+
+        return json.dumps(response, default=str)
+
+    except Exception as e:
+        logging.exception(f"Error in pr_analysis: {e}")
+        return json.dumps({
+            "summary": None,
+            "issues": [],
+            "meta": _create_code_meta(degraded=True, error=str(e)),
+        })
+
+
 # =============================================================================
 # BUSINESS CONCEPT TOOLS (Separate MCP endpoint - /concepts/claude/sse/{user_id})
 # =============================================================================
