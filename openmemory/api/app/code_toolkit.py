@@ -339,6 +339,7 @@ def _init_adr_tool(toolkit: CodeToolkit) -> None:
 
         toolkit.adr_tool = create_adr_automation_tool(
             graph_driver=toolkit.neo4j_driver,  # Optional
+            retriever=toolkit.trihybrid_retriever,  # Optional
         )
         logger.info("ADR tool initialized")
     except ImportError as e:
@@ -356,6 +357,7 @@ def _init_test_gen_tool(toolkit: CodeToolkit) -> None:
 
         toolkit.test_gen_tool = create_test_generation_tool(
             graph_driver=toolkit.neo4j_driver,  # Optional
+            retriever=toolkit.trihybrid_retriever,  # Optional
             parser=toolkit.ast_parser,  # Optional
         )
         logger.info("Test generation tool initialized")
@@ -374,6 +376,7 @@ def _init_pr_analysis_tool(toolkit: CodeToolkit) -> None:
 
         toolkit.pr_analysis_tool = create_pr_analysis_tool(
             graph_driver=toolkit.neo4j_driver,  # Optional
+            retriever=toolkit.trihybrid_retriever,  # Optional
             impact_tool=toolkit.impact_tool,  # Optional
             adr_tool=toolkit.adr_tool,  # Optional
         )

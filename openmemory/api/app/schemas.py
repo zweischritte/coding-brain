@@ -241,10 +241,26 @@ class ImpactAnalysisResponse(BaseModel):
     meta: CodeResponseMeta
 
 
+class CodeChange(BaseModel):
+    """Structured code change for ADR analysis."""
+
+    file_path: str
+    change_type: Optional[str] = Field(
+        default="modified",
+        description="Change type: added, modified, deleted",
+    )
+    diff: Optional[str] = None
+    added_lines: Optional[List[str]] = None
+    removed_lines: Optional[List[str]] = None
+    line_start: Optional[int] = None
+    line_end: Optional[int] = None
+
+
 class ADRRequest(BaseModel):
     """Request body for ADR automation endpoint."""
 
     diff: Optional[str] = None
+    changes: Optional[List[CodeChange]] = None
     commit_messages: Optional[List[str]] = None
     repo_id: Optional[str] = None
     pr_number: Optional[int] = None

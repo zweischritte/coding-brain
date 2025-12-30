@@ -30,6 +30,7 @@ from app.schemas import (
     CallGraphRequest,
     ImpactAnalysisRequest,
     ADRRequest,
+    ADRDetection,
     TestGenerationRequest,
     PRAnalysisRequest,
     CodeIndexRequest,
@@ -479,6 +480,36 @@ async def adr_automation(
     """Detect architectural decisions and generate ADRs."""
     toolkit = get_code_toolkit()
 
+    changes = request.changes
+    if changes is None and request.diff:
+        from tools.adr_automation import ChangeAnalyzer
+        analyzer = ChangeAnalyzer()
+        changes = analyzer.parse_diff(request.diff)
+        if not changes:
+            added_lines = []
+            removed_lines = []
+            for line in request.diff.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    added_lines.append(line[1:])
+                elif line.startswith("-") and not line.startswith("---"):
+                    removed_lines.append(line[1:])
+            if added_lines or removed_lines:
+                changes = [
+                    {
+                        "file_path": "unknown",
+                        "change_type": "modified",
+                        "diff": request.diff,
+                        "added_lines": added_lines,
+                        "removed_lines": removed_lines,
+                    }
+                ]
+
+    if changes is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Either 'diff' or 'changes' is required for ADR analysis",
+        )
+
     # Check if ADR tool is available
     if not toolkit.adr_tool:
         return ADRResponse(
@@ -490,17 +521,38 @@ async def adr_automation(
         )
 
     try:
-        # ADR tool may have different interface - adapt as needed
-        result = toolkit.adr_tool.analyze(
-            diff=request.diff,
-            commit_messages=request.commit_messages,
-            repo_id=request.repo_id,
-            min_confidence=request.min_confidence,
+        change_payload = []
+        for change in changes:
+            if hasattr(change, "model_dump"):
+                change_payload.append(change.model_dump())
+            else:
+                change_payload.append(change)
+
+        result = toolkit.adr_tool.execute(
+            {
+                "changes": change_payload,
+                "min_confidence": request.min_confidence,
+            }
         )
-        result_dict = _safe_asdict(result) if result else {}
+
+        detections = []
+        if result.get("should_create_adr"):
+            reasons = result.get("reasons") or []
+            triggered = result.get("triggered_heuristics") or []
+            generated_adr = result.get("generated_adr") or {}
+            detections.append(
+                ADRDetection(
+                    detected=True,
+                    confidence=result.get("confidence", 0.0),
+                    reason="; ".join(reasons) if reasons else "ADR recommended",
+                    category=triggered[0] if triggered else "general",
+                    suggested_title=generated_adr.get("title"),
+                    suggested_content=generated_adr.get("markdown"),
+                )
+            )
 
         return ADRResponse(
-            detections=result_dict.get("detections", []),
+            detections=detections,
             meta=_create_meta(),
         )
 
