@@ -48,13 +48,42 @@ from app.schemas import (
     CodeResponseMeta,
 )
 from app.security.dependencies import require_scopes
-from app.security.types import Scope
+from app.security.types import Principal, Scope
 from app.indexing_jobs import create_index_job, get_index_job, run_index_job
 from app.path_utils import resolve_repo_root
+from app.database import get_db
+from app.services.job_queue_service import IndexingJobQueueService, QueueFullError
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/code", tags=["code-intelligence"])
+
+
+def _get_valkey_client():
+    """Get Valkey client if available."""
+    import os
+    try:
+        import redis
+        host = os.getenv("VALKEY_HOST", "valkey")
+        port = int(os.getenv("VALKEY_PORT", "6379"))
+        client = redis.Redis(host=host, port=port, socket_timeout=5)
+        client.ping()
+        return client
+    except Exception as e:
+        logger.warning(f"Valkey unavailable: {e}")
+        return None
+
+
+def get_queue_service(db: Session) -> IndexingJobQueueService:
+    """Create a queue service with database session."""
+    import os
+    max_queued_jobs = int(os.getenv("MAX_QUEUED_JOBS", "100"))
+    return IndexingJobQueueService(
+        db=db,
+        valkey_client=_get_valkey_client(),
+        max_queued_jobs=max_queued_jobs,
+    )
 
 
 def get_code_toolkit():
@@ -96,6 +125,25 @@ def _safe_asdict(obj: Any) -> Dict[str, Any]:
     elif hasattr(obj, "__dict__"):
         return obj.__dict__
     return {}
+
+
+def _can_access_job(job: Dict[str, Any], principal: Principal, admin_scope: Scope) -> bool:
+    """Check whether the principal can access a job."""
+    if principal.has_scope(admin_scope):
+        return True
+    requested_by = job.get("requested_by")
+    if not requested_by:
+        return True
+    return requested_by == principal.user_id
+
+
+def _meta_to_dict(meta: CodeResponseMeta) -> Dict[str, Any]:
+    """Normalize CodeResponseMeta to a plain dict."""
+    if hasattr(meta, "model_dump"):
+        return meta.model_dump()
+    if hasattr(meta, "dict"):
+        return meta.dict()
+    return _safe_asdict(meta)
 
 
 # =============================================================================
@@ -759,7 +807,8 @@ async def pr_analysis(
 )
 async def index_codebase(
     request: CodeIndexRequest,
-    _: None = Depends(require_scopes(Scope.GRAPH_WRITE)),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_scopes(Scope.GRAPH_WRITE)),
 ) -> CodeIndexResponse:
     """Index a repository into the code graph and search index."""
     toolkit = get_code_toolkit()
@@ -809,35 +858,37 @@ async def index_codebase(
     )
 
     if request.async_mode:
-        job_id = create_index_job(
-            repo_id=request.repo_id,
-            root_path=str(root_path),
-            index_name=request.index_name or "code",
-            meta=meta,
-        )
-        asyncio.create_task(
-            asyncio.to_thread(
-                run_index_job,
-                job_id,
-                indexer,
-                max_files=request.max_files,
-                reset=request.reset,
-                missing_sources=missing_sources,
-                meta=meta,
+        # Use persistent job queue for async mode
+        queue_service = get_queue_service(db)
+        try:
+            job_id = queue_service.create_job(
+                repo_id=request.repo_id,
+                root_path=str(root_path),
+                index_name=request.index_name or "code",
+                requested_by=principal.user_id,
+                request={
+                    "max_files": request.max_files,
+                    "reset": request.reset,
+                    "include_api_boundaries": request.include_api_boundaries,
+                    "async_mode": True,
+                },
+                meta=_meta_to_dict(meta),
+                force=request.force,
             )
-        )
-        return CodeIndexResponse(
-            repo_id=request.repo_id,
-            files_indexed=0,
-            files_failed=0,
-            symbols_indexed=0,
-            documents_indexed=0,
-            call_edges_indexed=0,
-            duration_ms=0.0,
-            meta=meta,
-            job_id=job_id,
-            status="queued",
-        )
+            return CodeIndexResponse(
+                repo_id=request.repo_id,
+                files_indexed=0,
+                files_failed=0,
+                symbols_indexed=0,
+                documents_indexed=0,
+                call_edges_indexed=0,
+                duration_ms=0.0,
+                meta=meta,
+                job_id=str(job_id),
+                status="queued",
+            )
+        except QueueFullError as e:
+            raise HTTPException(status_code=429, detail=str(e))
 
     summary = indexer.index_repository(
         max_files=request.max_files,
@@ -863,9 +914,94 @@ async def index_codebase(
 )
 async def index_codebase_status(
     job_id: str,
-    _: None = Depends(require_scopes(Scope.GRAPH_READ)),
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_scopes(Scope.GRAPH_READ)),
 ) -> Dict[str, Any]:
+    """Get status of a background indexing job."""
+    # Try persistent store first
+    try:
+        job_uuid = uuid.UUID(job_id)
+        queue_service = get_queue_service(db)
+        job = queue_service.get_job(job_uuid)
+        if job:
+            if not _can_access_job(job, principal, Scope.ADMIN_READ):
+                raise HTTPException(status_code=403, detail="Access denied")
+            return job
+    except ValueError:
+        pass  # Not a valid UUID, try legacy store
+
+    # Fallback to legacy in-memory store for backwards compatibility
     job = get_index_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job_id not found")
     return job
+
+
+@router.post(
+    "/index/cancel/{job_id}",
+    summary="Cancel an indexing job",
+    description="Request cancellation of a running or queued indexing job.",
+)
+async def index_codebase_cancel(
+    job_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_scopes(Scope.GRAPH_WRITE)),
+) -> Dict[str, Any]:
+    """Request cancellation of an indexing job."""
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job_id format")
+
+    queue_service = get_queue_service(db)
+    job = queue_service.get_job(job_uuid)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    if not _can_access_job(job, principal, Scope.ADMIN_WRITE):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    success = queue_service.cancel_job(job_uuid)
+    if success:
+        return {"job_id": job_id, "status": "cancel_requested"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to request cancellation")
+
+
+@router.get(
+    "/index/jobs",
+    summary="List indexing jobs",
+    description="List recent indexing jobs with optional filters.",
+)
+async def list_index_jobs(
+    repo_id: str = None,
+    status: str = None,
+    requested_by: str = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_scopes(Scope.GRAPH_READ)),
+) -> Dict[str, Any]:
+    """List recent indexing jobs."""
+    from app.models import CodeIndexJobStatus
+
+    queue_service = get_queue_service(db)
+
+    status_enum = None
+    if status:
+        try:
+            status_enum = CodeIndexJobStatus(status)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status. Must be one of: {[s.value for s in CodeIndexJobStatus]}"
+            )
+
+    if not principal.has_scope(Scope.ADMIN_READ):
+        requested_by = principal.user_id
+
+    jobs = queue_service.list_jobs(
+        repo_id=repo_id,
+        requested_by=requested_by,
+        status=status_enum,
+        limit=min(limit, 100),
+    )
+    return {"jobs": jobs, "count": len(jobs)}

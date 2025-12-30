@@ -345,6 +345,7 @@ class CodeIndexRequest(BaseModel):
     max_files: Optional[int] = None
     include_api_boundaries: bool = True
     async_mode: bool = False
+    force: bool = False
 
 
 class PRRisk(BaseModel):

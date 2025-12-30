@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from openmemory.api.indexing.api_boundaries import create_api_boundary_analyzer
 from openmemory.api.indexing.ast_parser import ASTParser, Language, Symbol, SymbolType
@@ -56,6 +56,12 @@ class CodeIndexSummary:
     call_edges_indexed: int = 0
     duration_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
+
+
+class IndexingCancelled(Exception):
+    """Raised to abort an indexing run early (e.g., cancellation)."""
+
+    pass
 
 
 class CodeIndexingService:
@@ -166,9 +172,26 @@ class CodeIndexingService:
         self,
         max_files: Optional[int] = None,
         reset: bool = False,
+        progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> CodeIndexSummary:
         start = time.perf_counter()
         summary = CodeIndexSummary(repo_id=self.repo_id)
+        files_scanned = 0
+        total_files_estimate = 0
+
+        def report_progress(phase: str, current_file: Optional[Path] = None) -> None:
+            if not progress_callback:
+                return
+            progress_callback(
+                {
+                    "files_scanned": files_scanned,
+                    "files_indexed": summary.files_indexed,
+                    "files_failed": summary.files_failed,
+                    "total_files_estimate": total_files_estimate,
+                    "current_file": str(current_file) if current_file else None,
+                    "current_phase": phase,
+                }
+            )
 
         if reset:
             self.reset_repo()
@@ -176,14 +199,26 @@ class CodeIndexingService:
         self._ensure_graph_constraints()
         self._ensure_search_index()
 
-        for file_path in self._iter_source_files(max_files):
+        source_files = self._iter_source_files(max_files)
+        total_files_estimate = len(source_files)
+        report_progress("scan")
+
+        for file_path in source_files:
+            files_scanned += 1
+            report_progress("parse", file_path)
             try:
-                stats = self.index_file(file_path)
+                stats = self.index_file(
+                    file_path,
+                    phase_callback=lambda phase, path=file_path: report_progress(phase, path),
+                )
+            except IndexingCancelled:
+                raise
             except Exception as exc:
                 summary.files_failed += 1
                 error_message = f"{file_path}: {exc}"
                 summary.errors.append(error_message)
                 logger.warning(f"Indexing failed for {file_path}: {exc}")
+                report_progress("parse", file_path)
                 continue
 
             if stats.skipped:
@@ -193,9 +228,11 @@ class CodeIndexingService:
             summary.symbols_indexed += stats.symbols_indexed
             summary.documents_indexed += stats.documents_indexed
             summary.call_edges_indexed += stats.call_edges_indexed
+            report_progress("graph_projection", file_path)
 
         if self.opensearch_client:
             try:
+                report_progress("search_indexing")
                 self.opensearch_client._client.indices.refresh(index=self.index_name)
             except Exception as exc:
                 logger.warning(f"OpenSearch refresh failed: {exc}")
@@ -203,7 +240,11 @@ class CodeIndexingService:
         summary.duration_ms = (time.perf_counter() - start) * 1000
         return summary
 
-    def index_file(self, file_path: Path) -> FileIndexStats:
+    def index_file(
+        self,
+        file_path: Path,
+        phase_callback: Optional[Callable[[str, Optional[Path]], None]] = None,
+    ) -> FileIndexStats:
         language = Language.from_path(file_path)
         if not language:
             return FileIndexStats(skipped=True)
@@ -240,6 +281,8 @@ class CodeIndexingService:
 
         documents_indexed = 0
         if self.opensearch_client:
+            if phase_callback:
+                phase_callback("search_indexing", file_path)
             documents_indexed = self._index_documents(
                 file_path=file_path,
                 symbols=symbol_pairs,

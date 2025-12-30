@@ -372,6 +372,21 @@ def _check_tool_scope(required_scope: str) -> str | None:
         })
 
 
+def _can_access_job(job: dict, admin_scope: str) -> bool:
+    """Check whether the current principal can access the job."""
+    if not HAS_SECURITY:
+        return True
+    principal = principal_var.get(None)
+    if not principal:
+        return False
+    if principal.has_scope(admin_scope):
+        return True
+    requested_by = job.get("requested_by")
+    if not requested_by:
+        return True
+    return requested_by == principal.user_id
+
+
 def _apply_access_entity_filter(query, principal: "Principal", user):
     from app.security.access import build_access_entity_patterns
 
@@ -2756,29 +2771,62 @@ async def index_codebase(
         )
 
         if async_mode:
-            job_id = create_index_job(
-                repo_id=repo_id,
-                root_path=str(root),
-                index_name=index_name or "code",
-                meta=meta,
-            )
-            asyncio.create_task(
-                asyncio.to_thread(
-                    run_index_job,
-                    job_id,
-                    indexer,
-                    max_files=max_files,
-                    reset=reset,
-                    missing_sources=missing_sources,
-                    meta=meta,
+            # Use persistent job queue - worker will pick up the job
+            from app.database import SessionLocal
+            from app.services.job_queue_service import IndexingJobQueueService, QueueFullError
+
+            uid = user_id_var.get("anonymous")
+            db = SessionLocal()
+            try:
+                import os
+                max_queued_jobs = int(os.getenv("MAX_QUEUED_JOBS", "100"))
+                valkey_client = None
+                try:
+                    import redis
+
+                    host = os.getenv("VALKEY_HOST", "valkey")
+                    port = int(os.getenv("VALKEY_PORT", "6379"))
+                    client = redis.Redis(host=host, port=port, socket_timeout=5)
+                    client.ping()
+                    valkey_client = client
+                except Exception:
+                    valkey_client = None
+
+                queue_service = IndexingJobQueueService(
+                    db=db,
+                    valkey_client=valkey_client,
+                    max_queued_jobs=max_queued_jobs,
                 )
-            )
-            return json.dumps({
-                "repo_id": repo_id,
-                "job_id": job_id,
-                "status": "queued",
-                "meta": meta,
-            })
+                try:
+                    job_uuid = queue_service.create_job(
+                        repo_id=repo_id,
+                        root_path=str(root),
+                        index_name=index_name or "code",
+                        requested_by=uid,
+                        request={
+                            "max_files": max_files,
+                            "reset": reset,
+                            "include_api_boundaries": include_api_boundaries,
+                        },
+                        meta=meta,
+                    )
+                    return json.dumps({
+                        "repo_id": repo_id,
+                        "job_id": str(job_uuid),
+                        "status": "queued",
+                        "meta": meta,
+                    })
+                except QueueFullError as e:
+                    return json.dumps({
+                        "error": str(e),
+                        "meta": _create_code_meta(
+                            degraded=True,
+                            missing=missing_sources,
+                            error=str(e),
+                        ),
+                    })
+            finally:
+                db.close()
 
         summary = indexer.index_repository(
             max_files=max_files,
@@ -2831,11 +2879,86 @@ async def index_codebase_status(job_id: str) -> str:
     if scope_error:
         return scope_error
 
+    import uuid as uuid_mod
+
+    # Try persistent store first
+    try:
+        job_uuid = uuid_mod.UUID(job_id)
+        from app.database import SessionLocal
+        from app.services.job_queue_service import IndexingJobQueueService
+
+        db = SessionLocal()
+        try:
+            queue_service = IndexingJobQueueService(db=db, valkey_client=None)
+            job = queue_service.get_job(job_uuid)
+            if job:
+                if not _can_access_job(job, "admin:read"):
+                    return json.dumps({"error": "Access denied"})
+                return json.dumps(job, default=str)
+        finally:
+            db.close()
+    except ValueError:
+        pass  # Invalid UUID, try legacy store
+    except Exception:
+        pass  # Persistent store error, try legacy store
+
+    # Fallback to legacy in-memory store
     job = get_index_job(job_id)
     if not job:
         return json.dumps({"error": "job_id not found"})
 
     return json.dumps(job, default=str)
+
+
+@mcp.tool(description="""Cancel a running or queued indexing job.
+
+Required parameters:
+- job_id: Indexing job ID (required)
+
+Returns:
+- job_id
+- status: "cancel_requested" on success
+- error: Error message if job not found
+
+Examples:
+- index_codebase_cancel(job_id="<job-id>")
+""")
+async def index_codebase_cancel(job_id: str) -> str:
+    """Request cancellation of an indexing job."""
+    scope_error = _check_tool_scope("graph:write")
+    if scope_error:
+        return scope_error
+
+    import uuid as uuid_mod
+    try:
+        job_uuid = uuid_mod.UUID(job_id)
+    except ValueError:
+        return json.dumps({"error": "Invalid job_id format"})
+
+    # Try persistent store
+    from app.database import SessionLocal
+    from app.services.job_queue_service import IndexingJobQueueService
+
+    try:
+        db = SessionLocal()
+        try:
+            queue_service = IndexingJobQueueService(db=db, valkey_client=None)
+            job = queue_service.get_job(job_uuid)
+            if not job:
+                return json.dumps({"error": "job_id not found"})
+
+            if not _can_access_job(job, "admin:write"):
+                return json.dumps({"error": "Access denied"})
+
+            success = queue_service.cancel_job(job_uuid)
+            if success:
+                return json.dumps({"job_id": job_id, "status": "cancel_requested"})
+            else:
+                return json.dumps({"error": "Failed to request cancellation"})
+        finally:
+            db.close()
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 @mcp.tool(description="""Search code using tri-hybrid retrieval (lexical + semantic + graph).
