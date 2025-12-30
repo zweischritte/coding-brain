@@ -127,5 +127,5 @@ def test_format_add_memories_response_batch():
 def test_format_add_memories_response_empty():
     structured_metadata = {"category": "glossary", "scope": "org"}
     response = format_add_memories_response([], structured_metadata)
-    assert response["category"] == "glossary"
-    assert response["scope"] == "org"
+    assert response["error"] == "Memory client returned no results"
+    assert response["code"] == "MEMORY_ADD_EMPTY_RESULT"

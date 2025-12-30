@@ -17,7 +17,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from openmemory.api.indexing.graph_projection import CodeEdgeType
+try:
+    from indexing.graph_projection import CodeEdgeType
+except ImportError:
+    from openmemory.api.indexing.graph_projection import CodeEdgeType
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +211,7 @@ class ImpactAnalysisTool:
                 # Analyze file changes
                 self._analyze_file_changes(
                     file_paths=input_data.changed_files,
+                    repo_id=input_data.repo_id,
                     depth=max_depth,
                     affected_map=affected_map,
                     max_files=cfg.max_affected_files,
@@ -346,6 +350,7 @@ class ImpactAnalysisTool:
     def _analyze_file_changes(
         self,
         file_paths: list[str],
+        repo_id: Optional[str],
         depth: int,
         affected_map: dict[str, AffectedFile],
         max_files: int,
@@ -368,7 +373,7 @@ class ImpactAnalysisTool:
             if not file_node and hasattr(self.graph_driver, "find_file_id"):
                 fallback_id = self.graph_driver.find_file_id(
                     file_path,
-                    repo_id=getattr(input_data, "repo_id", None),
+                    repo_id=repo_id,
                 )
                 if fallback_id:
                     file_node = self.graph_driver.get_node(fallback_id)

@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from openmemory.api.indexing.api_boundaries import create_api_boundary_analyzer
 from openmemory.api.indexing.ast_parser import ASTParser, Language, Symbol, SymbolType
+from openmemory.api.indexing.fallback_symbols import extract_python_symbols
 from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType, GraphProjection
 from openmemory.api.indexing.scip_symbols import SCIPSymbolExtractor
 from openmemory.api.retrieval.opensearch import Document, IndexConfig, IndexManager
@@ -30,6 +31,7 @@ _INDEX_TYPES = {
     SymbolType.TYPE_ALIAS,
     SymbolType.VARIABLE,
 }
+_FILE_DOC_MAX_CHARS = 8000
 
 
 @dataclass
@@ -179,7 +181,9 @@ class CodeIndexingService:
                 stats = self.index_file(file_path)
             except Exception as exc:
                 summary.files_failed += 1
-                summary.errors.append(f"{file_path}: {exc}")
+                error_message = f"{file_path}: {exc}"
+                summary.errors.append(error_message)
+                logger.warning(f"Indexing failed for {file_path}: {exc}")
                 continue
 
             if stats.skipped:
@@ -190,6 +194,12 @@ class CodeIndexingService:
             summary.documents_indexed += stats.documents_indexed
             summary.call_edges_indexed += stats.call_edges_indexed
 
+        if self.opensearch_client:
+            try:
+                self.opensearch_client._client.indices.refresh(index=self.index_name)
+            except Exception as exc:
+                logger.warning(f"OpenSearch refresh failed: {exc}")
+
         summary.duration_ms = (time.perf_counter() - start) * 1000
         return summary
 
@@ -198,11 +208,12 @@ class CodeIndexingService:
         if not language:
             return FileIndexStats(skipped=True)
 
-        parse_result = self._parser.parse_file(file_path)
-        symbols = parse_result.symbols
-
         content = file_path.read_text(errors="ignore")
         lines = content.splitlines()
+        parse_result = self._parser.parse_file(file_path)
+        symbols = parse_result.symbols
+        if not symbols and language == Language.PYTHON:
+            symbols = extract_python_symbols(content)
         content_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
         file_size = file_path.stat().st_size
 
@@ -233,6 +244,8 @@ class CodeIndexingService:
                 file_path=file_path,
                 symbols=symbol_pairs,
                 lines=lines,
+                content=content,
+                language=language,
             )
 
         return FileIndexStats(
@@ -334,7 +347,11 @@ class CodeIndexingService:
         return "\n".join(body_lines)
 
     def _calls_target(self, body: str, target_name: str) -> bool:
-        pattern = re.compile(rf"\\b{re.escape(target_name)}\\s*\\(")
+        try:
+            pattern = re.compile(rf"\b{re.escape(target_name)}\s*\(")
+        except re.error as exc:
+            logger.debug(f"Invalid call pattern for {target_name}: {exc}")
+            return False
         return bool(pattern.search(body))
 
     def _index_api_boundaries(
@@ -356,10 +373,18 @@ class CodeIndexingService:
         file_path: Path,
         symbols: list[tuple[Symbol, str]],
         lines: list[str],
+        content: str,
+        language: Language,
     ) -> int:
         indexable = [(symbol, symbol_id) for symbol, symbol_id in symbols if symbol.symbol_type in _INDEX_TYPES]
+        file_doc_count = self._index_file_document(
+            file_path=file_path,
+            content=content,
+            language=language,
+            lines=lines,
+        )
         if not indexable:
-            return 0
+            return file_doc_count
 
         contents = [
             self._symbol_body(lines, symbol) or symbol.name
@@ -372,6 +397,7 @@ class CodeIndexingService:
         ).isoformat()
 
         for (symbol, symbol_id), content, embedding in zip(indexable, contents, embeddings):
+            embedding_value = self._normalize_embedding(embedding)
             metadata = {
                 "file_path": str(file_path),
                 "language": symbol.language.value,
@@ -395,7 +421,7 @@ class CodeIndexingService:
                 Document(
                     id=symbol_id,
                     content=content,
-                    embedding=embedding,
+                    embedding=embedding_value,
                     metadata=metadata,
                 )
             )
@@ -404,6 +430,49 @@ class CodeIndexingService:
             result = self.opensearch_client.bulk_index(
                 index_name=self.index_name,
                 documents=documents,
+            )
+            return result.succeeded + file_doc_count
+        except Exception as exc:
+            logger.warning(f"OpenSearch indexing failed for {file_path}: {exc}")
+            return file_doc_count
+
+    def _index_file_document(
+        self,
+        file_path: Path,
+        content: str,
+        language: Language,
+        lines: list[str],
+    ) -> int:
+        snippet = content[:_FILE_DOC_MAX_CHARS]
+        embeddings = self._embed_contents([snippet])
+        embedding_value = self._normalize_embedding(embeddings[0] if embeddings else None)
+        last_modified = datetime.fromtimestamp(
+            file_path.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+        doc_id = f"file::{self.repo_id}:{file_path}"
+        metadata = {
+            "file_path": str(file_path),
+            "language": language.value,
+            "symbol_name": file_path.name,
+            "symbol_type": "file",
+            "line_start": 1,
+            "line_end": len(lines),
+            "repo_id": self.repo_id,
+            "chunk_hash": hashlib.sha1(snippet.encode("utf-8")).hexdigest(),
+            "last_modified": last_modified,
+            "symbol_id": doc_id,
+        }
+        document = Document(
+            id=doc_id,
+            content=snippet,
+            embedding=embedding_value,
+            metadata=metadata,
+        )
+
+        try:
+            result = self.opensearch_client.bulk_index(
+                index_name=self.index_name,
+                documents=[document],
             )
             return result.succeeded
         except Exception as exc:
@@ -438,6 +507,11 @@ class CodeIndexingService:
             return list(result)
         except TypeError:
             return self._zero_embedding()
+
+    def _normalize_embedding(self, embedding: Optional[list[float]]) -> Optional[list[float]]:
+        if not embedding or not any(embedding):
+            return None
+        return embedding
 
     def _zero_embedding(self) -> list[float]:
         return [0.0] * self._embedding_dim

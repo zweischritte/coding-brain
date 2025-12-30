@@ -271,15 +271,16 @@ class Document:
 
     id: str
     content: str
-    embedding: List[float]
+    embedding: Optional[List[float]]
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_opensearch_body(self) -> Dict[str, Any]:
         """Convert to OpenSearch document body."""
         body = {
             "content": self.content,
-            "embedding": self.embedding,
         }
+        if self.embedding is not None:
+            body["embedding"] = self.embedding
         body.update(self.metadata)
         return body
 

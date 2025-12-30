@@ -222,6 +222,8 @@ class SearchCodeHybridTool:
             except Exception as e:
                 logger.warning(f"Embedding failed, falling back to lexical: {e}")
                 # Fall back to lexical-only
+        if embedding and not any(embedding):
+            embedding = []
 
         # Build filters
         filters: dict[str, Any] = {}
@@ -231,7 +233,10 @@ class SearchCodeHybridTool:
             filters["language"] = input_data.language
 
         # Build tri-hybrid query
-        from openmemory.api.retrieval.trihybrid import TriHybridQuery
+        try:
+            from retrieval.trihybrid import TriHybridQuery
+        except ImportError:
+            from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
         query = TriHybridQuery(
             query_text=input_data.query,

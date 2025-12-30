@@ -115,6 +115,7 @@ def _init_opensearch(toolkit: CodeToolkit) -> None:
         from retrieval.opensearch import create_opensearch_client
 
         toolkit.opensearch_client = create_opensearch_client(from_env=True)
+        toolkit.opensearch_client.connect()
 
         # Test connection
         health = toolkit.opensearch_client.health()
@@ -239,9 +240,9 @@ def _init_ast_parser(toolkit: CodeToolkit) -> None:
 
 def _init_search_tool(toolkit: CodeToolkit) -> None:
     """Initialize search code hybrid tool."""
-    if not toolkit.is_available("trihybrid") and not toolkit.is_available("opensearch"):
-        toolkit._initialization_errors["search_tool"] = "No search backend available"
-        logger.warning("Search tool not initialized - no backend available")
+    if not toolkit.is_available("trihybrid"):
+        toolkit._initialization_errors["search_tool"] = "Tri-hybrid retriever not available"
+        logger.warning("Search tool not initialized - tri-hybrid retriever unavailable")
         return
 
     try:
@@ -265,12 +266,20 @@ def _init_explain_tool(toolkit: CodeToolkit) -> None:
     if not toolkit.is_available("neo4j"):
         toolkit._initialization_errors["explain_tool"] = "Neo4j not available"
         return
+    if not toolkit.is_available("trihybrid"):
+        toolkit._initialization_errors["explain_tool"] = "Tri-hybrid retriever not available"
+        return
+    if not toolkit.is_available("ast_parser"):
+        toolkit._initialization_errors["explain_tool"] = "AST parser not available"
+        return
 
     try:
         from tools.explain_code import create_explain_code_tool
 
         toolkit.explain_tool = create_explain_code_tool(
             graph_driver=toolkit.neo4j_driver,
+            retriever=toolkit.trihybrid_retriever,
+            parser=toolkit.ast_parser,
         )
         logger.info("Explain tool initialized")
     except ImportError as e:

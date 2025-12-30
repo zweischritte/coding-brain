@@ -366,12 +366,10 @@ def format_add_memories_response(
     from datetime import datetime, timezone
 
     if not results:
-        # Handle empty results case (potential bug in client add flow)
-        # Still return structured_metadata fields as a single result to indicate parsing worked
-        return format_add_memory_result(
-            result={"id": None, "memory": None},
-            structured_metadata=structured_metadata,
-        )
+        return {
+            "error": "Memory client returned no results",
+            "code": "MEMORY_ADD_EMPTY_RESULT",
+        }
 
     # Format all results
     formatted_results = []

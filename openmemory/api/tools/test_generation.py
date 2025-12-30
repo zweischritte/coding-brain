@@ -24,12 +24,80 @@ Features:
 from __future__ import annotations
 
 import logging
+import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
+from openmemory.api.indexing.fallback_symbols import extract_python_symbols
+
 logger = logging.getLogger(__name__)
+
+
+def _find_repo_root(start: Path) -> Optional[Path]:
+    """Find a repo root by looking for pyproject.toml."""
+    candidate = start
+    if candidate.is_file():
+        candidate = candidate.parent
+
+    for parent in [candidate] + list(candidate.parents):
+        if (parent / "pyproject.toml").exists():
+            return parent
+    return None
+
+
+def _suffix_after_repo(path: Path, repo_name: str) -> Optional[Path]:
+    """Return path suffix after a repo name marker."""
+    marker = f"/{repo_name}/"
+    path_str = path.as_posix()
+    if marker in path_str:
+        return Path(path_str.split(marker, 1)[1])
+    return None
+
+
+def _resolve_source_path(file_path: str) -> Path:
+    """Resolve a source path across host/container boundaries."""
+    path = Path(file_path)
+    if path.exists():
+        return path
+
+    candidates: list[Path] = []
+    candidate_roots: list[Path] = []
+
+    repo_root = _find_repo_root(Path(__file__).resolve())
+    if repo_root:
+        candidate_roots.append(repo_root)
+
+    env_root = os.environ.get("OPENMEMORY_REPO_ROOT") or os.environ.get(
+        "OPENMEMORY_WORKSPACE_ROOT"
+    )
+    if env_root:
+        candidate_roots.append(Path(env_root))
+
+    usr_src = Path("/usr/src")
+    if usr_src.exists() and usr_src.is_dir():
+        try:
+            for child in usr_src.iterdir():
+                if child.is_dir() and (child / "pyproject.toml").exists():
+                    candidate_roots.append(child)
+        except OSError:
+            pass
+
+    for root in candidate_roots:
+        if path.is_absolute():
+            suffix = _suffix_after_repo(path, root.name)
+            if suffix:
+                candidates.append(root / suffix)
+        else:
+            candidates.append(root / path)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return path
 
 
 # =============================================================================
@@ -192,8 +260,14 @@ class TestSuite:
         return "\n".join(lines)
 
     def _to_pascal_case(self, name: str) -> str:
-        """Convert snake_case to PascalCase."""
-        parts = name.split("_")
+        """Convert a symbol name into a safe PascalCase identifier."""
+        sanitized = re.sub(r"[^A-Za-z0-9_]", "_", name or "")
+        sanitized = sanitized.strip("_")
+        if not sanitized:
+            sanitized = "Symbol"
+        if sanitized[0].isdigit():
+            sanitized = f"Symbol_{sanitized}"
+        parts = [part for part in sanitized.split("_") if part]
         return "".join(part.capitalize() for part in parts)
 
     def _indent(self, code: str, spaces: int) -> str:
@@ -229,11 +303,12 @@ class SymbolAnalyzer:
         Returns:
             Analysis result with parameters, return type, dependencies
         """
+        signature = symbol.get("signature") or ""
         analysis = {
             "symbol_id": symbol.get("symbol_id", ""),
             "name": symbol.get("name", ""),
             "kind": symbol.get("kind", "function"),
-            "signature": symbol.get("signature", ""),
+            "signature": signature,
             "docstring": symbol.get("docstring", ""),
             "parameters": [],
             "return_type": None,
@@ -248,20 +323,17 @@ class SymbolAnalyzer:
             analysis["parameters"] = params
         else:
             # Try to parse from signature
-            analysis["parameters"] = self._parse_parameters(
-                symbol.get("signature", "")
-            )
+            analysis["parameters"] = self._parse_parameters(signature)
 
         # Extract return type
         analysis["return_type"] = symbol.get(
-            "return_type", self._parse_return_type(symbol.get("signature", ""))
+            "return_type", self._parse_return_type(signature)
         )
 
         # Check if async
         analysis["is_async"] = symbol.get("is_async", False)
         if not analysis["is_async"]:
-            sig = symbol.get("signature", "")
-            analysis["is_async"] = "async def" in sig
+            analysis["is_async"] = "async def" in signature
 
         # Check for class methods
         if symbol.get("kind") == "class":
@@ -278,6 +350,8 @@ class SymbolAnalyzer:
     def _parse_parameters(self, signature: str) -> list[dict[str, Any]]:
         """Parse parameters from signature string."""
         params = []
+        if not signature:
+            return params
 
         # Match parameters in signature
         match = re.search(r"\((.*?)\)", signature)
@@ -319,6 +393,8 @@ class SymbolAnalyzer:
 
     def _parse_return_type(self, signature: str) -> Optional[str]:
         """Parse return type from signature string."""
+        if not signature:
+            return None
         match = re.search(r"->\s*(.+?):", signature)
         if match:
             return match.group(1).strip()
@@ -464,7 +540,10 @@ class CoverageAnalyzer:
 
             try:
                 # Search for existing tests
-                from openmemory.api.retrieval.trihybrid import TriHybridQuery
+                try:
+                    from retrieval.trihybrid import TriHybridQuery
+                except ImportError:
+                    from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
                 query = TriHybridQuery(
                     query_text=f"test_{name}",
@@ -767,8 +846,11 @@ class TestGenerator:
         patterns = []
 
         try:
+            from retrieval.trihybrid import TriHybridQuery
+        except ImportError:
             from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
+        try:
             query = TriHybridQuery(
                 query_text="def test_",
                 size=5,
@@ -1023,8 +1105,29 @@ class TestGenerationTool:
             Combined TestSuite for all symbols
         """
         try:
-            result = self.parser.parse_file(file_path)
-            if not result.success:
+            resolved_path = _resolve_source_path(file_path)
+            parser = self.parser
+            if parser is None:
+                try:
+                    from indexing.ast_parser import create_parser
+                except ImportError:
+                    from openmemory.api.indexing.ast_parser import create_parser
+
+                try:
+                    parser = create_parser()
+                    self.parser = parser
+                except Exception as exc:
+                    logger.warning(f"AST parser unavailable, falling back: {exc}")
+
+            symbols = []
+            if parser is not None:
+                result = parser.parse_file(resolved_path)
+                symbols = result.symbols
+
+            if not symbols and resolved_path.suffix == ".py":
+                content = resolved_path.read_text(errors="ignore")
+                symbols = extract_python_symbols(content)
+            if not symbols:
                 return TestSuite(
                     symbol_id="",
                     symbol_name=file_path,
@@ -1035,14 +1138,26 @@ class TestGenerationTool:
             all_imports = set()
             all_fixtures = []
 
-            for symbol in result.symbols:
+            for symbol in symbols:
+                symbol_type = getattr(symbol, "symbol_type", None)
+                kind = (
+                    symbol_type.value if symbol_type else getattr(symbol, "kind", "function")
+                )
+                if kind not in {"function", "class", "method"}:
+                    continue
+                if not getattr(symbol, "name", None):
+                    continue
+                symbol_id = (
+                    getattr(symbol, "symbol_id", "")
+                    or f"{resolved_path}:{symbol.name}"
+                )
                 symbol_dict = {
-                    "symbol_id": getattr(symbol, "symbol_id", ""),
+                    "symbol_id": symbol_id,
                     "name": symbol.name,
-                    "kind": getattr(symbol, "kind", "function"),
+                    "kind": kind,
                     "signature": getattr(symbol, "signature", ""),
                     "docstring": getattr(symbol, "docstring", ""),
-                    "file_path": file_path,
+                    "file_path": str(resolved_path),
                 }
 
                 suite = self._generator.generate(symbol_dict)
@@ -1051,8 +1166,8 @@ class TestGenerationTool:
                 all_fixtures.extend(suite.fixtures)
 
             return TestSuite(
-                symbol_id=file_path,
-                symbol_name=file_path.split("/")[-1],
+                symbol_id=str(resolved_path),
+                symbol_name=resolved_path.name,
                 test_cases=all_test_cases,
                 imports=list(all_imports),
                 fixtures=all_fixtures,

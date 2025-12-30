@@ -1327,7 +1327,10 @@ class ADRContext:
             try:
                 # Build query from file changes
                 query_text = " ".join(files_changed)
-                from openmemory.api.retrieval.trihybrid import TriHybridQuery
+                try:
+                    from retrieval.trihybrid import TriHybridQuery
+                except ImportError:
+                    from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
                 query = TriHybridQuery(query_text=query_text, size=5)
                 result = retriever.retrieve(query, index_name="adrs")

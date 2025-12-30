@@ -18,7 +18,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from openmemory.api.tools.pr_workflow.pr_parser import DiffParser, PRDiff, PRFile, PRHunk
+try:
+    from tools.pr_workflow.pr_parser import DiffParser, PRDiff, PRFile, PRHunk
+except ImportError:
+    from openmemory.api.tools.pr_workflow.pr_parser import DiffParser, PRDiff, PRFile, PRHunk
 
 logger = logging.getLogger(__name__)
 

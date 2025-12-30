@@ -1016,49 +1016,51 @@ class MetadataProjector:
                     if allowed_memory_ids is None
                     else "MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory)"
                 )
-                cypher = f"""
-                {seed_match}
-                {other_match}
-                WHERE other.id <> seed.id
-                  AND type(r) IN $relTypes
-                  AND type(r2) = type(r)
-                  AND ($allowedMemoryIds IS NULL OR other.id IN $allowedMemoryIds)
-                  AND ($allowedMemoryIds IS NULL OR seed.id IN $allowedMemoryIds)
-                WITH other,
-                     collect(DISTINCT {
-                        type: type(r),
-                        targetLabel: labels(dim)[0],
-                        targetValue: CASE
-                            WHEN dim:OM_Entity THEN dim.name
-                            WHEN dim:OM_Category THEN dim.name
-                            WHEN dim:OM_Scope THEN dim.name
-                            WHEN dim:OM_ArtifactType THEN dim.name
-                            WHEN dim:OM_ArtifactRef THEN dim.name
-                            WHEN dim:OM_Tag THEN dim.key
-                            WHEN dim:OM_Evidence THEN dim.name
-                            WHEN dim:OM_App THEN dim.name
-                            ELSE null
-                        END,
-                        seedValue: r.tagValue,
-                        otherValue: r2.tagValue
-                     }) AS sharedRelations,
-                     count(DISTINCT dim) AS sharedCount
-                RETURN other.id AS memoryId,
-                       other.content AS content,
-                       other.createdAt AS createdAt,
-                       other.updatedAt AS updatedAt,
-                       other.state AS state,
-                       other.category AS category,
-                       other.scope AS scope,
-                       other.artifactType AS artifactType,
-                       other.artifactRef AS artifactRef,
-                       other.entity AS entity,
-                       other.source AS source,
-                       sharedRelations AS sharedRelations,
-                       sharedCount AS sharedCount
-                ORDER BY sharedCount DESC, other.createdAt DESC
-                LIMIT $limit
-                """
+                cypher = "\n".join(
+                    [
+                        seed_match,
+                        other_match,
+                        "WHERE other.id <> seed.id",
+                        "  AND type(r) IN $relTypes",
+                        "  AND type(r2) = type(r)",
+                        "  AND ($allowedMemoryIds IS NULL OR other.id IN $allowedMemoryIds)",
+                        "  AND ($allowedMemoryIds IS NULL OR seed.id IN $allowedMemoryIds)",
+                        "WITH other,",
+                        "     collect(DISTINCT {",
+                        "        type: type(r),",
+                        "        targetLabel: labels(dim)[0],",
+                        "        targetValue: CASE",
+                        "            WHEN dim:OM_Entity THEN dim.name",
+                        "            WHEN dim:OM_Category THEN dim.name",
+                        "            WHEN dim:OM_Scope THEN dim.name",
+                        "            WHEN dim:OM_ArtifactType THEN dim.name",
+                        "            WHEN dim:OM_ArtifactRef THEN dim.name",
+                        "            WHEN dim:OM_Tag THEN dim.key",
+                        "            WHEN dim:OM_Evidence THEN dim.name",
+                        "            WHEN dim:OM_App THEN dim.name",
+                        "            ELSE null",
+                        "        END,",
+                        "        seedValue: r.tagValue,",
+                        "        otherValue: r2.tagValue",
+                        "     }) AS sharedRelations,",
+                        "     count(DISTINCT dim) AS sharedCount",
+                        "RETURN other.id AS memoryId,",
+                        "       other.content AS content,",
+                        "       other.createdAt AS createdAt,",
+                        "       other.updatedAt AS updatedAt,",
+                        "       other.state AS state,",
+                        "       other.category AS category,",
+                        "       other.scope AS scope,",
+                        "       other.artifactType AS artifactType,",
+                        "       other.artifactRef AS artifactRef,",
+                        "       other.entity AS entity,",
+                        "       other.source AS source,",
+                        "       sharedRelations AS sharedRelations,",
+                        "       sharedCount AS sharedCount",
+                        "ORDER BY sharedCount DESC, other.createdAt DESC",
+                        "LIMIT $limit",
+                    ]
+                )
 
                 result = session.run(
                     cypher,

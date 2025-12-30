@@ -427,7 +427,10 @@ class CodeContextRetriever:
         """
         try:
             # Build query for context
-            from openmemory.api.retrieval.trihybrid import TriHybridQuery
+            try:
+                from retrieval.trihybrid import TriHybridQuery
+            except ImportError:
+                from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
             query = TriHybridQuery(
                 query_text=symbol_name,
@@ -468,7 +471,10 @@ class CodeContextRetriever:
             List of usage information dicts
         """
         try:
-            from openmemory.api.retrieval.trihybrid import TriHybridQuery
+            try:
+                from retrieval.trihybrid import TriHybridQuery
+            except ImportError:
+                from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
             # Search for usages of the symbol
             query = TriHybridQuery(
@@ -511,7 +517,10 @@ class CodeContextRetriever:
             List of related symbol dicts
         """
         try:
-            from openmemory.api.retrieval.trihybrid import TriHybridQuery
+            try:
+                from retrieval.trihybrid import TriHybridQuery
+            except ImportError:
+                from openmemory.api.retrieval.trihybrid import TriHybridQuery
 
             query = TriHybridQuery(
                 query_text=symbol_name,

@@ -344,6 +344,7 @@ class CodeIndexRequest(BaseModel):
     reset: bool = False
     max_files: Optional[int] = None
     include_api_boundaries: bool = True
+    async_mode: bool = False
 
 
 class PRRisk(BaseModel):
@@ -377,3 +378,5 @@ class CodeIndexResponse(BaseModel):
     call_edges_indexed: int
     duration_ms: float
     meta: CodeResponseMeta
+    job_id: Optional[str] = None
+    status: Optional[str] = None

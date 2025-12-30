@@ -15,6 +15,7 @@ Key features:
 - Environment variable parsing for API keys
 """
 
+import asyncio
 import contextvars
 import datetime
 import json
@@ -49,6 +50,7 @@ from app.utils.response_format import (
 from app.utils.db import get_user_and_app
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
+from app.indexing_jobs import create_index_job, get_index_job, run_index_job
 from app.graph.graph_ops import (
     project_memory_to_graph,
     delete_memory_from_graph,
@@ -80,6 +82,7 @@ from app.graph.graph_ops import (
     get_biography_timeline_from_graph,
 )
 from app.graph.entity_bridge import bridge_entities_to_om_graph
+from app.path_utils import resolve_repo_root
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -428,6 +431,7 @@ Optional metadata:
 - access_entity: Access control entity (required for shared scopes: team, project, org, enterprise)
   Format: <prefix>:<value> where prefix is user, team, project, or org
   Examples: user:grischa, team:cloudfactory/acme/billing/backend, org:cloudfactory
+- infer: If true, use LLM extraction to infer memories (default: false)
 
 Examples:
 - add_memories(text="Use module boundaries for auth clients", category="architecture", scope="org", artifact_type="module", artifact_ref="auth/clients", entity="Platform", access_entity="org:cloudfactory", tags={"decision": true})
@@ -444,6 +448,7 @@ async def add_memories(
     evidence: list = None,
     tags: dict = None,
     access_entity: str = None,
+    infer: bool = False,
 ) -> str:
     # Check scope - requires memories:write
     scope_error = _check_tool_scope("memories:write")
@@ -516,13 +521,35 @@ async def add_memories(
                 clean_text,
                 user_id=uid,
                 metadata=combined_metadata,
+                infer=infer,
             )
 
             # Process the response and update database
             if isinstance(response, dict) and 'results' in response:
                 results = response.get('results', [])
+                if not results:
+                    return json.dumps({
+                        "error": "Memory client returned no results",
+                        "code": "MEMORY_ADD_EMPTY_RESULT",
+                        "hint": "If you expect raw storage, set infer=false",
+                    })
 
-                for result in results:
+                valid_results = [
+                    result for result in results
+                    if result.get("id") and result.get("memory")
+                ]
+                invalid_results = [
+                    result for result in results
+                    if not result.get("id") or not result.get("memory")
+                ]
+                if not valid_results:
+                    return json.dumps({
+                        "error": "Memory creation failed",
+                        "code": "MEMORY_ADD_FAILED",
+                        "details": invalid_results,
+                    })
+
+                for result in valid_results:
                     if 'id' not in result:
                         continue
 
@@ -571,7 +598,7 @@ async def add_memories(
 
                 # Project to Neo4j graph (non-blocking - failures are logged but don't fail the operation)
                 logging.info(f"Graph projection: checking {len(results)} results, graph_enabled={is_graph_enabled()}")
-                for result in results:
+                for result in valid_results:
                     logging.info(f"Graph projection: result id={result.get('id')}, event={result.get('event')}")
                     if 'id' in result and result.get('event') == 'ADD':
                         try:
@@ -619,9 +646,12 @@ async def add_memories(
 
                 # Format response using the new lean format
                 formatted_response = format_add_memories_response(
-                    results=results,
+                    results=valid_results,
                     structured_metadata=structured_metadata,
                 )
+                if invalid_results:
+                    formatted_response["error"] = "Some memories failed to save"
+                    formatted_response["failed"] = invalid_results
                 return json.dumps(formatted_response)
 
             # Handle case where response is not in expected format
@@ -2649,6 +2679,7 @@ Optional parameters:
 - reset: Clear existing repo data before indexing (default: false)
 - max_files: Maximum number of files to index
 - include_api_boundaries: Enable API boundary detection (default: true)
+- async_mode: Run indexing in the background and return a job_id (default: false)
 
 Returns:
 - repo_id: Repository ID
@@ -2667,6 +2698,7 @@ async def index_codebase(
     reset: bool = False,
     max_files: int = None,
     include_api_boundaries: bool = True,
+    async_mode: bool = False,
 ) -> str:
     """Index a local repository for code intelligence."""
     scope_error = _check_tool_scope("graph:write")
@@ -2675,9 +2707,12 @@ async def index_codebase(
 
     toolkit = get_code_toolkit()
 
-    root = Path(root_path)
+    root = resolve_repo_root(root_path, repo_id=repo_id)
     if not root.exists() or not root.is_dir():
-        return json.dumps({"error": "root_path not found"})
+        return json.dumps({
+            "error": "root_path not found",
+            "hint": "If running in Docker, use the container path (e.g., /usr/src/<repo>) or set OPENMEMORY_REPO_ROOT.",
+        })
 
     if not toolkit.is_available("neo4j"):
         return json.dumps({
@@ -2704,6 +2739,12 @@ async def index_codebase(
     try:
         from indexing.code_indexer import CodeIndexingService
 
+        meta = _create_code_meta(
+            degraded=bool(missing_sources),
+            missing=missing_sources,
+            error="Some backends unavailable" if missing_sources else None,
+        )
+
         indexer = CodeIndexingService(
             root_path=root,
             repo_id=repo_id,
@@ -2714,15 +2755,34 @@ async def index_codebase(
             include_api_boundaries=include_api_boundaries,
         )
 
+        if async_mode:
+            job_id = create_index_job(
+                repo_id=repo_id,
+                root_path=str(root),
+                index_name=index_name or "code",
+                meta=meta,
+            )
+            asyncio.create_task(
+                asyncio.to_thread(
+                    run_index_job,
+                    job_id,
+                    indexer,
+                    max_files=max_files,
+                    reset=reset,
+                    missing_sources=missing_sources,
+                    meta=meta,
+                )
+            )
+            return json.dumps({
+                "repo_id": repo_id,
+                "job_id": job_id,
+                "status": "queued",
+                "meta": meta,
+            })
+
         summary = indexer.index_repository(
             max_files=max_files,
             reset=reset,
-        )
-
-        meta = _create_code_meta(
-            degraded=bool(missing_sources),
-            missing=missing_sources,
-            error="Some backends unavailable" if missing_sources else None,
         )
 
         return json.dumps({
@@ -2752,6 +2812,30 @@ async def index_codebase(
                 error=str(e),
             ),
         })
+
+
+@mcp.tool(description="""Get the status of a background code indexing job.
+
+Required parameters:
+- job_id: Indexing job ID (required)
+
+Returns:
+- job_id
+- repo_id
+- status: queued | running | succeeded | failed
+- timestamps and summary/error when available
+""")
+async def index_codebase_status(job_id: str) -> str:
+    """Fetch status for a background code indexing job."""
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    job = get_index_job(job_id)
+    if not job:
+        return json.dumps({"error": "job_id not found"})
+
+    return json.dumps(job, default=str)
 
 
 @mcp.tool(description="""Search code using tri-hybrid retrieval (lexical + semantic + graph).

@@ -15,7 +15,10 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType
+try:
+    from indexing.graph_projection import CodeEdgeType, CodeNodeType
+except ImportError:
+    from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from openmemory.api.tools.pr_workflow.pr_parser import DiffParser, PRDiff, PRFile
+try:
+    from tools.pr_workflow.pr_parser import DiffParser, PRDiff, PRFile
+except ImportError:
+    from openmemory.api.tools.pr_workflow.pr_parser import DiffParser, PRDiff, PRFile
 
 logger = logging.getLogger(__name__)
 

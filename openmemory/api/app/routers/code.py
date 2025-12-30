@@ -15,6 +15,7 @@ Scope mapping (from PRD):
 - index_codebase: graph:write
 """
 
+import asyncio
 import dataclasses
 import logging
 import uuid
@@ -48,6 +49,8 @@ from app.schemas import (
 )
 from app.security.dependencies import require_scopes
 from app.security.types import Scope
+from app.indexing_jobs import create_index_job, get_index_job, run_index_job
+from app.path_utils import resolve_repo_root
 
 logger = logging.getLogger(__name__)
 
@@ -761,7 +764,7 @@ async def index_codebase(
     """Index a repository into the code graph and search index."""
     toolkit = get_code_toolkit()
 
-    root_path = Path(request.root_path)
+    root_path = resolve_repo_root(request.root_path, repo_id=request.repo_id)
     if not root_path.exists() or not root_path.is_dir():
         raise HTTPException(status_code=404, detail="root_path not found")
 
@@ -788,6 +791,13 @@ async def index_codebase(
 
     from indexing.code_indexer import CodeIndexingService
 
+    meta = _create_meta()
+    if missing_sources:
+        meta = _create_degraded_meta(
+            missing_sources=missing_sources,
+            error="Some backends unavailable",
+        )
+
     indexer = CodeIndexingService(
         root_path=root_path,
         repo_id=request.repo_id,
@@ -798,17 +808,41 @@ async def index_codebase(
         include_api_boundaries=request.include_api_boundaries,
     )
 
+    if request.async_mode:
+        job_id = create_index_job(
+            repo_id=request.repo_id,
+            root_path=str(root_path),
+            index_name=request.index_name or "code",
+            meta=meta,
+        )
+        asyncio.create_task(
+            asyncio.to_thread(
+                run_index_job,
+                job_id,
+                indexer,
+                max_files=request.max_files,
+                reset=request.reset,
+                missing_sources=missing_sources,
+                meta=meta,
+            )
+        )
+        return CodeIndexResponse(
+            repo_id=request.repo_id,
+            files_indexed=0,
+            files_failed=0,
+            symbols_indexed=0,
+            documents_indexed=0,
+            call_edges_indexed=0,
+            duration_ms=0.0,
+            meta=meta,
+            job_id=job_id,
+            status="queued",
+        )
+
     summary = indexer.index_repository(
         max_files=request.max_files,
         reset=request.reset,
     )
-
-    meta = _create_meta()
-    if missing_sources:
-        meta = _create_degraded_meta(
-            missing_sources=missing_sources,
-            error="Some backends unavailable",
-        )
 
     return CodeIndexResponse(
         repo_id=summary.repo_id,
@@ -820,3 +854,18 @@ async def index_codebase(
         duration_ms=summary.duration_ms,
         meta=meta,
     )
+
+
+@router.get(
+    "/index/status/{job_id}",
+    summary="Get index job status",
+    description="Fetch status and results for a background indexing job.",
+)
+async def index_codebase_status(
+    job_id: str,
+    _: None = Depends(require_scopes(Scope.GRAPH_READ)),
+) -> Dict[str, Any]:
+    job = get_index_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    return job
