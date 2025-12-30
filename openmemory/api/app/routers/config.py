@@ -90,7 +90,17 @@ def get_default_configuration():
                 }
             },
             "vector_store": None,
-            "graph_store": None
+            "graph_store": {
+                "provider": "neo4j",
+                "config": {
+                    "url": "env:NEO4J_URL",
+                    "username": "env:NEO4J_USERNAME",
+                    "password": "env:NEO4J_PASSWORD",
+                    "database": "neo4j",
+                    "base_label": True,
+                },
+                "threshold": 0.75,
+            },
         }
     }
 

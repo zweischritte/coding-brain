@@ -15,6 +15,17 @@
                 "model": "text-embedding-3-small",
                 "api_key": "env:OPENAI_API_KEY"
             }
+        },
+        "graph_store": {
+            "provider": "neo4j",
+            "config": {
+                "url": "env:NEO4J_URL",
+                "username": "env:NEO4J_USERNAME",
+                "password": "env:NEO4J_PASSWORD",
+                "database": "neo4j",
+                "base_label": true
+            },
+            "threshold": 0.75
         }
     }
-} 
+}
