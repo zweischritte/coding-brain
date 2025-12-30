@@ -26,15 +26,15 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - Multi-user memory routing via access_entity with grant-based visibility and group-editable writes
 
 ### Search and Retrieval
-- REST search endpoints backed by OpenSearch (lexical + optional vector)
+- REST search endpoints backed by OpenSearch (lexical; semantic when clients supply query vectors)
 - Metadata-based re-ranking for memory search results
 - Graph traversal helpers for related memories and entity networks
 
 ### Code Intelligence Modules
 - Tree-sitter + SCIP indexing pipeline with CODE_* graph projection to Neo4j
 - Tri-hybrid retrieval (lexical + vector + graph) powering code search
-- Code tools (explain-code, call-graph, impact analysis, ADR automation, test generation, PR analysis)
-  are exposed via REST and MCP once indexing has been run
+- Code tools are exposed via REST (`/api/v1/code`); MCP currently exposes
+  index/search/explain/callers/callees/impact (ADR/test/pr are REST-only)
 
 ### Security, Ops, Observability
 - JWT validation with scope-based RBAC
@@ -42,7 +42,7 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - MCP SSE session binding with memory or Valkey stores
 - Health probes, circuit breakers, rate limiting, audit logging
 - Backup/export and GDPR endpoints
-- Prometheus metric helpers (mountable if you add the metrics app)
+- Prometheus metrics endpoint at `/metrics`
 
 ### Guidance
 - Separate MCP SSE endpoint for serving guidance documents on demand
@@ -120,6 +120,7 @@ If you backfill, re-sync vector and graph stores to reflect updated metadata.
 From `openmemory/docker-compose.yml`:
 - API/MCP: `http://localhost:8865` (container port 8765)
 - UI: `http://localhost:3433`
+- Docs: `http://localhost:3080/docs/`
 - PostgreSQL: `localhost:5532`
 - Valkey: `localhost:6479`
 - Qdrant HTTP: `localhost:6433` (gRPC: 6434)
@@ -304,5 +305,5 @@ Key directories:
 
 ## Next Steps
 - Add a background worker or cron for continuous code indexing
-- Wire the Prometheus `/metrics` app into the main API if you need scraping
+- Configure Prometheus to scrape `/metrics` (and secure it if needed)
 - Tune OpenSearch and Qdrant settings per workload

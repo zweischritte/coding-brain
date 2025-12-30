@@ -109,10 +109,10 @@ docker compose exec postgres pg_dump \
 # Check file exists and has reasonable size
 ls -lh ${BACKUP_DIR}/postgres/codingbrain_${TIMESTAMP}.dump
 
-# Verify backup integrity
-docker compose exec postgres pg_restore \
+# Verify backup integrity (read from host file)
+docker compose exec -T postgres pg_restore \
   --list \
-  /backups/postgres/codingbrain_${TIMESTAMP}.dump > /dev/null
+  - < ${BACKUP_DIR}/postgres/codingbrain_${TIMESTAMP}.dump > /dev/null
 echo "Backup verified: exit code $?"
 ```
 
@@ -192,7 +192,7 @@ For PITR, enable WAL archiving in postgresql.conf:
 
 ## Neo4j Backup & Restore
 
-Neo4j stores the CODE_* graph with code symbols, relationships, and cross-repository dependencies.
+Neo4j stores the OM_* memory graph plus the CODE_* code graph (if indexed), and optional business concept graphs.
 
 ### Backup Procedure
 
@@ -751,7 +751,7 @@ docker compose ps
 
 ### Automated Verification Script
 
-See `scripts/verify_backup.py` for automated nightly verification.
+This repo does not include an automated verification script. Implement your own or run the manual checks above.
 
 ---
 
@@ -774,7 +774,7 @@ docker compose exec postgres psql -U ${POSTGRES_USER} -c "
 
 ```bash
 # Verify backup
-docker compose exec postgres pg_restore --list backup.dump
+docker compose exec -T postgres pg_restore --list - < backup.dump
 # If fails, restore from older backup
 ```
 
@@ -834,7 +834,9 @@ docker compose start valkey
 
 ## Appendix: Cron Configuration
 
-### Automated Backup Crontab
+### Automated Backup Crontab (Example)
+
+# These paths/scripts are placeholders and are not included in this repo.
 
 ```bash
 # PostgreSQL every 6 hours

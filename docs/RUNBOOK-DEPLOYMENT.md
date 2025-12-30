@@ -24,6 +24,7 @@
 ## Overview
 
 This runbook documents deployment procedures for the coding-brain system using blue-green and canary strategies to enable zero-downtime deployments.
+This repo ships a single `openmemory/docker-compose.yml`; blue/green and canary examples below assume you maintain your own environment-specific compose overrides.
 
 ### Deployment Strategies
 
@@ -154,7 +155,7 @@ curl http://green.internal:8765/health/ready
 curl http://green.internal:8765/health/deps
 
 # Functional smoke tests
-./scripts/smoke-test.sh http://green.internal:8765
+API_BASE_URL=http://green.internal:8765 ./scripts/smoke_test.sh
 ```
 
 ### Step 3: Switch Traffic
@@ -374,10 +375,10 @@ docker compose exec postgres psql -U ${POSTGRES_USER} -c "SELECT version_num FRO
 
 ```bash
 # 1. Create fresh backup
-./scripts/backup_postgres.sh
+# See RUNBOOK-BACKUP-RESTORE.md
 
 # 2. Verify backup
-./scripts/verify_backup.py
+# Use the verification checklist in RUNBOOK-BACKUP-RESTORE.md
 
 # 3. Check migration status
 docker compose exec codingbrain-mcp alembic current
@@ -435,8 +436,8 @@ docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "\dt"
 | Endpoint | Purpose | Expected Response |
 |----------|---------|-------------------|
 | `/health/live` | Liveness probe | `{"status": "ok"}` |
-| `/health/ready` | Readiness probe | `{"status": "ok", "checks": {...}}` |
-| `/health/deps` | Dependency health | Status of all services |
+| `/health/ready` | Readiness probe | `{"status": "ok"|"degraded", "dependencies": {...}}` |
+| `/health/deps` | Dependency health | `{"status": "...", "dependencies": {...}}` |
 
 ### Verification Script
 
@@ -444,7 +445,7 @@ docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "\dt"
 #!/bin/bash
 # verify_health.sh
 
-HOST=${1:-http://localhost:8765}
+HOST=${1:-http://localhost:8865}
 
 echo "Checking liveness..."
 curl -sf "${HOST}/health/live" || exit 1
@@ -458,7 +459,7 @@ DEPS=$(curl -sf "${HOST}/health/deps")
 echo $DEPS | jq .
 
 # Check all deps are healthy
-UNHEALTHY=$(echo $DEPS | jq '[.checks[] | select(.status != "ok")] | length')
+UNHEALTHY=$(echo "$DEPS" | jq '[.dependencies[] | select(.status != "healthy")] | length')
 if [ "$UNHEALTHY" -gt 0 ]; then
   echo "WARNING: $UNHEALTHY unhealthy dependencies"
   exit 1
@@ -485,7 +486,7 @@ echo "All health checks passed!"
 
 ```bash
 # API smoke tests
-./scripts/smoke-test.sh http://app.example.com
+API_BASE_URL=http://app.example.com ./scripts/smoke_test.sh
 
 # Check key endpoints
 curl http://app.example.com/v1/memories
@@ -527,7 +528,7 @@ docker compose logs codingbrain-mcp
 docker stats codingbrain-mcp
 
 # Check for port conflicts
-lsof -i :8765
+lsof -i :8865
 ```
 
 ### Health Check Failing
@@ -542,7 +543,7 @@ print(f'Neo4j: {s.neo4j_url}')
 "
 
 # Test individual dependencies
-docker compose exec codingbrain-mcp curl -sf http://postgres:5432 || echo "Postgres unreachable"
+docker compose exec postgres pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} || echo "Postgres unreachable"
 ```
 
 ### High Latency After Deployment
@@ -616,8 +617,7 @@ for stat in top_stats[:10]:
 
 2. **Restore from backup**
    ```bash
-   # See RUNBOOK-BACKUP-RESTORE.md
-   ./scripts/restore_postgres.sh ${LATEST_BACKUP}
+   # See RUNBOOK-BACKUP-RESTORE.md for restore steps
    ```
 
 3. **Restart application**
@@ -660,15 +660,15 @@ STRATEGY=${2:-blue-green}  # blue-green or canary
 echo "Deploying version ${VERSION} using ${STRATEGY} strategy"
 
 # Pre-deployment checks
-./scripts/pre-deploy-check.sh
+./scripts/pre-deploy-check.sh  # Placeholder; not included in this repo
 
 # Run deployment
 case $STRATEGY in
   blue-green)
-    ./scripts/deploy-blue-green.sh $VERSION
+    ./scripts/deploy-blue-green.sh $VERSION  # Placeholder; not included in this repo
     ;;
   canary)
-    ./scripts/deploy-canary.sh $VERSION
+    ./scripts/deploy-canary.sh $VERSION  # Placeholder; not included in this repo
     ;;
   *)
     echo "Unknown strategy: $STRATEGY"
@@ -677,7 +677,7 @@ case $STRATEGY in
 esac
 
 # Post-deployment verification
-./scripts/post-deploy-verify.sh
+./scripts/post-deploy-verify.sh  # Placeholder; not included in this repo
 
 echo "Deployment complete!"
 ```

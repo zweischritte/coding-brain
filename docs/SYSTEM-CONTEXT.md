@@ -15,10 +15,11 @@ Implemented capabilities
 - Vector search via Mem0 (default Qdrant)
 - Neo4j metadata graph (OM_*), similarity edges, tag co-occurrence, typed relations, timeline queries
 - Optional business concepts extraction + concept graph and vector store
-- OpenSearch-backed memory search endpoints (lexical and hybrid)
+- OpenSearch-backed memory search endpoints (lexical; semantic when clients supply query vectors)
 - Security: JWT + scopes, optional DPoP binding, MCP SSE session binding (memory or Valkey)
 - Ops and governance: backup/export, GDPR SAR and deletion, circuit breakers, rate limiting, audit logging
-- Code intelligence modules: indexing pipeline, CODE_* graph, tri-hybrid retrieval, code tooling, cross-repo utilities, graph visualization (modules exist but are not exposed via MCP/REST by default)
+- Code intelligence: indexing pipeline + CODE_* graph, tri-hybrid retrieval, and code tools exposed via REST (`/api/v1/code`) with a smaller MCP subset (index/search/explain/callers/callees/impact)
+- Cross-repo utilities and graph visualization modules are present as libraries but are not exposed via REST/MCP
 
 Where to look in the repo
 - `openmemory/api/app` for FastAPI routes, MCP servers, security, graph ops, and stores
@@ -30,4 +31,4 @@ Where to look in the repo
 
 Notes
 - If PostgreSQL is not configured, the API falls back to a local SQLite database (`openmemory.db`) for development.
-- Prometheus metrics helpers exist but are not mounted into the main API by default.
+- Prometheus metrics endpoint is mounted at `/metrics` by default.

@@ -126,8 +126,8 @@ The MCP search tool uses Mem0 vector search and then re-ranks using metadata and
 
 The REST search endpoints use a tenant-scoped OpenSearch store:
 - Aliases isolate data per `org_id`.
-- Lexical search is available by default.
-- Semantic search is supported when a query embedding is provided.
+- `/api/v1/search` is lexical-only today (no on-the-fly embeddings).
+- `/api/v1/search/semantic` supports vector search when a `query_vector` is provided.
 
 ---
 
@@ -147,11 +147,11 @@ Business concepts are feature-flagged and use a separate MCP endpoint.
 ### 7.1 Indexing Pipeline
 
 The indexing modules provide:
-- Tree-sitter AST parsing for multiple languages
+- Tree-sitter AST parsing for Python, TypeScript/TSX, and Java
 - SCIP symbol ID normalization
-- Incremental updates using Merkle tree diffs
-- Bootstrap indexing with tiered priority queues
+- CODE_* graph projection + OpenSearch document indexing
 - API boundary detection for REST client/server links
+- Merkle tree and bootstrap/priority queue modules exist but are not wired into the indexer yet
 
 Primary modules:
 - `openmemory/api/indexing/ast_parser.py`
@@ -186,17 +186,13 @@ Default weighting in `TriHybridConfig`:
 - graph: 0.25
 
 RRF-style fusion is supported as an alternative strategy. A reranker module provides cross-encoder, Cohere, or no-op adapters.
+Reranking helpers exist in `openmemory/api/retrieval/reranker.py` but are not wired into REST/MCP yet.
 
-### 7.4 Code Intelligence Tools (Library)
+### 7.4 Code Intelligence Tools
 
-The repo includes tool modules (not wired to MCP/REST by default):
-- explain_code
-- search_code_hybrid
-- call graph traversal
-- impact analysis
-- ADR automation
-- test generation
-- PR analysis
+REST exposes `/api/v1/code` endpoints for search, explain, callers/callees, impact analysis,
+ADR automation, test generation, PR analysis, and indexing. MCP exposes index/search/explain
+plus callers/callees/impact. Other tool modules (e.g., symbol definition) remain library-only.
 
 ### 7.5 Visualization and Cross-Repo Utilities
 
@@ -210,7 +206,7 @@ The repo includes tool modules (not wired to MCP/REST by default):
 ### REST
 Key routers under `/api/v1`:
 - memories, apps, stats, config
-- search, graph, entities
+- search, graph, entities, code
 - feedback, experiments
 - backup, gdpr
 
@@ -236,7 +232,7 @@ Key routers under `/api/v1`:
 - Circuit breaker utilities for external dependencies
 - Rate limiting middleware (available but not mounted by default)
 - Audit logging for security-sensitive operations
-- Prometheus metric helpers and OpenTelemetry tracing hooks
+- Prometheus metrics endpoint at `/metrics` plus OpenTelemetry tracing hooks
 
 ---
 
@@ -265,6 +261,7 @@ Key routers under `/api/v1`:
 From `openmemory/docker-compose.yml`:
 - API/MCP: `http://localhost:8865` (container port 8765)
 - UI: `http://localhost:3433`
+- Docs: `http://localhost:3080/docs/`
 - PostgreSQL: `localhost:5532`
 - Valkey: `localhost:6479`
 - Qdrant: `localhost:6433` (gRPC 6434)

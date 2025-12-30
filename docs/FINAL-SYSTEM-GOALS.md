@@ -25,7 +25,7 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 ## 3. Code Intelligence Goals
 - Build a CODE_* graph from source code using Tree-sitter and SCIP symbols.
 - Detect API boundaries and link clients to endpoints.
-- Provide tri-hybrid retrieval (lexical + vector + graph) with optional reranking.
+- Provide tri-hybrid retrieval (lexical + vector + graph) for code search.
 - Maintain library tools for explain-code, call graph, impact analysis, ADR automation,
   test generation, and PR analysis.
 
@@ -68,6 +68,7 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 ---
 
 ## 9. Near-Term Gaps (Explicit)
-- Wire code-intelligence tools into MCP/REST so they are externally callable.
-- Mount the Prometheus `/metrics` app into the main API by default.
-- Expand REST hybrid search to include on-the-fly vector embeddings.
+- Expose remaining code-intel tools via MCP (ADR automation, test generation, PR analysis).
+- Wire incremental indexing modules (Merkle tree + bootstrap queue) into the indexer and add status endpoints.
+- Expand REST hybrid memory search to include on-the-fly query embeddings.
+- Replace CLI stubs with real API calls for search/memory/index/graph.

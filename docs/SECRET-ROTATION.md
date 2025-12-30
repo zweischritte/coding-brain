@@ -185,6 +185,9 @@ The JWT secret is used to sign authentication tokens. Rotation requires a rollin
 #### Prerequisites
 - Access to OpenSearch admin
 - Understanding that this is primarily for initial setup
+- Note: `openmemory/docker-compose.yml` disables OpenSearch security (`plugins.security.disabled=true`).
+  In that default setup, the admin password is not enforced; only rotate it if you enable security.
+  If security is disabled, skip step 2 and just update `.env` + restart.
 
 #### Procedure
 
@@ -195,7 +198,7 @@ The JWT secret is used to sign authentication tokens. Rotation requires a rollin
    # Manually add special character and ensure complexity
    ```
 
-2. **Update OpenSearch internal users**:
+2. **Update OpenSearch internal users (only if security is enabled)**:
    ```bash
    docker compose exec opensearch bash
    cd /usr/share/opensearch/plugins/opensearch-security/tools
