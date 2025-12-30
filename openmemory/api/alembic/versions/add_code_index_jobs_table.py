@@ -14,6 +14,7 @@ Adds persistent storage for code indexing jobs with:
 from typing import Sequence, Union
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -40,12 +41,14 @@ def upgrade() -> None:
         """)
 
     # Create the table
-    status_type = (
-        sa.Enum('queued', 'running', 'succeeded', 'failed', 'canceled',
-                name='codeindexjobstatus', create_type=False)
-        if conn.dialect.name == "postgresql"
-        else sa.String()
-    )
+    if conn.dialect.name == "postgresql":
+        status_type = postgresql.ENUM(
+            'queued', 'running', 'succeeded', 'failed', 'canceled',
+            name='codeindexjobstatus',
+            create_type=False,
+        )
+    else:
+        status_type = sa.String()
 
     op.create_table(
         'code_index_jobs',
