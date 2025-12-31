@@ -26,6 +26,9 @@ Prerequisites
   - scope="project"
   - artifact_type="repo"
   - artifact_ref="coding-brain"
+- For access_entity auto-resolution tests, have a user with:
+  - Exactly one grant for a shared scope (e.g., team:default_org/dev)
+  - Multiple grants for the same scope (e.g., team:default_org/dev and team:default_org/ops)
 
 ---
 
@@ -150,6 +153,73 @@ Record the memory IDs for the eight new entries.
 
 ### add_memories
 - Already exercised in the seed dataset. Confirm each response returns an ID or is visible via list_memories.
+- evidence must be a list of strings.
+- tags must be a dictionary of key/value pairs.
+- access_entity can be omitted or set to "auto" when exactly one matching grant exists.
+- If multiple matching grants exist for the scope, the response should include:
+  - code="ACCESS_ENTITY_AMBIGUOUS" with an options array.
+
+Extra add_memories cases:
+```
+add_memories(
+  text="Test evidence/tags standard format",
+  category="workflow",
+  scope="project",
+  entity="Normalization",
+  access_entity="project:default_org/coding-brain",
+  evidence=["ADR-100", "ADR-101"],
+  tags={"one": true, "two": true}
+)
+```
+
+```
+add_memories(
+  text="Auto access_entity with single team grant",
+  category="decision",
+  scope="team",
+  entity="AccessControl",
+  access_entity="auto"
+)
+```
+
+```
+add_memories(
+  text="Auto access_entity with multiple team grants",
+  category="decision",
+  scope="team",
+  entity="AccessControl",
+  access_entity="auto"
+)
+```
+Expected: error with code ACCESS_ENTITY_AMBIGUOUS and options list.
+
+Expected results (examples):
+```
+{
+  "error": "access_entity is required for scope='team'. Multiple grants available.",
+  "code": "ACCESS_ENTITY_AMBIGUOUS",
+  "options": [
+    "team:default_org/dev",
+    "team:default_org/ops"
+  ],
+  "hint": "Pick one of the available access_entity values."
+}
+```
+
+```
+{
+  "id": "<memory-id>",
+  "memory": "Test evidence/tags standard format",
+  "tags": {
+    "one": true,
+    "two": true
+  },
+  "evidence": [
+    "ADR-100",
+    "ADR-101"
+  ]
+}
+```
 
 ### list_memories
 - Verify all seed memories appear and collect IDs.
@@ -172,6 +242,15 @@ update_memory(
   add_tags={"confirmed": true}
 )
 ```
+Additional update_memory formats:
+```
+update_memory(
+  memory_id="<ADRTool-memory-id>",
+  add_tags={"priority": true, "ops": true},
+  remove_tags=["draft", "old"]
+)
+```
+Expected: tags are updated and removed as provided.
 
 ### delete_memories
 - Delete only the seed memories at the end of testing (use the IDs you collected).

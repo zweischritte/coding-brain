@@ -377,6 +377,65 @@ class TestResolveAccessEntities:
         assert "project:cloudfactory/billing" in resolved
 
 
+class TestResolveAccessEntityForScope:
+    """Tests for resolving access_entity defaults for shared scopes."""
+
+    def test_resolves_single_matching_grant(self):
+        from app.security.access import resolve_access_entity_for_scope
+
+        principal = make_principal(
+            "grischa",
+            grants={"user:grischa", "team:cloudfactory/billing"},
+        )
+
+        resolved, options = resolve_access_entity_for_scope(
+            principal=principal,
+            scope="team",
+            access_entity=None,
+        )
+
+        assert resolved == "team:cloudfactory/billing"
+        assert options == ["team:cloudfactory/billing"]
+
+    def test_returns_none_when_ambiguous(self):
+        from app.security.access import resolve_access_entity_for_scope
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/billing",
+                "team:cloudfactory/ops",
+            },
+        )
+
+        resolved, options = resolve_access_entity_for_scope(
+            principal=principal,
+            scope="team",
+            access_entity="auto",
+        )
+
+        assert resolved is None
+        assert set(options) == {
+            "team:cloudfactory/billing",
+            "team:cloudfactory/ops",
+        }
+
+    def test_user_scope_auto_defaults_to_user(self):
+        from app.security.access import resolve_access_entity_for_scope
+
+        principal = make_principal("grischa")
+
+        resolved, options = resolve_access_entity_for_scope(
+            principal=principal,
+            scope="user",
+            access_entity="auto",
+        )
+
+        assert resolved == "user:grischa"
+        assert options == ["user:grischa"]
+
+
 class TestBuildAccessFilterQuery:
     """Tests for building database queries with access_entity filtering.
 

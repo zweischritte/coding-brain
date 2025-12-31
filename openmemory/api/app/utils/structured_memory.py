@@ -162,10 +162,20 @@ def validate_entity(entity: str) -> str:
     return entity
 
 
-def validate_evidence(evidence: List[str]) -> List[str]:
-    """Validate evidence list."""
+def _split_comma_separated(value: str) -> List[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def normalize_evidence_input(evidence: Any) -> List[str]:
+    """Normalize evidence input to a list of strings."""
+    if isinstance(evidence, str):
+        evidence = _split_comma_separated(evidence)
+    elif isinstance(evidence, tuple):
+        evidence = list(evidence)
+
     if not isinstance(evidence, list):
-        raise StructuredMemoryError("Evidence must be a list")
+        raise StructuredMemoryError("Evidence must be a list or comma-separated string")
+
     cleaned = []
     for item in evidence:
         if not isinstance(item, str):
@@ -178,16 +188,61 @@ def validate_evidence(evidence: List[str]) -> List[str]:
     return cleaned
 
 
-def validate_tags(tags: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate tags dictionary."""
-    if not isinstance(tags, dict):
-        raise StructuredMemoryError("Tags must be a dictionary")
-    for key in tags.keys():
+def normalize_tags_input(tags: Any) -> Dict[str, Any]:
+    """Normalize tags input to a dictionary."""
+    if isinstance(tags, dict):
+        normalized = tags
+    elif isinstance(tags, (list, tuple)):
+        normalized = {}
+        for item in tags:
+            if not isinstance(item, str):
+                raise StructuredMemoryError(
+                    f"Tag item must be string, got {type(item).__name__}"
+                )
+            key = item.strip()
+            if key:
+                normalized[key] = True
+    else:
+        raise StructuredMemoryError("Tags must be a dictionary or list of strings")
+
+    for key in normalized.keys():
         if not isinstance(key, str):
             raise StructuredMemoryError(
                 f"Tag key must be string, got {type(key).__name__}"
             )
-    return tags
+    return normalized
+
+
+def normalize_tag_list_input(tags: Any) -> List[str]:
+    """Normalize tag list input to a list of strings."""
+    if isinstance(tags, str):
+        tags = _split_comma_separated(tags)
+    elif isinstance(tags, tuple):
+        tags = list(tags)
+
+    if not isinstance(tags, list):
+        raise StructuredMemoryError("remove_tags must be a list or comma-separated string")
+
+    cleaned = []
+    for item in tags:
+        if not isinstance(item, str):
+            raise StructuredMemoryError(
+                f"remove_tags item must be string, got {type(item).__name__}"
+            )
+        cleaned_item = item.strip()
+        if cleaned_item:
+            cleaned.append(cleaned_item)
+    return cleaned
+
+
+def validate_evidence(evidence: Any) -> List[str]:
+    """Validate evidence list."""
+    return normalize_evidence_input(evidence)
+
+
+def validate_tags(tags: Any) -> Dict[str, Any]:
+    """Validate tags dictionary."""
+    return normalize_tags_input(tags)
 
 
 def validate_access_entity(access_entity: str) -> str:

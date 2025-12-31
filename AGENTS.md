@@ -100,7 +100,7 @@ list_memories()
 update_memory(
   memory_id="<uuid>",
   text="Always run python -m pytest before merge",
-  metadata_updates={"tags": {"decision": true, "priority": "high"}}
+  add_tags={"decision": true, "priority": "high"}
 )
 ```
 
@@ -138,6 +138,7 @@ curl -X POST http://localhost:8865/api/v1/memories \
       "category": "architecture",
       "scope": "org",
       "access_entity": "org:cloudfactory",
+      "entity": "AuthModule",
       "artifact_type": "module",
       "artifact_ref": "auth/clients"
     }
@@ -166,9 +167,11 @@ Use structured metadata for precision:
 - `scope`: session | user | team | project | org | enterprise
 - `artifact_type`: repo | service | module | component | api | db | infra | file
 - `artifact_ref`: file path, module name, repo, symbol
-- `entity`: team/service/component/person
+- `entity`: team/service/component/person **(REQUIRED)**
 - `tags`: dict of key/value labels
 - `evidence`: ADR/PR/issue references
+
+**IMPORTANT**: Always include an `entity` when creating memories. The entity identifies what the memory is about (a person, team, service, component, or concept). Without an entity, the memory cannot be properly linked in the graph or discovered via entity-based queries.
 
 Prefer explicit `access_entity` for shared scopes to avoid ambiguity.
 
@@ -180,6 +183,9 @@ Code tools require indexing.
 ### Index a repo (MCP)
 ```text
 index_codebase(repo_id="my-repo", root_path="/path/to/repo", reset=true)
+index_codebase(repo_id="my-repo", root_path="/path/to/repo", reset=true, async_mode=true)
+index_codebase_status(job_id="<job-id>")
+index_codebase_cancel(job_id="<job-id>")
 ```
 
 ### Code search (REST)
@@ -192,8 +198,15 @@ curl -X POST http://localhost:8865/api/v1/code/search \
 
 ### Explain code (MCP)
 ```text
-explain_code(repo_id="my-repo", symbol="AuthMiddleware")
+explain_code(symbol_id="<symbol-id>")
 ```
+
+---
+
+## Operational Notes
+- `add_memories` supports `infer` to control LLM fact extraction; use `infer=false` to store raw text without auto-splitting.
+- `index_codebase` runs inside the MCP container; use container-visible paths (e.g., `/usr/src/coding-brain`) and ensure OpenSearch + Neo4j are up.
+- For large repos, prefer `async_mode=true` and poll `index_codebase_status`; cancel with `index_codebase_cancel`.
 
 ---
 
@@ -229,7 +242,7 @@ Use these for high-level rationale and business knowledge, not code.
 
 Example:
 ```text
-add_memories(text="Cache auth tokens for 5m", category="performance", scope="team", access_entity="team:cloudfactory/backend")
+add_memories(text="Cache auth tokens for 5m", category="performance", scope="team", entity="AuthService", access_entity="team:cloudfactory/backend")
 search_memory(query="cache auth tokens", limit=3)
 graph_related_memories(memory_id="<uuid>")
 ```

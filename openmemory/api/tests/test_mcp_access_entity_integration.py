@@ -242,7 +242,7 @@ class TestMCPAddMemoriesAccessControl:
         new_memory_id = str(uuid.uuid4())
         captured_metadata = {}
 
-        def capture_add(text, user_id, metadata):
+        def capture_add(text, user_id, metadata, **kwargs):
             captured_metadata.update(metadata)
             return {
                 "results": [
@@ -286,6 +286,109 @@ class TestMCPAddMemoriesAccessControl:
                 # Verify the captured metadata has the correct access_entity
                 assert captured_metadata.get("access_entity") == "user:grischa"
 
+        finally:
+            user_id_var.reset(user_token)
+            client_name_var.reset(client_token)
+            principal_var.reset(principal_token)
+
+    @pytest.mark.asyncio
+    async def test_add_memory_defaults_to_single_team_grant(self):
+        """Memory without access_entity uses the single matching team grant."""
+        from app.mcp_server import (
+            add_memories, principal_var, user_id_var, client_name_var
+        )
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/backend",
+            },
+        )
+        mock_user = make_mock_user()
+        mock_app = make_mock_app()
+
+        mock_memory_client = MagicMock()
+        new_memory_id = str(uuid.uuid4())
+        captured_metadata = {}
+
+        def capture_add(text, user_id, metadata, **kwargs):
+            captured_metadata.update(metadata)
+            return {
+                "results": [
+                    {"id": new_memory_id, "event": "ADD", "memory": text}
+                ]
+            }
+
+        mock_memory_client.add.side_effect = capture_add
+
+        user_token = user_id_var.set("grischa")
+        client_token = client_name_var.set("test-app")
+        principal_token = principal_var.set(principal)
+
+        try:
+            with patch("app.mcp_server.SessionLocal") as mock_session_local, \
+                 patch("app.mcp_server.get_memory_client_safe", return_value=mock_memory_client), \
+                 patch("app.mcp_server.get_user_and_app", return_value=(mock_user, mock_app)), \
+                 patch("app.mcp_server.project_memory_to_graph"), \
+                 patch("app.mcp_server.update_entity_edges_on_memory_add"), \
+                 patch("app.mcp_server.update_tag_edges_on_memory_add"), \
+                 patch("app.mcp_server.project_similarity_edges_for_memory"), \
+                 patch("app.mcp_server.bridge_entities_to_om_graph"):
+
+                mock_db = MagicMock()
+                mock_session_local.return_value = mock_db
+                mock_db.query.return_value.filter.return_value.first.return_value = None
+
+                result = await add_memories(
+                    text="Test team memory",
+                    category="decision",
+                    scope="team",
+                )
+
+                response = json.loads(result)
+                assert "error" not in response, f"Unexpected error: {response.get('error')}"
+                assert captured_metadata.get("access_entity") == "team:cloudfactory/backend"
+
+        finally:
+            user_id_var.reset(user_token)
+            client_name_var.reset(client_token)
+            principal_var.reset(principal_token)
+
+    @pytest.mark.asyncio
+    async def test_add_memory_auto_with_multiple_grants_returns_options(self):
+        """access_entity=auto with multiple grants should return options."""
+        from app.mcp_server import (
+            add_memories, principal_var, user_id_var, client_name_var
+        )
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/backend",
+                "team:cloudfactory/ops",
+            },
+        )
+
+        user_token = user_id_var.set("grischa")
+        client_token = client_name_var.set("test-app")
+        principal_token = principal_var.set(principal)
+
+        try:
+            result = await add_memories(
+                text="Test team memory",
+                category="decision",
+                scope="team",
+                access_entity="auto",
+            )
+
+            response = json.loads(result)
+            assert response.get("code") == "ACCESS_ENTITY_AMBIGUOUS"
+            assert set(response.get("options", [])) == {
+                "team:cloudfactory/backend",
+                "team:cloudfactory/ops",
+            }
         finally:
             user_id_var.reset(user_token)
             client_name_var.reset(client_token)

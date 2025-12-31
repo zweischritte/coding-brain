@@ -38,6 +38,20 @@ def test_build_structured_memory_validates():
     assert metadata["tags"] == {"rollout": True}
 
 
+def test_build_structured_memory_accepts_evidence_string_and_tags_list():
+    text, metadata = build_structured_memory(
+        text="Rotate API keys quarterly",
+        category="security",
+        scope="user",
+        evidence="ADR-201, ADR-202",
+        tags=["rotation", "ops"],
+    )
+
+    assert text == "Rotate API keys quarterly"
+    assert metadata["evidence"] == ["ADR-201", "ADR-202"]
+    assert metadata["tags"] == {"rotation": True, "ops": True}
+
+
 def test_normalize_metadata_requires_category_and_scope():
     with pytest.raises(StructuredMemoryError):
         normalize_metadata_for_create({"scope": "user"})
@@ -71,6 +85,18 @@ def test_normalize_metadata_validates_and_preserves_extras():
     assert "src" not in metadata
 
 
+def test_normalize_metadata_accepts_evidence_string_and_tags_list():
+    metadata = normalize_metadata_for_create({
+        "category": "workflow",
+        "scope": "user",
+        "evidence": "PR-77",
+        "tags": ["automation", "ci"],
+    })
+
+    assert metadata["evidence"] == ["PR-77"]
+    assert metadata["tags"] == {"automation": True, "ci": True}
+
+
 def test_validate_update_fields_only_returns_passed_values():
     validated = validate_update_fields(
         category="workflow",
@@ -84,6 +110,13 @@ def test_validate_update_fields_only_returns_passed_values():
         "artifact_type": "module",
         "artifact_ref": "payments/core.py",
     }
+
+
+def test_validate_update_fields_accepts_evidence_string():
+    validated = validate_update_fields(
+        evidence="ADR-999",
+    )
+    assert validated == {"evidence": ["ADR-999"]}
 
 
 def test_apply_metadata_updates_merges_tags():

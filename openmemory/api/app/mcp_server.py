@@ -32,6 +32,9 @@ from app.utils.structured_memory import (
     apply_metadata_updates,
     validate_text,
     StructuredMemoryError,
+    normalize_tags_input,
+    normalize_tag_list_input,
+    SHARED_SCOPES,
 )
 from app.utils.reranking import (
     SearchContext,
@@ -51,6 +54,7 @@ from app.utils.db import get_user_and_app
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
 from app.indexing_jobs import create_index_job, get_index_job, run_index_job
+from app.security.access import resolve_access_entity_for_scope
 from app.graph.graph_ops import (
     project_memory_to_graph,
     delete_memory_from_graph,
@@ -429,6 +433,34 @@ def _get_accessible_memories(db, principal: "Principal | None", user, app, inclu
 
     return [memory for memory in memories if check_memory_access_permissions(db, memory, app.id)]
 
+
+def _structured_memory_hint(message: str) -> str | None:
+    if "access_entity is required for scope" in message:
+        return (
+            "Provide access_entity that matches the scope (team:<org>/<team>, "
+            "project:<org>/<path>, org:<org>)."
+        )
+    if "Scope/access_entity mismatch" in message:
+        return "Make access_entity prefix match scope (user:, team:, project:, org:)."
+    if "Invalid access_entity format" in message:
+        return "Use <prefix>:<value> (e.g., user:alice, team:org/team)."
+    if "Tags must be a dictionary" in message:
+        return "Pass tags as a dict or list of strings (e.g., tags={\"priority\": \"high\"})."
+    if "Evidence must be a list" in message:
+        return "Pass evidence as a list of strings or a comma-separated string."
+    if "remove_tags must be a list" in message:
+        return "Pass remove_tags as a list of strings or a comma-separated string."
+    return None
+
+
+def _format_structured_memory_error(error: StructuredMemoryError) -> dict:
+    message = str(error)
+    payload = {"error": message}
+    hint = _structured_memory_hint(message)
+    if hint:
+        payload["hint"] = hint
+    return payload
+
 @mcp.tool(description="""Add a new memory with structured parameters.
 
 Required:
@@ -441,11 +473,12 @@ Optional metadata:
 - artifact_ref: reference string (repo name, file path, symbol, service)
 - entity: team/service/component/person
 - source: user (default) or inference
-- evidence: List of ADR/PR/issue refs
-- tags: Dict with string keys
+- evidence: List of ADR/PR/issue refs (or comma-separated string)
+- tags: Dict with string keys (or list of strings)
 - access_entity: Access control entity (required for shared scopes: team, project, org, enterprise)
   Format: <prefix>:<value> where prefix is user, team, project, or org
   Examples: user:grischa, team:cloudfactory/acme/billing/backend, org:cloudfactory
+  You may pass access_entity="auto" (or omit it) to default when exactly one matching grant exists.
 - infer: If true, use LLM extraction to infer memories (default: false)
 
 Examples:
@@ -478,12 +511,31 @@ async def add_memories(
     if not client_name:
         return json.dumps({"error": "client_name not provided"})
 
+    principal = principal_var.get(None)
+    if access_entity == "auto":
+        access_entity = None
+
+    if principal and (access_entity is None):
+        resolved_access_entity, options = resolve_access_entity_for_scope(
+            principal=principal,
+            scope=scope,
+            access_entity=access_entity,
+        )
+        if resolved_access_entity:
+            access_entity = resolved_access_entity
+        elif scope in SHARED_SCOPES and options:
+            return json.dumps({
+                "error": f"access_entity is required for scope='{scope}'. Multiple grants available.",
+                "code": "ACCESS_ENTITY_AMBIGUOUS",
+                "options": options,
+                "hint": "Pick one of the available access_entity values.",
+            })
+
     # Default access_entity to user:<uid> for personal scopes
     if access_entity is None and scope in ("user", "session"):
         access_entity = f"user:{uid}"
 
     # Access control check: verify principal can create memory with this access_entity
-    principal = principal_var.get(None)
     if principal and access_entity:
         from app.security.access import check_create_access
         if not check_create_access(principal, access_entity):
@@ -507,7 +559,7 @@ async def add_memories(
             tags=tags,
         )
     except StructuredMemoryError as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps(_format_structured_memory_error(e))
 
     combined_metadata = {
         "source_app": "openmemory",
@@ -1956,8 +2008,8 @@ Optional metadata:
 - evidence: List of evidence items
 
 Tag operations:
-- add_tags: Dict of tags to add/update
-- remove_tags: List of tag keys to remove
+- add_tags: Dict of tags to add/update (or list of strings)
+- remove_tags: List of tag keys to remove (or comma-separated string)
 
 Maintenance mode:
 - preserve_timestamps: If true, don't update updated_at (for migrations/fixes)
@@ -2015,14 +2067,24 @@ async def update_memory(
             evidence=evidence,
         )
     except StructuredMemoryError as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps(_format_structured_memory_error(e))
 
     content_text = None
     if text is not None:
         try:
             content_text = validate_text(text)
         except StructuredMemoryError as e:
-            return json.dumps({"error": str(e)})
+            return json.dumps(_format_structured_memory_error(e))
+
+    try:
+        normalized_add_tags = (
+            normalize_tags_input(add_tags) if add_tags is not None else None
+        )
+        normalized_remove_tags = (
+            normalize_tag_list_input(remove_tags) if remove_tags is not None else None
+        )
+    except StructuredMemoryError as e:
+        return json.dumps(_format_structured_memory_error(e))
 
     try:
         db = SessionLocal()
@@ -2070,8 +2132,8 @@ async def update_memory(
             updated_metadata = apply_metadata_updates(
                 current_metadata=current_metadata,
                 validated_fields=validated_fields,
-                add_tags=add_tags,
-                remove_tags=remove_tags,
+                add_tags=normalized_add_tags,
+                remove_tags=normalized_remove_tags,
             )
 
             # Update content if provided
@@ -2106,8 +2168,8 @@ async def update_memory(
                         list(validated_fields.keys())
                         + (["text"] if content_text is not None else [])
                     ),
-                    "add_tags": add_tags,
-                    "remove_tags": remove_tags,
+                    "add_tags": normalized_add_tags,
+                    "remove_tags": normalized_remove_tags,
                     "preserve_timestamps": preserve_timestamps,
                 },
             )
@@ -2138,7 +2200,7 @@ async def update_memory(
             if validated_fields:
                 response["fields_updated"] = list(validated_fields.keys())
 
-            if add_tags or remove_tags:
+            if normalized_add_tags or normalized_remove_tags:
                 response["current_tags"] = updated_metadata.get("tags", {})
 
             return json.dumps(response)

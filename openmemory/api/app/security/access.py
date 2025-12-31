@@ -5,9 +5,10 @@ Provides helpers for resolving and checking access_entity values
 based on Principal grants.
 """
 
-from typing import Set
+from typing import Set, Tuple, List, Optional
 
 from .types import Principal
+from app.utils.structured_memory import SCOPE_TO_ACCESS_ENTITY_PREFIX
 
 
 def resolve_access_entities(principal: Principal) -> Set[str]:
@@ -65,6 +66,41 @@ def get_default_access_entity(principal: Principal) -> str:
         The user:<user_id> access_entity
     """
     return f"user:{principal.user_id}"
+
+
+def resolve_access_entity_for_scope(
+    principal: Principal,
+    scope: str,
+    access_entity: Optional[str],
+) -> Tuple[Optional[str], List[str]]:
+    """Resolve access_entity for a scope when omitted or set to "auto".
+
+    Returns (resolved_access_entity, options). If resolution is ambiguous,
+    resolved_access_entity is None and options contains the candidates.
+    """
+    if access_entity and access_entity != "auto":
+        return access_entity, []
+
+    if scope in ("user", "session"):
+        user_access = get_default_access_entity(principal)
+        return user_access, [user_access]
+
+    expected_prefix = SCOPE_TO_ACCESS_ENTITY_PREFIX.get(scope)
+    if not expected_prefix:
+        return access_entity, []
+
+    candidates = sorted(
+        {
+            grant
+            for grant in principal.claims.grants
+            if grant.startswith(f"{expected_prefix}:")
+        }
+    )
+
+    if len(candidates) == 1:
+        return candidates[0], candidates
+
+    return None, candidates
 
 
 def build_access_entity_patterns(principal: Principal) -> tuple[list[str], list[str]]:

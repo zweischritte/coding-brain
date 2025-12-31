@@ -24,13 +24,16 @@ from app.security.access import (
     build_access_entity_patterns,
     check_create_access,
     get_default_access_entity,
+    resolve_access_entity_for_scope,
 )
 from app.utils.structured_memory import (
     StructuredMemoryError,
     apply_metadata_updates,
     normalize_metadata_for_create,
+    SHARED_SCOPES,
     validate_text,
     validate_update_fields,
+    validate_scope,
 )
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
@@ -302,9 +305,42 @@ async def create_memory(
     # Log what we're about to do
     logging.info(f"Creating memory for user_id: {principal.user_id} with app: {request.app}")
     
+    raw_metadata = dict(request.metadata or {})
+    access_entity_input = raw_metadata.get("access_entity")
+    scope_input = raw_metadata.get("scope")
+
+    if access_entity_input == "auto":
+        raw_metadata.pop("access_entity", None)
+        access_entity_input = None
+
+    scope_value = None
+    if scope_input is not None:
+        try:
+            scope_value = validate_scope(scope_input)
+        except StructuredMemoryError:
+            scope_value = None
+
+    if scope_value and access_entity_input is None:
+        resolved_access_entity, options = resolve_access_entity_for_scope(
+            principal=principal,
+            scope=scope_value,
+            access_entity=access_entity_input,
+        )
+        if resolved_access_entity:
+            raw_metadata["access_entity"] = resolved_access_entity
+        elif scope_value in SHARED_SCOPES and options:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"access_entity is required for scope='{scope_value}'. Multiple grants available.",
+                    "code": "ACCESS_ENTITY_AMBIGUOUS",
+                    "options": options,
+                },
+            )
+
     try:
         clean_text = validate_text(request.text)
-        normalized_metadata = normalize_metadata_for_create(request.metadata)
+        normalized_metadata = normalize_metadata_for_create(raw_metadata)
     except StructuredMemoryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

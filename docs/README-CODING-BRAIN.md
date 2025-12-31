@@ -70,6 +70,11 @@ JWT grants drive access, with hierarchical expansion:
 - `team:X` grants only that team
 - `user:X` grants only that user
 
+### Defaults and Auto-Resolution
+- Personal scopes (`user`, `session`) default to `user:<sub>` if `access_entity` is omitted.
+- For shared scopes, `access_entity="auto"` (or omitted) will default **only** when there is exactly one matching grant.
+- If multiple matching grants exist, the request is rejected with an ambiguity error and options list.
+
 ### Behavior by Surface
 - REST list/filter/related/search use `access_entity` (not creator `user_id`)
 - MCP search/list/update/delete use `access_entity` (group-editable policy)
