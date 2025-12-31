@@ -195,3 +195,5 @@ testing.ipynb
 
 # Neo4j local installation
 # neo4j/
+.gemini/settings.json
+.history/
