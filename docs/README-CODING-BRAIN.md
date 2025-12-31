@@ -197,6 +197,25 @@ MCP:
 index_codebase(repo_id="my-repo", root_path="/path/to/repo", reset=true)
 ```
 
+Async indexing (recommended for large repos):
+```text
+index_codebase(repo_id="my-repo", root_path="/path/to/repo", reset=true, async_mode=true)
+index_codebase_status(job_id="<job-id>")
+index_codebase_cancel(job_id="<job-id>")
+```
+
+REST job status and listing:
+```bash
+curl -X GET http://localhost:8865/api/v1/code/index/status/<job-id> \
+  -H "Authorization: Bearer <your-jwt-token>"
+curl -X GET "http://localhost:8865/api/v1/code/index/jobs?repo_id=my-repo&status=running&limit=10" \
+  -H "Authorization: Bearer <your-jwt-token>"
+```
+
+Additional test ideas:
+- Force behavior: start an async job, then start a second with `force=true`; the first should become canceled.
+- Queue saturation: set `MAX_QUEUED_JOBS=1` and verify the second enqueue returns 429.
+
 ---
 
 ## MCP Endpoints

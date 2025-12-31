@@ -11,9 +11,16 @@ Prerequisites
   - memories:write, memories:read
   - search:read
   - graph:read, graph:write
+- Optional (for access control checks):
+  - admin:read, admin:write
+- Neo4j database configured:
+  - `NEO4J_DATABASE=neo4j` if your mem0 graph store uses `env:NEO4J_DATABASE` in config.
+- Code intelligence backends running (for Sections 4–5):
+  - OpenSearch (search), Neo4j (graph), and embedding provider (Ollama/OpenAI) if vector search is enabled.
 - Repo path and repo_id known:
   - repo_id: coding-brain
-  - root_path: /Users/grischadallmer/git/coding-brain
+  - root_path (docker-compose): /usr/src/coding-brain
+  - root_path (local dev): /Users/grischadallmer/git/coding-brain
 - Default access_entity for this repo:
   - access_entity="project:default_org/coding-brain"
   - scope="project"
@@ -264,9 +271,25 @@ Expected: similar duplicate detection with semantic matching.
 
 ### index_codebase
 ```
-index_codebase(repo_id="coding-brain", root_path="/Users/grischadallmer/git/coding-brain", reset=true)
+index_codebase(repo_id="coding-brain", root_path="/usr/src/coding-brain", reset=true)
 ```
 Expected: non-zero counts for files_indexed and symbols_indexed if indexing is configured.
+
+If indexing times out, run in async mode and poll status:
+```
+index_codebase(repo_id="coding-brain", root_path="/usr/src/coding-brain", reset=true, async_mode=true)
+index_codebase_status(job_id="<job-id>")
+```
+Expected: status transitions (queued -> running -> succeeded/failed) and progress fields.
+
+### index_codebase_cancel
+Start a new async job and request cancellation:
+```
+index_codebase(repo_id="coding-brain", root_path="/usr/src/coding-brain", reset=true, async_mode=true)
+index_codebase_cancel(job_id="<job-id>")
+index_codebase_status(job_id="<job-id>")
+```
+Expected: cancel_requested immediately; status eventually becomes canceled.
 
 ### search_code_hybrid
 ```
@@ -340,3 +363,31 @@ Expected: summary and issues lists, meta.request_id.
 - Prefer delete_memories for only the seed dataset. Use delete_all_memories only in disposable test environments.
 - Re-run list_memories to confirm cleanup.
 
+---
+
+## 7) Optional Access Control Checks
+Only run if you can authenticate as two different users.
+
+### Job ownership checks
+1) User A starts an async indexing job.
+2) User B calls index_codebase_status(job_id="<job-id>") and index_codebase_cancel(job_id="<job-id>").
+Expected: Access denied unless User B has admin:read/admin:write.
+
+---
+
+## 8) Optional Indexing Job Tests (REST + Queue)
+
+### REST job listing
+```
+GET /api/v1/code/index/jobs?repo_id=coding-brain&status=running&limit=10
+```
+Expected: only running jobs for the repo, count matches list length.
+
+### force=true behavior
+1) Start an async job.
+2) Start a second job with `force=true`.
+Expected: the first job becomes cancel_requested/canceled; the second job is queued.
+
+### Queue saturation
+Set `MAX_QUEUED_JOBS=1` and create two async jobs quickly.
+Expected: the second request fails with HTTP 429 (QueueFullError).
