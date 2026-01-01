@@ -236,6 +236,12 @@ Install for a local MCP client:
 npx @openmemory/install local http://localhost:8865/mcp/<client>/sse/<user_id> --client <client>
 ```
 
+Auth/debug helper (MCP):
+```text
+whoami()
+```
+Returns the current MCP auth context (user_id, org_id, scopes, grants, client_name).
+
 ### Claude Code Configuration
 
 On macOS, Claude Code stores MCP settings in `~/.claude.json`. Add the following to connect to Coding Brain:

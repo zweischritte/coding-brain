@@ -434,6 +434,41 @@ def _get_accessible_memories(db, principal: "Principal | None", user, app, inclu
     return [memory for memory in memories if check_memory_access_permissions(db, memory, app.id)]
 
 
+def _grant_matches_access_entity(grant: str, access_entity: str) -> bool:
+    if not grant or ":" not in grant or not access_entity or ":" not in access_entity:
+        return False
+
+    grant_prefix, grant_path = grant.split(":", 1)
+    access_prefix, access_path = access_entity.split(":", 1)
+
+    if grant_prefix == "user":
+        return access_prefix == "user" and access_path == grant_path
+
+    if grant_prefix == "team":
+        return access_prefix == "team" and access_path == grant_path
+
+    if grant_prefix == "project":
+        if access_prefix == "project" and access_path == grant_path:
+            return True
+        return access_prefix == "team" and access_path.startswith(f"{grant_path}/")
+
+    if grant_prefix == "org":
+        if access_prefix == "org" and access_path == grant_path:
+            return True
+        return access_prefix in ("project", "team") and access_path.startswith(f"{grant_path}/")
+
+    return False
+
+
+def _matching_grants_for_access_entity(principal: "Principal", access_entity: str) -> list[str]:
+    grants = set(principal.claims.grants)
+    grants.add(f"user:{principal.user_id}")
+    return [
+        grant for grant in sorted(grants)
+        if _grant_matches_access_entity(grant, access_entity)
+    ]
+
+
 def _structured_memory_hint(message: str) -> str | None:
     if "access_entity is required for scope" in message:
         return (
@@ -460,6 +495,48 @@ def _format_structured_memory_error(error: StructuredMemoryError) -> dict:
     if hint:
         payload["hint"] = hint
     return payload
+
+
+@mcp.tool(description="""Return the current auth context for this MCP session.
+
+Returns:
+- user_id: JWT subject (user id)
+- org_id: Organization id from the token
+- client_name: MCP client name from the session
+- scopes: Granted OAuth scopes
+- grants: access_entity grants (includes user:<sub>)
+- security_enabled: Whether auth is enforced
+""")
+async def whoami() -> str:
+    principal = principal_var.get(None)
+    uid = user_id_var.get(None)
+    client_name = client_name_var.get(None)
+    org_id = org_id_var.get(None)
+
+    if HAS_SECURITY and not principal:
+        return json.dumps({
+            "error": "Authentication required",
+            "code": "MISSING_AUTH",
+        })
+
+    scopes = []
+    grants = []
+    if principal and principal.claims:
+        scopes = sorted(list(principal.claims.scopes))
+        grants = sorted(list(principal.claims.grants))
+        uid = principal.user_id or uid
+        org_id = principal.org_id or org_id
+
+    return json.dumps(
+        {
+            "user_id": uid,
+            "org_id": org_id,
+            "client_name": client_name,
+            "scopes": scopes,
+            "grants": grants,
+            "security_enabled": HAS_SECURITY,
+        }
+    )
 
 @mcp.tool(description="""Add a new memory with structured parameters.
 
@@ -786,9 +863,11 @@ Returns lean JSON optimized for LLM processing:
 - results[].artifact_type: repo | service | module | component | api | db | infra | file
 - results[].artifact_ref: reference string (if present)
 - results[].entity: team/service/component/person (if present)
+- results[].access_entity: ACL identifier (e.g., "org:cloudfactory", "team:acme/backend")
 - results[].tags: Qualitative info (if present)
 - results[].created_at: Berlin time (Europe/Berlin)
 - results[].updated_at: Berlin time (if present)
+- results[].visibility_reason: (verbose only) Which grants matched for access
 
 Examples:
 - Core pattern search (no recency bias):
@@ -1119,9 +1198,11 @@ async def search_memory(
 
                 final_score = calculate_final_score(semantic_score, boost)
 
-                results.append({
+                access_entity = metadata.get("access_entity")
+                result_entry = {
                     "id": memory_id,
                     "memory": payload.get("data"),
+                    "access_entity": access_entity,
                     "scores": {
                         "semantic": round(semantic_score, 4),
                         "boost": round(boost, 4),
@@ -1136,10 +1217,19 @@ async def search_memory(
                         "evidence": metadata.get("evidence"),
                         "tags": stored_tags,
                         "entity": metadata.get("entity"),
+                        "access_entity": access_entity,
                     },
                     "created_at": payload.get("created_at"),
                     "updated_at": payload.get("updated_at"),
-                })
+                }
+
+                if verbose and principal and access_entity:
+                    result_entry["visibility_reason"] = {
+                        "access_entity": access_entity,
+                        "matched_grants": _matching_grants_for_access_entity(principal, access_entity),
+                    }
+
+                results.append(result_entry)
 
             # =========================================================
             # PHASE 2 (continued): RRF Fusion
@@ -1183,10 +1273,12 @@ async def search_memory(
                         for fr in fused_results:
                             if fr.memory_id in graph_only_ids:
                                 gp = graph_payload_map.get(fr.memory_id, {})
+                                access_entity = gp.get("access_entity")
                                 # Create result entry for graph-only hit
-                                results_by_id[fr.memory_id] = {
+                                graph_entry = {
                                     "id": fr.memory_id,
                                     "memory": gp.get("content"),
+                                    "access_entity": access_entity,
                                     "scores": {
                                         "semantic": 0.0,  # No vector score
                                         "boost": 0.0,
@@ -1203,6 +1295,7 @@ async def search_memory(
                                         "evidence": gp.get("evidence"),
                                         "tags": {},
                                         "entity": None,
+                                        "access_entity": access_entity,
                                     },
                                     "created_at": None,
                                     "updated_at": None,
@@ -1212,6 +1305,12 @@ async def search_memory(
                                         "avg_similarity": gp.get("avgSimilarity"),
                                     },
                                 }
+                                if verbose and principal and access_entity:
+                                    graph_entry["visibility_reason"] = {
+                                        "access_entity": access_entity,
+                                        "matched_grants": _matching_grants_for_access_entity(principal, access_entity),
+                                    }
+                                results_by_id[fr.memory_id] = graph_entry
 
                     # Re-order results by RRF score
                     reordered = []
@@ -1718,6 +1817,7 @@ Returns lean JSON optimized for LLM processing:
 - artifact_type: repo | service | module | component | api | db | infra | file
 - artifact_ref: reference string (if present)
 - entity: team/service/component/person (if present)
+- access_entity: ACL identifier (e.g., "org:cloudfactory", "team:acme/backend")
 - tags: Qualitative info (if present)
 - created_at: Berlin time (Europe/Berlin)
 - updated_at: Berlin time (if present)
@@ -1756,6 +1856,7 @@ async def list_memories() -> str:
                         "artifact_type": md.get("artifact_type"),
                         "artifact_ref": md.get("artifact_ref"),
                         "entity": md.get("entity"),
+                        "access_entity": md.get("access_entity"),
                         "source": md.get("source"),
                         "evidence": md.get("evidence"),
                         "tags": md.get("tags"),

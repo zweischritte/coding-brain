@@ -161,6 +161,12 @@ def format_memory_result(
     if tags and isinstance(tags, dict) and len(tags) > 0:
         formatted["tags"] = tags
 
+    # Access entity (always included for visibility auditing)
+    access_entity = metadata.get("access_entity")
+    if access_entity is None:
+        access_entity = result.get("access_entity")
+    formatted["access_entity"] = access_entity
+
     # Timestamps (formatted to Berlin time)
     created_at = result.get("created_at")
     if created_at:
@@ -331,6 +337,9 @@ def format_add_memory_result(
     evidence = structured_metadata.get("evidence")
     if evidence:
         formatted["evidence"] = evidence
+
+    # Access entity (confirm what was set for auditing)
+    formatted["access_entity"] = structured_metadata.get("access_entity")
 
     # Created_at (always included to confirm successful storage)
     if created_at:

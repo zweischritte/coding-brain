@@ -539,6 +539,81 @@ class TestMCPSearchMemoryAccessControl:
             principal_var.reset(principal_token)
 
     @pytest.mark.asyncio
+    async def test_search_includes_access_entity_and_visibility_reason_verbose(self):
+        """Verbose search results include access_entity and visibility_reason."""
+        from app.mcp_server import (
+            search_memory, principal_var, user_id_var, client_name_var
+        )
+
+        principal = make_principal(
+            "grischa",
+            grants={
+                "user:grischa",
+                "team:cloudfactory/backend",
+            }
+        )
+        mock_user = make_mock_user()
+        mock_app = make_mock_app()
+
+        memory_id = uuid.uuid4()
+        memory = make_mock_memory(
+            memory_id, "Team backend memory", "team:cloudfactory/backend"
+        )
+
+        mock_memory_client = MagicMock()
+        mock_memory_client.embedding_model.embed.return_value = [0.1] * 1536
+
+        hit = MagicMock()
+        hit.id = memory.id
+        hit.score = 0.9
+        hit.payload = {
+            "data": memory.content,
+            "category": memory.metadata_.get("category"),
+            "scope": memory.metadata_.get("scope"),
+            "access_entity": memory.metadata_.get("access_entity"),
+            "created_at": "2025-12-05T10:00:00+00:00",
+        }
+        mock_memory_client.vector_store.search.return_value = [hit]
+
+        user_token = user_id_var.set("grischa")
+        client_token = client_name_var.set("test-app")
+        principal_token = principal_var.set(principal)
+
+        try:
+            with patch("app.mcp_server.SessionLocal") as mock_session_local, \
+                 patch("app.mcp_server.get_memory_client_safe", return_value=mock_memory_client), \
+                 patch("app.mcp_server.get_user_and_app", return_value=(mock_user, mock_app)), \
+                 patch("app.mcp_server.check_memory_access_permissions", return_value=True), \
+                 patch("app.mcp_server.is_graph_enabled", return_value=False):
+
+                mock_db = MagicMock()
+                mock_session_local.return_value = mock_db
+                configure_query_mock(mock_db, all_results=[memory])
+
+                result = await search_memory(
+                    query="backend",
+                    limit=10,
+                    verbose=True,
+                )
+
+                response = json.loads(result)
+                results = response.get("results", [])
+
+                assert results, "Expected at least one search result"
+                first = results[0]
+                assert first.get("access_entity") == "team:cloudfactory/backend"
+
+                visibility_reason = first.get("visibility_reason")
+                assert visibility_reason is not None
+                assert visibility_reason.get("access_entity") == "team:cloudfactory/backend"
+                assert "team:cloudfactory/backend" in visibility_reason.get("matched_grants", [])
+
+        finally:
+            user_id_var.reset(user_token)
+            client_name_var.reset(client_token)
+            principal_var.reset(principal_token)
+
+    @pytest.mark.asyncio
     async def test_search_with_org_grant_includes_child_scopes(self):
         """Org grant expands to include projects/teams."""
         from app.mcp_server import (
@@ -1205,6 +1280,15 @@ class TestMCPListMemoriesAccessControl:
 
                 # Frontend memory should be excluded
                 assert str(memory3_id) not in result_ids
+                expected_access = {
+                    str(memory1_id): "user:grischa",
+                    str(memory2_id): "team:cloudfactory/backend",
+                }
+                for item in results:
+                    memory_id = str(item.get("id"))
+                    if memory_id in expected_access:
+                        assert "access_entity" in item
+                        assert item.get("access_entity") == expected_access[memory_id]
 
         finally:
             user_id_var.reset(user_token)

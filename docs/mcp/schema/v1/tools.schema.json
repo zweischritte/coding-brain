@@ -915,6 +915,35 @@
       "required": ["memory_id"],
       "additionalProperties": false
     },
+    "MemoryResult": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "memory": { "type": "string" },
+        "score": { "type": "number" },
+        "category": { "type": "string" },
+        "scope": { "type": "string" },
+        "artifact_type": { "type": "string" },
+        "artifact_ref": { "type": "string" },
+        "entity": { "type": "string" },
+        "tags": { "type": "object" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" },
+        "access_entity": {
+          "type": ["string", "null"],
+          "description": "ACL identifier controlling visibility (e.g., 'org:cloudfactory', 'team:acme/backend')"
+        },
+        "visibility_reason": {
+          "type": "object",
+          "description": "Present in verbose mode only. Shows which grants matched.",
+          "properties": {
+            "access_entity": { "type": "string" },
+            "matched_grants": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "additionalProperties": true
+    },
     "AddMemoryTool": {
       "type": "object",
       "properties": {
@@ -937,7 +966,7 @@
     "SearchMemoriesOutput": {
       "type": "object",
       "properties": {
-        "results": { "type": "array", "items": { "type": "object" } },
+        "results": { "type": "array", "items": { "$ref": "#/$defs/MemoryResult" } },
         "meta": { "$ref": "#/$defs/ResponseMeta" }
       },
       "required": ["results", "meta"],
