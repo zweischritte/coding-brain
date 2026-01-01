@@ -25,6 +25,14 @@ class EmbedderConfig(BaseModel):
     model: str = Field(..., description="Embedder model name")
     api_key: Optional[str] = Field(None, description="API key or 'env:API_KEY' to use environment variable")
     ollama_base_url: Optional[str] = Field(None, description="Base URL for Ollama server (e.g., http://host.docker.internal:11434)")
+    embedding_dims: Optional[int] = Field(
+        None,
+        description="Embedding dimensionality (e.g., 1536)"
+    )
+    output_dimensionality: Optional[int] = Field(
+        None,
+        description="Gemini output dimensionality override (optional)"
+    )
 
 class EmbedderProvider(BaseModel):
     provider: str = Field(..., description="Embedder provider name")

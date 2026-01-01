@@ -98,6 +98,7 @@ export function FormView({ settings, onChange }: FormViewProps) {
   const needsEmbedderApiKey = settings.mem0?.embedder?.provider?.toLowerCase() !== "ollama"
   const isLlmOllama = settings.mem0?.llm?.provider?.toLowerCase() === "ollama"
   const isEmbedderOllama = settings.mem0?.embedder?.provider?.toLowerCase() === "ollama"
+  const isEmbedderGemini = settings.mem0?.embedder?.provider?.toLowerCase() === "gemini"
 
   const LLM_PROVIDERS = {
     "OpenAI": "openai",
@@ -304,6 +305,27 @@ export function FormView({ settings, onChange }: FormViewProps) {
               onChange={(e) => handleEmbedderConfigChange("model", e.target.value)}
             />
           </div>
+
+          {isEmbedderGemini && (
+            <div className="space-y-2">
+              <Label htmlFor="embedder-dimensions">Embedding Dimensions</Label>
+              <Input
+                id="embedder-dimensions"
+                type="number"
+                placeholder="1536"
+                value={settings.mem0?.embedder?.config?.embedding_dims ?? ""}
+                onChange={(e) =>
+                  handleEmbedderConfigChange(
+                    "embedding_dims",
+                    Number.parseInt(e.target.value) || ""
+                  )
+                }
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Set to 1536 to match the existing vector store dimensions.
+              </p>
+            </div>
+          )}
 
           {isEmbedderOllama && (
             <div className="space-y-2">

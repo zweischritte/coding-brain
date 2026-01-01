@@ -148,6 +148,7 @@ services:
       - USER=${USER}
       - API_KEY=${API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - PYTHONPATH=/usr/src/openmemory:/usr/src/coding-brain
       # PostgreSQL connection
       - POSTGRES_HOST=postgres
@@ -229,6 +230,7 @@ services:
       - USER=${USER}
       - API_KEY=${API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - PYTHONPATH=/usr/src/openmemory:/usr/src/coding-brain
       # PostgreSQL connection
       - POSTGRES_HOST=postgres
