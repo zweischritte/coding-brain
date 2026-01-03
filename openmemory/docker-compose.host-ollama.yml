@@ -1,0 +1,8 @@
+# Optional host Ollama override (macOS dev).
+# Usage:
+#   docker compose -f openmemory/docker-compose.yml -f openmemory/docker-compose.host-ollama.yml up -d
+services:
+  codingbrain-mcp:
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_HOST=host.docker.internal

@@ -103,13 +103,9 @@ def extract_and_store_concepts(
     if not is_concepts_enabled():
         return {"error": "Business concepts system is not enabled"}
 
-    api_key = BusinessConceptsConfig.get_openai_api_key()
-    if not api_key:
-        return {"error": "OpenAI API key not configured for concept extraction"}
-
     try:
         # Get extractors and projectors
-        from app.utils.concept_extractor import ConceptExtractor, TranscriptExtraction
+        from app.utils.concept_extractor import ConceptExtractor
         from app.graph.concept_projector import get_projector
 
         projector = get_projector()
@@ -117,8 +113,8 @@ def extract_and_store_concepts(
             return {"error": "Concept projector not available"}
 
         extractor = ConceptExtractor(
-            api_key=api_key,
             model=BusinessConceptsConfig.get_extraction_model(),
+            ollama_base_url=BusinessConceptsConfig.get_ollama_base_url() or None,
             max_tokens_per_chunk=BusinessConceptsConfig.get_max_tokens_per_chunk(),
         )
 

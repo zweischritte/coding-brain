@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "cat_en_01",
+      "task": "categorization",
+      "language": "en",
+      "text": "Always run python -m pytest before merge."
+    },
+    {
+      "id": "cat_en_02",
+      "task": "categorization",
+      "language": "en",
+      "text": "Rotate API keys every 90 days and log access."
+    },
+    {
+      "id": "cat_en_03",
+      "task": "categorization",
+      "language": "en",
+      "text": "We decided to switch embeddings to BGE-M3 and re-embed all memories."
+    },
+    {
+      "id": "cat_de_01",
+      "task": "categorization",
+      "language": "de",
+      "text": "Die API soll in snake_case bleiben und keine CamelCase-Keys nutzen."
+    },
+    {
+      "id": "cat_de_02",
+      "task": "categorization",
+      "language": "de",
+      "text": "Wenn der Indexer haengt, starte den Worker-Container neu."
+    },
+    {
+      "id": "rel_en_01",
+      "task": "entity_relations",
+      "language": "en",
+      "text": "Max works at Acme in Berlin. Sara manages Max."
+    },
+    {
+      "id": "rel_en_02",
+      "task": "entity_relations",
+      "language": "en",
+      "text": "Julia is the sister of Thomas and lives in Munich."
+    },
+    {
+      "id": "rel_en_03",
+      "task": "entity_relations",
+      "language": "en",
+      "text": "The Billing API is owned by Team Delta."
+    },
+    {
+      "id": "rel_en_04",
+      "task": "entity_relations",
+      "language": "en",
+      "text": "Project Atlas depends on Redis and Postgres."
+    },
+    {
+      "id": "rel_de_01",
+      "task": "entity_relations",
+      "language": "de",
+      "text": "Lena arbeitet bei Beispiel GmbH und berichtet an Dr. Weber."
+    },
+    {
+      "id": "concept_en_01",
+      "task": "concepts",
+      "language": "en",
+      "text": "We cut latency by 40% after caching auth tokens for 5 minutes. This suggests short-lived caches improve responsiveness."
+    },
+    {
+      "id": "concept_de_01",
+      "task": "concepts",
+      "language": "de",
+      "text": "Das Team hat beschlossen, die Erinnerungen nach 90 Tagen zu archivieren, um Suchergebnisse sauber zu halten."
+    },
+    {
+      "id": "concept_en_02",
+      "task": "concepts",
+      "language": "en",
+      "text": "After migrating to BGE-M3, recall improved but we need re-embedding to avoid dimension mismatch."
+    },
+    {
+      "id": "concept_en_03",
+      "task": "concepts",
+      "language": "en",
+      "text": "Pricing changed from $99 to $149 with a new enterprise tier."
+    },
+    {
+      "id": "concept_en_04",
+      "task": "concepts",
+      "language": "en",
+      "text": "If a memory is labeled 'glossary', retrieval gets faster because filtering is cheaper."
+    }
+  ]
+}

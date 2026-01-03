@@ -46,19 +46,17 @@ const initialState: ConfigState = {
   },
   mem0: {
     llm: {
-      provider: 'openai',
+      provider: 'ollama',
       config: {
-        model: 'gpt-4o-mini',
+        model: 'qwen3:8b',
         temperature: 0.1,
         max_tokens: 2000,
-        api_key: 'env:OPENAI_API_KEY',
       },
     },
     embedder: {
-      provider: 'openai',
+      provider: 'ollama',
       config: {
-        model: 'text-embedding-3-small',
-        api_key: 'env:OPENAI_API_KEY',
+        model: 'bge-m3',
       },
     },
   },

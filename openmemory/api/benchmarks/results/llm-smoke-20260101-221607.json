@@ -1,0 +1,532 @@
+{
+  "metadata": {
+    "timestamp": "2026-01-01T21:16:07.966542Z",
+    "base_url": "http://localhost:11434",
+    "ollama_version": "0.13.5",
+    "cases": 6,
+    "models": [
+      "qwen3:4b",
+      "qwen3:8b",
+      "phi4:14b",
+      "mistral:7b"
+    ]
+  },
+  "summaries": {
+    "qwen3:4b": {
+      "requests": 6,
+      "parse_rate": 0.0,
+      "schema_rate": 0.0,
+      "allowed_rate": 0.0,
+      "latency_p50_ms": 161243.31433299812,
+      "latency_p95_ms": 180005.4894159839,
+      "latency_avg_ms": 121042.24815265722,
+      "tokens_per_sec_avg": 3.1374763871120117
+    },
+    "qwen3:8b": {
+      "requests": 6,
+      "parse_rate": 0.6666666666666666,
+      "schema_rate": 0.6666666666666666,
+      "allowed_rate": 0.6666666666666666,
+      "latency_p50_ms": 71490.39575000643,
+      "latency_p95_ms": 180005.1554160018,
+      "latency_avg_ms": 90828.9038331665,
+      "tokens_per_sec_avg": 4.697599229408822
+    },
+    "phi4:14b": {
+      "requests": 6,
+      "parse_rate": 0.5,
+      "schema_rate": 0.5,
+      "allowed_rate": 0.5,
+      "latency_p50_ms": 139623.5982500075,
+      "latency_p95_ms": 180005.7467080187,
+      "latency_avg_ms": 127810.59819450213,
+      "tokens_per_sec_avg": 2.589038088426661
+    },
+    "mistral:7b": {
+      "requests": 6,
+      "parse_rate": 0.6666666666666666,
+      "schema_rate": 0.6666666666666666,
+      "allowed_rate": 0.6666666666666666,
+      "latency_p50_ms": 93182.92900000233,
+      "latency_p95_ms": 124597.74570900481,
+      "latency_avg_ms": 84252.324396172,
+      "tokens_per_sec_avg": 3.0563809695918525
+    }
+  },
+  "per_task": {
+    "qwen3:4b": {
+      "categorization": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 11240.710791986203,
+        "latency_p95_ms": 21553.44779099687,
+        "latency_avg_ms": 16397.079291491536,
+        "tokens_per_sec_avg": 5.143711866320475
+      },
+      "entity_relations": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 161243.31433299812,
+        "latency_p95_ms": 172206.0087089776,
+        "latency_avg_ms": 166724.66152098787,
+        "tokens_per_sec_avg": 1.1312409079035493
+      },
+      "concepts": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 180004.5178750006,
+        "latency_p95_ms": 180005.4894159839,
+        "latency_avg_ms": 180005.00364549225,
+        "tokens_per_sec_avg": null
+      }
+    },
+    "qwen3:8b": {
+      "categorization": {
+        "requests": 2,
+        "parse_rate": 1.0,
+        "schema_rate": 1.0,
+        "allowed_rate": 1.0,
+        "latency_p50_ms": 6413.171457999852,
+        "latency_p95_ms": 30670.54595798254,
+        "latency_avg_ms": 18541.858707991196,
+        "tokens_per_sec_avg": 7.2469102300741595
+      },
+      "entity_relations": {
+        "requests": 2,
+        "parse_rate": 1.0,
+        "schema_rate": 1.0,
+        "allowed_rate": 1.0,
+        "latency_p50_ms": 71490.39575000643,
+        "latency_p95_ms": 76389.60466699791,
+        "latency_avg_ms": 73940.00020850217,
+        "tokens_per_sec_avg": 2.1482882287434837
+      },
+      "concepts": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 180004.54975001048,
+        "latency_p95_ms": 180005.1554160018,
+        "latency_avg_ms": 180004.85258300614,
+        "tokens_per_sec_avg": null
+      }
+    },
+    "phi4:14b": {
+      "categorization": {
+        "requests": 2,
+        "parse_rate": 1.0,
+        "schema_rate": 1.0,
+        "allowed_rate": 1.0,
+        "latency_p50_ms": 15703.858374996344,
+        "latency_p95_ms": 71520.23391702096,
+        "latency_avg_ms": 43612.04614600865,
+        "tokens_per_sec_avg": 3.224431961356112
+      },
+      "entity_relations": {
+        "requests": 2,
+        "parse_rate": 0.5,
+        "schema_rate": 0.5,
+        "allowed_rate": 0.5,
+        "latency_p50_ms": 139623.5982500075,
+        "latency_p95_ms": 180004.85724999453,
+        "latency_avg_ms": 159814.227750001,
+        "tokens_per_sec_avg": 1.3182503425677592
+      },
+      "concepts": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 180005.2946669748,
+        "latency_p95_ms": 180005.7467080187,
+        "latency_avg_ms": 180005.52068749676,
+        "tokens_per_sec_avg": null
+      }
+    },
+    "mistral:7b": {
+      "categorization": {
+        "requests": 2,
+        "parse_rate": 1.0,
+        "schema_rate": 1.0,
+        "allowed_rate": 1.0,
+        "latency_p50_ms": 12644.789084006334,
+        "latency_p95_ms": 44992.07870900864,
+        "latency_avg_ms": 28818.433896507486,
+        "tokens_per_sec_avg": 4.240588239993352
+      },
+      "entity_relations": {
+        "requests": 2,
+        "parse_rate": 1.0,
+        "schema_rate": 1.0,
+        "allowed_rate": 1.0,
+        "latency_p50_ms": 93182.92900000233,
+        "latency_p95_ms": 124597.74570900481,
+        "latency_avg_ms": 108890.33735450357,
+        "tokens_per_sec_avg": 2.1116630733325263
+      },
+      "concepts": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 109974.31074999622,
+        "latency_p95_ms": 120122.09312501363,
+        "latency_avg_ms": 115048.20193750493,
+        "tokens_per_sec_avg": 2.8168915954496785
+      }
+    }
+  },
+  "results": {
+    "qwen3:4b": [
+      {
+        "case_id": "cat_en_01",
+        "task": "categorization",
+        "language": "en",
+        "latency_ms": 21553.44779099687,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 64,
+        "eval_count": 8,
+        "total_duration_ns": 21520361926,
+        "tokens_per_sec": 3.345668639197588
+      },
+      {
+        "case_id": "cat_de_01",
+        "task": "categorization",
+        "language": "de",
+        "latency_ms": 11240.710791986203,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 70,
+        "eval_count": 8,
+        "total_duration_ns": 11236351463,
+        "tokens_per_sec": 6.94175509344336
+      },
+      {
+        "case_id": "rel_en_01",
+        "task": "entity_relations",
+        "language": "en",
+        "latency_ms": 172206.0087089776,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 45,
+        "eval_count": 147,
+        "total_duration_ns": 172195853828,
+        "tokens_per_sec": 1.1150094252082376
+      },
+      {
+        "case_id": "rel_de_01",
+        "task": "entity_relations",
+        "language": "de",
+        "latency_ms": 161243.31433299812,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 48,
+        "eval_count": 137,
+        "total_duration_ns": 161223922698,
+        "tokens_per_sec": 1.1474723905988609
+      },
+      {
+        "case_id": "concept_en_01",
+        "task": "concepts",
+        "language": "en",
+        "latency_ms": 180004.5178750006,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      },
+      {
+        "case_id": "concept_de_01",
+        "task": "concepts",
+        "language": "de",
+        "latency_ms": 180005.4894159839,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      }
+    ],
+    "qwen3:8b": [
+      {
+        "case_id": "cat_en_01",
+        "task": "categorization",
+        "language": "en",
+        "latency_ms": 30670.54595798254,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 64,
+        "eval_count": 7,
+        "total_duration_ns": 30635445014,
+        "tokens_per_sec": 2.317576910260449
+      },
+      {
+        "case_id": "cat_de_01",
+        "task": "categorization",
+        "language": "de",
+        "latency_ms": 6413.171457999852,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 70,
+        "eval_count": 8,
+        "total_duration_ns": 6405916544,
+        "tokens_per_sec": 12.17624354988787
+      },
+      {
+        "case_id": "rel_en_01",
+        "task": "entity_relations",
+        "language": "en",
+        "latency_ms": 76389.60466699791,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 45,
+        "eval_count": 125,
+        "total_duration_ns": 76369283826,
+        "tokens_per_sec": 2.2260258507507875
+      },
+      {
+        "case_id": "rel_de_01",
+        "task": "entity_relations",
+        "language": "de",
+        "latency_ms": 71490.39575000643,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 48,
+        "eval_count": 100,
+        "total_duration_ns": 71478571699,
+        "tokens_per_sec": 2.0705506067361803
+      },
+      {
+        "case_id": "concept_en_01",
+        "task": "concepts",
+        "language": "en",
+        "latency_ms": 180004.54975001048,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      },
+      {
+        "case_id": "concept_de_01",
+        "task": "concepts",
+        "language": "de",
+        "latency_ms": 180005.1554160018,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      }
+    ],
+    "phi4:14b": [
+      {
+        "case_id": "cat_en_01",
+        "task": "categorization",
+        "language": "en",
+        "latency_ms": 71520.23391702096,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 64,
+        "eval_count": 10,
+        "total_duration_ns": 71509843866,
+        "tokens_per_sec": 1.034822564270539
+      },
+      {
+        "case_id": "cat_de_01",
+        "task": "categorization",
+        "language": "de",
+        "latency_ms": 15703.858374996344,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 70,
+        "eval_count": 15,
+        "total_duration_ns": 15699917007,
+        "tokens_per_sec": 5.414041358441685
+      },
+      {
+        "case_id": "rel_en_01",
+        "task": "entity_relations",
+        "language": "en",
+        "latency_ms": 180004.85724999453,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      },
+      {
+        "case_id": "rel_de_01",
+        "task": "entity_relations",
+        "language": "de",
+        "latency_ms": 139623.5982500075,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 48,
+        "eval_count": 136,
+        "total_duration_ns": 139578951022,
+        "tokens_per_sec": 1.3182503425677592
+      },
+      {
+        "case_id": "concept_en_01",
+        "task": "concepts",
+        "language": "en",
+        "latency_ms": 180005.2946669748,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      },
+      {
+        "case_id": "concept_de_01",
+        "task": "concepts",
+        "language": "de",
+        "latency_ms": 180005.7467080187,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "request_error: HTTPConnectionPool(host='localhost', port=11434): Read timed out. (read timeout=180)",
+        "prompt_eval_count": null,
+        "eval_count": null,
+        "total_duration_ns": null,
+        "tokens_per_sec": null
+      }
+    ],
+    "mistral:7b": [
+      {
+        "case_id": "cat_en_01",
+        "task": "categorization",
+        "language": "en",
+        "latency_ms": 44992.07870900864,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 62,
+        "eval_count": 17,
+        "total_duration_ns": 44961372229,
+        "tokens_per_sec": 1.757063810188719
+      },
+      {
+        "case_id": "cat_de_01",
+        "task": "categorization",
+        "language": "de",
+        "latency_ms": 12644.789084006334,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 72,
+        "eval_count": 13,
+        "total_duration_ns": 12641073131,
+        "tokens_per_sec": 6.724112669797986
+      },
+      {
+        "case_id": "rel_en_01",
+        "task": "entity_relations",
+        "language": "en",
+        "latency_ms": 124597.74570900481,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 42,
+        "eval_count": 182,
+        "total_duration_ns": 124594362640,
+        "tokens_per_sec": 1.7978341495852448
+      },
+      {
+        "case_id": "rel_de_01",
+        "task": "entity_relations",
+        "language": "de",
+        "latency_ms": 93182.92900000233,
+        "parse_ok": true,
+        "schema_ok": true,
+        "allowed_ok": true,
+        "error": null,
+        "prompt_eval_count": 50,
+        "eval_count": 176,
+        "total_duration_ns": 93176972042,
+        "tokens_per_sec": 2.4254919970798077
+      },
+      {
+        "case_id": "concept_en_01",
+        "task": "concepts",
+        "language": "en",
+        "latency_ms": 109974.31074999622,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 39 column 17 (char 639)",
+        "prompt_eval_count": 66,
+        "eval_count": 256,
+        "total_duration_ns": 109969889550,
+        "tokens_per_sec": 2.9280742330253617
+      },
+      {
+        "case_id": "concept_de_01",
+        "task": "concepts",
+        "language": "de",
+        "latency_ms": 120122.09312501363,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting ',' delimiter: line 37 column 1 (char 664)",
+        "prompt_eval_count": 69,
+        "eval_count": 256,
+        "total_duration_ns": 120116392805,
+        "tokens_per_sec": 2.7057089578739952
+      }
+    ]
+  }
+}

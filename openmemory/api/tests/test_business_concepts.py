@@ -575,22 +575,7 @@ class TestConstants:
 class TestExtractFromMemory:
     """Tests for extract_from_memory helper function."""
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=True)
-    def test_extract_without_api_key(self):
-        """Should return error when API key not configured."""
-        from app.utils.concept_extractor import extract_from_memory
-
-        result = extract_from_memory(
-            memory_id="test-123",
-            user_id="test",
-            content="Test content",
-        )
-
-        assert "error" in result
-        assert "API key" in result["error"]
-
     @patch("app.utils.concept_extractor.ConceptExtractor")
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"})
     def test_extract_returns_results(self, mock_extractor_class):
         """Should return extraction results."""
         from app.utils.concept_extractor import extract_from_memory, TranscriptExtraction

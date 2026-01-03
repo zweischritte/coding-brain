@@ -285,7 +285,7 @@ class MemoryGraph:
 
             cypher_query = f"""
             MATCH (n {self.node_label} {{{node_props_str}}})
-            WHERE n.embedding IS NOT NULL
+            WHERE n.embedding IS NOT NULL AND size(n.embedding) = $n_embedding_size
             WITH n, round(2 * vector.similarity.cosine(n.embedding, $n_embedding) - 1, 4) AS similarity // denormalize for backward compatibility
             WHERE similarity >= $threshold
             CALL {{
@@ -305,10 +305,11 @@ class MemoryGraph:
 
             params = {
                 "n_embedding": n_embedding,
-                "threshold": self.threshold,
-                "user_id": filters["user_id"],
-                "limit": limit,
-            }
+            "threshold": self.threshold,
+            "user_id": filters["user_id"],
+            "limit": limit,
+            "n_embedding_size": len(n_embedding),
+        }
             if filters.get("agent_id"):
                 params["agent_id"] = filters["agent_id"]
             if filters.get("run_id"):
@@ -616,7 +617,11 @@ class MemoryGraph:
 
     def _search_source_node(self, source_embedding, filters, threshold=0.9):
         # Build WHERE conditions
-        where_conditions = ["source_candidate.embedding IS NOT NULL", "source_candidate.user_id = $user_id"]
+        where_conditions = [
+            "source_candidate.embedding IS NOT NULL",
+            "size(source_candidate.embedding) = $source_embedding_size",
+            "source_candidate.user_id = $user_id",
+        ]
         if filters.get("agent_id"):
             where_conditions.append("source_candidate.agent_id = $agent_id")
         if filters.get("run_id"):
@@ -642,6 +647,7 @@ class MemoryGraph:
             "source_embedding": source_embedding,
             "user_id": filters["user_id"],
             "threshold": threshold,
+            "source_embedding_size": len(source_embedding),
         }
         if filters.get("agent_id"):
             params["agent_id"] = filters["agent_id"]
@@ -653,7 +659,11 @@ class MemoryGraph:
 
     def _search_destination_node(self, destination_embedding, filters, threshold=0.9):
         # Build WHERE conditions
-        where_conditions = ["destination_candidate.embedding IS NOT NULL", "destination_candidate.user_id = $user_id"]
+        where_conditions = [
+            "destination_candidate.embedding IS NOT NULL",
+            "size(destination_candidate.embedding) = $destination_embedding_size",
+            "destination_candidate.user_id = $user_id",
+        ]
         if filters.get("agent_id"):
             where_conditions.append("destination_candidate.agent_id = $agent_id")
         if filters.get("run_id"):
@@ -680,6 +690,7 @@ class MemoryGraph:
             "destination_embedding": destination_embedding,
             "user_id": filters["user_id"],
             "threshold": threshold,
+            "destination_embedding_size": len(destination_embedding),
         }
         if filters.get("agent_id"):
             params["agent_id"] = filters["agent_id"]

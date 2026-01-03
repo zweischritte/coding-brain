@@ -1,0 +1,16 @@
+# Optional GPU override for Linux hosts with NVIDIA drivers.
+# Usage:
+#   docker compose -f openmemory/docker-compose.yml -f openmemory/docker-compose.gpu.yml up -d
+services:
+  ollama:
+    device_requests:
+      - driver: nvidia
+        count: all
+        capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+  codingbrain-mcp:
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_HOST=ollama

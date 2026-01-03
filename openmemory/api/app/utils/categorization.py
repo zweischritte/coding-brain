@@ -2,13 +2,18 @@ import logging
 from typing import List
 
 from app.utils.prompts import MEMORY_CATEGORIZATION_PROMPT
-from dotenv import load_dotenv
-from openai import OpenAI
+from app.utils.local_llm import LocalLlmClient
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-load_dotenv()
-openai_client = OpenAI()
+_llm_client: LocalLlmClient | None = None
+
+
+def _get_llm_client() -> LocalLlmClient:
+    global _llm_client
+    if _llm_client is None:
+        _llm_client = LocalLlmClient(temperature=0.0)
+    return _llm_client
 
 
 class MemoryCategories(BaseModel):
@@ -23,21 +28,13 @@ def get_categories_for_memory(memory: str) -> List[str]:
             {"role": "user", "content": memory}
         ]
 
-        # Let OpenAI handle the pydantic parsing directly
-        completion = openai_client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
+        parsed = _get_llm_client().generate_pydantic(
             messages=messages,
-            response_format=MemoryCategories,
-            temperature=0
+            schema=MemoryCategories,
+            retries=1,
         )
-
-        parsed: MemoryCategories = completion.choices[0].message.parsed
         return [cat.strip().lower() for cat in parsed.categories]
 
     except Exception as e:
         logging.error(f"[ERROR] Failed to get categories: {e}")
-        try:
-            logging.debug(f"[DEBUG] Raw response: {completion.choices[0].message.content}")
-        except Exception as debug_e:
-            logging.debug(f"[DEBUG] Could not extract raw response: {debug_e}")
         raise

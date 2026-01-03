@@ -7,7 +7,7 @@ documents, and mixed German/English content.
 Usage:
     from app.utils.concept_extractor import ConceptExtractor
 
-    extractor = ConceptExtractor(api_key=os.getenv("OPENAI_API_KEY"))
+    extractor = ConceptExtractor(model="qwen3:8b")
     result = extractor.extract_full(transcript_text)
 
     for entity in result.entities:
@@ -24,18 +24,11 @@ Based on research:
 See: /docs/AUTO-EXTRACT-BUSINESS-CONCEPTS-RESEARCH.md
 """
 
-import json
-import re
-from typing import List, Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 import tiktoken
 
-try:
-    from openai import OpenAI
-except ImportError:
-    raise ImportError(
-        "openai package is required. Install with: pip install openai"
-    )
+from app.utils.local_llm import LocalLlmClient
 
 # ============================================================================
 # SCHEMA DEFINITIONS
@@ -97,6 +90,16 @@ class TranscriptExtraction(BaseModel):
     concepts: List[BusinessConcept]
     summary: str = Field(description="1-2 sentence summary of main business topics")
     language: Literal["en", "de", "mixed"] = Field(description="Detected language")
+
+
+class EntityExtraction(BaseModel):
+    """Entity-only extraction payload."""
+    entities: List[BusinessEntity]
+
+
+class ConceptExtraction(BaseModel):
+    """Concept-only extraction payload."""
+    concepts: List[BusinessConcept]
 
 
 # ============================================================================
@@ -326,33 +329,43 @@ class ConceptExtractor:
     - Batch processing for long transcripts
 
     Example:
-        >>> extractor = ConceptExtractor(api_key=os.getenv("OPENAI_API_KEY"))
+        >>> extractor = ConceptExtractor(model="qwen3:8b")
         >>> result = extractor.extract_full("Your transcript text here...")
         >>> print(f"Found {len(result.entities)} entities and {len(result.concepts)} concepts")
     """
 
     def __init__(
         self,
-        api_key: str,
-        model: str = "gpt-4o-mini",
+        model: str = "qwen3:8b",
+        ollama_base_url: Optional[str] = None,
         max_tokens_per_chunk: int = 8000
     ):
         """
         Initialize extractor.
 
         Args:
-            api_key: OpenAI API key
-            model: Model to use (gpt-4o-mini recommended for cost/performance)
+            model: Model to use (qwen3:8b recommended for local performance)
+            ollama_base_url: Optional Ollama base URL override
             max_tokens_per_chunk: Max tokens per extraction call
         """
-        self.client = OpenAI(api_key=api_key)
         self.model = model
+        self.ollama_base_url = ollama_base_url or None
+        self._clients: Dict[float, LocalLlmClient] = {}
         self.max_tokens_per_chunk = max_tokens_per_chunk
         try:
             self.encoding = tiktoken.encoding_for_model(model)
         except KeyError:
             # Fallback to cl100k_base if model not found
             self.encoding = tiktoken.get_encoding("cl100k_base")
+
+    def _get_client(self, temperature: float) -> LocalLlmClient:
+        if temperature not in self._clients:
+            self._clients[temperature] = LocalLlmClient(
+                model=self.model,
+                base_url=self.ollama_base_url,
+                temperature=temperature,
+            )
+        return self._clients[temperature]
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in text"""
@@ -392,17 +405,14 @@ class ConceptExtractor:
             List of BusinessEntity objects
         """
         try:
-            completion = self.client.beta.chat.completions.parse(
-                model=self.model,
+            extraction = self._get_client(0.1).generate_pydantic(
                 messages=[
                     {"role": "system", "content": ENTITY_EXTRACTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": text}
+                    {"role": "user", "content": text},
                 ],
-                response_format=TranscriptExtraction,
-                temperature=0.1  # Low temperature for consistent extraction
+                schema=EntityExtraction,
+                retries=1,
             )
-
-            extraction = completion.choices[0].message.parsed
             return extraction.entities
 
         except Exception as e:
@@ -417,17 +427,14 @@ class ConceptExtractor:
             List of BusinessConcept objects
         """
         try:
-            completion = self.client.beta.chat.completions.parse(
-                model=self.model,
+            extraction = self._get_client(0.2).generate_pydantic(
                 messages=[
                     {"role": "system", "content": CONCEPT_EXTRACTION_SYSTEM_PROMPT},
-                    {"role": "user", "content": text}
+                    {"role": "user", "content": text},
                 ],
-                response_format=TranscriptExtraction,
-                temperature=0.2  # Slightly higher for concept synthesis
+                schema=ConceptExtraction,
+                retries=1,
             )
-
-            extraction = completion.choices[0].message.parsed
             return extraction.concepts
 
         except Exception as e:
@@ -451,19 +458,17 @@ class ConceptExtractor:
         # If text is short enough, extract in one call
         if tokens <= self.max_tokens_per_chunk:
             try:
-                completion = self.client.beta.chat.completions.parse(
-                    model=self.model,
+                return self._get_client(0.1).generate_pydantic(
                     messages=[
                         {
                             "role": "system",
-                            "content": f"{ENTITY_EXTRACTION_SYSTEM_PROMPT}\n\n{CONCEPT_EXTRACTION_SYSTEM_PROMPT}"
+                            "content": f"{ENTITY_EXTRACTION_SYSTEM_PROMPT}\n\n{CONCEPT_EXTRACTION_SYSTEM_PROMPT}",
                         },
-                        {"role": "user", "content": text}
+                        {"role": "user", "content": text},
                     ],
-                    response_format=TranscriptExtraction,
-                    temperature=0.1
+                    schema=TranscriptExtraction,
+                    retries=1,
                 )
-                return completion.choices[0].message.parsed
             except Exception as e:
                 print(f"Full extraction error: {e}")
                 return TranscriptExtraction(
@@ -562,16 +567,10 @@ class ConceptExtractor:
         # Rough estimate: output is ~20% of input for extraction tasks
         estimated_output_tokens = int(input_tokens * 0.2)
 
-        # GPT-4o-mini pricing (as of Dec 2024)
-        # Input: $0.150 per 1M tokens
-        # Output: $0.600 per 1M tokens
-        input_cost = (input_tokens / 1_000_000) * 0.150
-        output_cost = (estimated_output_tokens / 1_000_000) * 0.600
-
         return {
             "input_tokens": input_tokens,
             "estimated_output_tokens": estimated_output_tokens,
-            "estimated_cost_usd": round(input_cost + output_cost, 4)
+            "estimated_cost_usd": 0.0
         }
 
 
@@ -589,8 +588,8 @@ def extract_from_memory(
     user_id: str,
     content: str,
     category: str = None,
-    api_key: str = None,
-    model: str = "gpt-4o-mini",
+    model: Optional[str] = None,
+    ollama_base_url: Optional[str] = None,
     max_tokens_per_chunk: int = 8000,
     min_confidence: float = 0.5,
     store_in_graph: bool = True,
@@ -606,8 +605,8 @@ def extract_from_memory(
         user_id: User ID for scoping
         content: Memory content to extract from
         category: Optional category for concept scoping
-        api_key: OpenAI API key (uses config if not provided)
-        model: Model for extraction (default: gpt-4o-mini)
+        model: Model for extraction (defaults to config or qwen3:8b)
+        ollama_base_url: Optional Ollama base URL override
         max_tokens_per_chunk: Max tokens per chunk
         min_confidence: Minimum confidence for storage
         store_in_graph: Whether to store in Neo4j graph
@@ -622,28 +621,24 @@ def extract_from_memory(
         - stored_concepts: Count of concepts stored (if store_in_graph)
         - error: Error message if extraction failed
     """
-    import os
     from typing import Dict
 
-    # Get API key from config if not provided
-    if not api_key:
-        try:
-            from app.config import BusinessConceptsConfig
-            api_key = BusinessConceptsConfig.get_openai_api_key()
-            model = BusinessConceptsConfig.get_extraction_model()
-            max_tokens_per_chunk = BusinessConceptsConfig.get_max_tokens_per_chunk()
-            min_confidence = BusinessConceptsConfig.get_min_confidence()
-        except ImportError:
-            api_key = os.getenv("OPENAI_API_KEY", "")
+    try:
+        from app.config import BusinessConceptsConfig
 
-    if not api_key:
-        return {"error": "OpenAI API key not configured"}
+        model = model or BusinessConceptsConfig.get_extraction_model()
+        base_url = ollama_base_url or BusinessConceptsConfig.get_ollama_base_url() or None
+        max_tokens_per_chunk = BusinessConceptsConfig.get_max_tokens_per_chunk()
+        min_confidence = BusinessConceptsConfig.get_min_confidence()
+    except ImportError:
+        model = model or "qwen3:8b"
+        base_url = ollama_base_url
 
     try:
         # Perform extraction
         extractor = ConceptExtractor(
-            api_key=api_key,
             model=model,
+            ollama_base_url=base_url,
             max_tokens_per_chunk=max_tokens_per_chunk,
         )
 
@@ -731,7 +726,7 @@ def extract_from_memory(
 def batch_extract_from_memories(
     memories: List[Dict],
     user_id: str,
-    api_key: str = None,
+    ollama_base_url: Optional[str] = None,
     store_in_graph: bool = True,
 ) -> Dict:
     """
@@ -740,7 +735,7 @@ def batch_extract_from_memories(
     Args:
         memories: List of dicts with 'id', 'content', and optional 'category'
         user_id: User ID for scoping
-        api_key: OpenAI API key
+        ollama_base_url: Optional Ollama base URL override
         store_in_graph: Whether to store in Neo4j graph
 
     Returns:
@@ -768,7 +763,7 @@ def batch_extract_from_memories(
             user_id=user_id,
             content=content,
             category=category,
-            api_key=api_key,
+            ollama_base_url=ollama_base_url,
             store_in_graph=store_in_graph,
         )
 

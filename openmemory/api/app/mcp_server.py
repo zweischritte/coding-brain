@@ -538,6 +538,78 @@ async def whoami() -> str:
         }
     )
 
+@mcp.tool(description="""Return the active embedder configuration and runtime details.
+
+Returns:
+- provider: Configured embedder provider (e.g., "gemini")
+- model: Embedder model name
+- embedding_dims: Configured embedding dimensions
+- output_dimensionality: Configured output dims (if set)
+- class_name: Runtime embedder class
+- vector_store_provider: Vector store provider name
+- vector_store_dims: Vector store embedding dimensions (if available)
+- memory_client_ready: Whether the memory client is initialized
+- error: Error message if the memory client is unavailable
+""")
+async def get_embedder_info() -> str:
+    scope_error = _check_tool_scope("memories:read")
+    if scope_error:
+        return scope_error
+
+    memory_client = get_memory_client_safe()
+    if not memory_client:
+        return json.dumps({
+            "memory_client_ready": False,
+            "error": "Memory client is not available",
+        })
+
+    embedder = getattr(memory_client, "embedding_model", None)
+    embedder_config = getattr(embedder, "config", None)
+
+    provider = None
+    try:
+        provider = getattr(getattr(memory_client.config, "embedder", None), "provider", None)
+    except Exception:
+        provider = None
+
+    model = getattr(embedder_config, "model", None) if embedder_config else None
+    embedding_dims = getattr(embedder_config, "embedding_dims", None) if embedder_config else None
+    output_dimensionality = getattr(embedder_config, "output_dimensionality", None) if embedder_config else None
+
+    class_name = None
+    if embedder:
+        class_name = f"{embedder.__class__.__module__}.{embedder.__class__.__name__}"
+
+    vector_store_provider = None
+    vector_store_dims = None
+    try:
+        vector_store_provider = getattr(getattr(memory_client.config, "vector_store", None), "provider", None)
+    except Exception:
+        vector_store_provider = None
+
+    if hasattr(getattr(memory_client, "vector_store", None), "embedding_model_dims"):
+        vector_store_dims = memory_client.vector_store.embedding_model_dims
+    else:
+        try:
+            vector_store_config = getattr(getattr(memory_client.config, "vector_store", None), "config", None)
+            if hasattr(vector_store_config, "embedding_model_dims"):
+                vector_store_dims = vector_store_config.embedding_model_dims
+            elif isinstance(vector_store_config, dict):
+                vector_store_dims = vector_store_config.get("embedding_model_dims")
+        except Exception:
+            vector_store_dims = None
+
+    return json.dumps({
+        "memory_client_ready": True,
+        "provider": provider,
+        "model": model,
+        "embedding_dims": embedding_dims,
+        "output_dimensionality": output_dimensionality,
+        "class_name": class_name,
+        "vector_store_provider": vector_store_provider,
+        "vector_store_dims": vector_store_dims,
+    })
+
 @mcp.tool(description="""Add a new memory with structured parameters.
 
 Required:

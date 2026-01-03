@@ -1,0 +1,145 @@
+{
+  "metadata": {
+    "timestamp": "2026-01-01T20:41:48.327031Z",
+    "base_url": "http://localhost:11434",
+    "ollama_version": "0.13.5",
+    "cases": 6,
+    "models": [
+      "qwen3:4b"
+    ]
+  },
+  "summaries": {
+    "qwen3:4b": {
+      "requests": 6,
+      "parse_rate": 0.0,
+      "schema_rate": 0.0,
+      "allowed_rate": 0.0,
+      "latency_p50_ms": 139002.60549999075,
+      "latency_p95_ms": 268067.30358302593,
+      "latency_avg_ms": 131115.15263900705,
+      "tokens_per_sec_avg": 3.0689843039906
+    }
+  },
+  "per_task": {
+    "qwen3:4b": {
+      "categorization": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 10911.719541996717,
+        "latency_p95_ms": 11768.918167013908,
+        "latency_avg_ms": 11340.318854505313,
+        "tokens_per_sec_avg": 6.63607453884806
+      },
+      "entity_relations": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 139002.60549999075,
+        "latency_p95_ms": 151508.3089999971,
+        "latency_avg_ms": 145255.45724999392,
+        "tokens_per_sec_avg": 1.299192192262089
+      },
+      "concepts": {
+        "requests": 2,
+        "parse_rate": 0.0,
+        "schema_rate": 0.0,
+        "allowed_rate": 0.0,
+        "latency_p50_ms": 205432.06004201784,
+        "latency_p95_ms": 268067.30358302593,
+        "latency_avg_ms": 236749.68181252189,
+        "tokens_per_sec_avg": 1.2716861808616509
+      }
+    }
+  },
+  "results": {
+    "qwen3:4b": [
+      {
+        "case_id": "cat_en_01",
+        "task": "categorization",
+        "language": "en",
+        "latency_ms": 10911.719541996717,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 64,
+        "eval_count": 8,
+        "total_duration_ns": 10850647713,
+        "tokens_per_sec": 6.635548577781017
+      },
+      {
+        "case_id": "cat_de_01",
+        "task": "categorization",
+        "language": "de",
+        "latency_ms": 11768.918167013908,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 70,
+        "eval_count": 8,
+        "total_duration_ns": 11753005172,
+        "tokens_per_sec": 6.636600499915104
+      },
+      {
+        "case_id": "rel_en_01",
+        "task": "entity_relations",
+        "language": "en",
+        "latency_ms": 151508.3089999971,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 45,
+        "eval_count": 147,
+        "total_duration_ns": 151496291694,
+        "tokens_per_sec": 1.2673577541278136
+      },
+      {
+        "case_id": "rel_de_01",
+        "task": "entity_relations",
+        "language": "de",
+        "latency_ms": 139002.60549999075,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 48,
+        "eval_count": 137,
+        "total_duration_ns": 138990457272,
+        "tokens_per_sec": 1.3310266303963643
+      },
+      {
+        "case_id": "concept_en_01",
+        "task": "concepts",
+        "language": "en",
+        "latency_ms": 205432.06004201784,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 63,
+        "eval_count": 215,
+        "total_duration_ns": 205419657969,
+        "tokens_per_sec": 1.3533271486702267
+      },
+      {
+        "case_id": "concept_de_01",
+        "task": "concepts",
+        "language": "de",
+        "latency_ms": 268067.30358302593,
+        "parse_ok": false,
+        "schema_ok": false,
+        "allowed_ok": false,
+        "error": "json_decode_error: Expecting value: line 1 column 1 (char 0)",
+        "prompt_eval_count": 69,
+        "eval_count": 250,
+        "total_duration_ns": 268057042288,
+        "tokens_per_sec": 1.1900452130530748
+      }
+    ]
+  }
+}

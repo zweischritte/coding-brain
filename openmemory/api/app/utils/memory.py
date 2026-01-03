@@ -20,7 +20,7 @@ Example configuration that will be automatically adjusted:
     "llm": {
         "provider": "ollama",
         "config": {
-            "model": "llama3.1:latest",
+            "model": "qwen3:8b",
             "ollama_base_url": "http://localhost:11434"  # Auto-adjusted in Docker
         }
     }
@@ -34,12 +34,14 @@ import socket
 import re
 
 from app.database import SessionLocal
+from app.utils.local_llm import resolve_ollama_base_url
 from app.models import Config as ConfigModel
 
 from mem0 import Memory
 
 _memory_client = None
 _config_hash = None
+_ollama_url_logged = False
 
 
 def _patch_mem0_relationship_sanitizer() -> None:
@@ -153,6 +155,21 @@ def _get_docker_host_url():
     return host_candidates[0]
 
 
+def _get_default_ollama_base_url() -> str:
+    global _ollama_url_logged
+    env_base_url = os.environ.get("OLLAMA_BASE_URL")
+    if env_base_url:
+        if not _ollama_url_logged:
+            print(f"Using Ollama base URL from OLLAMA_BASE_URL: {env_base_url}")
+            _ollama_url_logged = True
+        return env_base_url
+    default_url = "http://ollama:11434" if os.path.exists("/.dockerenv") else "http://localhost:11434"
+    if not _ollama_url_logged:
+        print(f"Using default Ollama base URL: {default_url}")
+        _ollama_url_logged = True
+    return default_url
+
+
 def _fix_ollama_urls(config_section):
     """
     Fix Ollama URLs for Docker environment.
@@ -163,19 +180,23 @@ def _fix_ollama_urls(config_section):
         return config_section
     
     ollama_config = config_section["config"]
+
+    env_base_url = os.environ.get("OLLAMA_BASE_URL")
+    if env_base_url:
+        ollama_config["ollama_base_url"] = env_base_url
+        return config_section
     
     # Set default ollama_base_url if not provided
-    if "ollama_base_url" not in ollama_config:
-        ollama_config["ollama_base_url"] = "http://host.docker.internal:11434"
+    if "ollama_base_url" not in ollama_config or not ollama_config["ollama_base_url"]:
+        ollama_config["ollama_base_url"] = _get_default_ollama_base_url()
     else:
         # Check for ollama_base_url and fix if it's localhost
         url = ollama_config["ollama_base_url"]
-        if "localhost" in url or "127.0.0.1" in url:
-            docker_host = _get_docker_host_url()
-            if docker_host != "localhost":
-                new_url = url.replace("localhost", docker_host).replace("127.0.0.1", docker_host)
-                ollama_config["ollama_base_url"] = new_url
-                print(f"Adjusted Ollama URL from {url} to {new_url}")
+        if ("localhost" in url or "127.0.0.1" in url) and os.path.exists("/.dockerenv"):
+            docker_host = _get_docker_host_url() if os.environ.get("OLLAMA_HOST") else "ollama"
+            new_url = url.replace("localhost", docker_host).replace("127.0.0.1", docker_host)
+            ollama_config["ollama_base_url"] = new_url
+            print(f"Adjusted Ollama URL from {url} to {new_url}")
     
     return config_section
 
@@ -191,7 +212,7 @@ def get_default_memory_config():
     """Get default memory client configuration with sensible defaults."""
     # Detect vector store based on environment variables
     vector_store_config = {
-        "collection_name": "openmemory",
+        "collection_name": "openmemory_bge_m3",
         "host": "mem0_store",
     }
     
@@ -206,7 +227,8 @@ def get_default_memory_config():
         vector_store_provider = "qdrant"
         vector_store_config.update({
             "host": os.environ.get('QDRANT_HOST'),
-            "port": int(os.environ.get('QDRANT_PORT'))
+            "port": int(os.environ.get('QDRANT_PORT')),
+            "embedding_model_dims": 1024
         })
     elif os.environ.get('WEAVIATE_CLUSTER_URL') or (os.environ.get('WEAVIATE_HOST') and os.environ.get('WEAVIATE_PORT')):
         vector_store_provider = "weaviate"
@@ -217,14 +239,16 @@ def get_default_memory_config():
             weaviate_port = int(os.environ.get('WEAVIATE_PORT'))
             cluster_url = f"http://{weaviate_host}:{weaviate_port}"
         vector_store_config = {
-            "collection_name": "openmemory",
-            "cluster_url": cluster_url
+            "collection_name": "openmemory_bge_m3",
+            "cluster_url": cluster_url,
+            "embedding_model_dims": 1024
         }
     elif os.environ.get('REDIS_URL'):
         vector_store_provider = "redis"
         vector_store_config = {
-            "collection_name": "openmemory",
-            "redis_url": os.environ.get('REDIS_URL')
+            "collection_name": "openmemory_bge_m3",
+            "redis_url": os.environ.get('REDIS_URL'),
+            "embedding_model_dims": 1024
         }
     elif os.environ.get('PG_HOST') and os.environ.get('PG_PORT'):
         vector_store_provider = "pgvector"
@@ -233,7 +257,8 @@ def get_default_memory_config():
             "port": int(os.environ.get('PG_PORT')),
             "dbname": os.environ.get('PG_DB', 'mem0'),
             "user": os.environ.get('PG_USER', 'mem0'),
-            "password": os.environ.get('PG_PASSWORD', 'mem0')
+            "password": os.environ.get('PG_PASSWORD', 'mem0'),
+            "embedding_model_dims": 1024
         })
     elif os.environ.get('MILVUS_HOST') and os.environ.get('MILVUS_PORT'):
         vector_store_provider = "milvus"
@@ -243,11 +268,11 @@ def get_default_memory_config():
         milvus_url = f"http://{milvus_host}:{milvus_port}"
         
         vector_store_config = {
-            "collection_name": "openmemory",
+            "collection_name": "openmemory_bge_m3",
             "url": milvus_url,
             "token": os.environ.get('MILVUS_TOKEN', ''),  # Always include, empty string for local setup
             "db_name": os.environ.get('MILVUS_DB_NAME', ''),
-            "embedding_model_dims": 1536,
+            "embedding_model_dims": 1024,
             "metric_type": "COSINE"  # Using COSINE for better semantic similarity
         }
     elif os.environ.get('ELASTICSEARCH_HOST') and os.environ.get('ELASTICSEARCH_PORT'):
@@ -265,20 +290,21 @@ def get_default_memory_config():
             "password": os.environ.get('ELASTICSEARCH_PASSWORD', 'changeme'),
             "verify_certs": False,
             "use_ssl": False,
-            "embedding_model_dims": 1536
+            "embedding_model_dims": 1024
         })
     elif os.environ.get('OPENSEARCH_HOST') and os.environ.get('OPENSEARCH_PORT'):
         vector_store_provider = "opensearch"
         vector_store_config.update({
             "host": os.environ.get('OPENSEARCH_HOST'),
-            "port": int(os.environ.get('OPENSEARCH_PORT'))
+            "port": int(os.environ.get('OPENSEARCH_PORT')),
+            "embedding_model_dims": 1024
         })
     elif os.environ.get('FAISS_PATH'):
         vector_store_provider = "faiss"
         vector_store_config = {
-            "collection_name": "openmemory",
+            "collection_name": "openmemory_bge_m3",
             "path": os.environ.get('FAISS_PATH'),
-            "embedding_model_dims": 1536,
+            "embedding_model_dims": 1024,
             "distance_strategy": "cosine"
         }
     else:
@@ -286,6 +312,7 @@ def get_default_memory_config():
         vector_store_provider = "qdrant"
         vector_store_config.update({
             "port": 6333,
+            "embedding_model_dims": 1024
         })
     
     print(f"Auto-detected vector store: {vector_store_provider} with config: {vector_store_config}")
@@ -296,19 +323,20 @@ def get_default_memory_config():
             "config": vector_store_config
         },
         "llm": {
-            "provider": "openai",
+            "provider": "ollama",
             "config": {
-                "model": "gpt-4o-mini",
+                "model": "qwen3:8b",
                 "temperature": 0.1,
                 "max_tokens": 2000,
-                "api_key": "env:OPENAI_API_KEY"
+                "ollama_base_url": resolve_ollama_base_url(),
             }
         },
         "embedder": {
-            "provider": "openai",
+            "provider": "ollama",
             "config": {
-                "model": "text-embedding-3-small",
-                "api_key": "env:OPENAI_API_KEY"
+                "model": "bge-m3",
+                "embedding_dims": 1024,
+                "ollama_base_url": resolve_ollama_base_url(),
             }
         },
         "version": "v1.1"

@@ -25,6 +25,7 @@ class EmbedderConfig(BaseModel):
     model: str = Field(..., description="Embedder model name")
     api_key: Optional[str] = Field(None, description="API key or 'env:API_KEY' to use environment variable")
     ollama_base_url: Optional[str] = Field(None, description="Base URL for Ollama server (e.g., http://host.docker.internal:11434)")
+    embedding_dims: Optional[int] = Field(None, description="Embedding dimensions for the model")
 
 class EmbedderProvider(BaseModel):
     provider: str = Field(..., description="Embedder provider name")
@@ -74,19 +75,19 @@ def get_default_configuration():
         },
         "mem0": {
             "llm": {
-                "provider": "openai",
+                "provider": "ollama",
                 "config": {
-                    "model": "gpt-4o-mini",
+                    "model": "qwen3:8b",
                     "temperature": 0.1,
                     "max_tokens": 2000,
-                    "api_key": "env:OPENAI_API_KEY"
+                    "ollama_base_url": None,
                 }
             },
             "embedder": {
-                "provider": "openai",
+                "provider": "ollama",
                 "config": {
-                    "model": "text-embedding-3-small",
-                    "api_key": "env:OPENAI_API_KEY"
+                    "model": "bge-m3",
+                    "embedding_dims": 1024
                 }
             },
             "vector_store": None,

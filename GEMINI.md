@@ -95,6 +95,12 @@ search_memory(query="pytest before merge", limit=5)
 list_memories()
 ```
 
+### Auth context
+```text
+whoami()
+```
+Returns user_id, org_id, scopes, grants, and client_name.
+
 ### Update memory
 ```text
 update_memory(

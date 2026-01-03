@@ -9,11 +9,10 @@ Usage:
     python example_concept_extraction.py
 
 Requirements:
-    - openai package: pip install openai
-    - OpenAI API key in environment variable OPENAI_API_KEY
+    - Ollama running locally (default: http://localhost:11434)
+    - Qwen3 model pulled: ollama pull qwen3:8b
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -54,13 +53,6 @@ expanding to new markets (US)? Our burn rate is €50k/month and we have 18 mont
 def main():
     """Run concept extraction example"""
 
-    # Check for API key
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("ERROR: OPENAI_API_KEY environment variable not set")
-        print("Set it with: export OPENAI_API_KEY='your-key-here'")
-        sys.exit(1)
-
     print("=" * 80)
     print("BUSINESS CONCEPT EXTRACTION EXAMPLE")
     print("=" * 80)
@@ -69,8 +61,7 @@ def main():
     # Initialize extractor
     print("Initializing ConceptExtractor...")
     extractor = ConceptExtractor(
-        api_key=api_key,
-        model="gpt-4o-mini"  # Cost-effective choice
+        model="qwen3:8b"
     )
     print(f"✓ Using model: {extractor.model}")
     print()

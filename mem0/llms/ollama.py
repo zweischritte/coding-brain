@@ -1,4 +1,7 @@
-from typing import Dict, List, Optional, Union
+import json
+import logging
+import re
+from typing import Any, Dict, List, Optional, Union
 
 try:
     from ollama import Client
@@ -8,6 +11,9 @@ except ImportError:
 from mem0.configs.llms.base import BaseLlmConfig
 from mem0.configs.llms.ollama import OllamaConfig
 from mem0.llms.base import LLMBase
+from mem0.memory.utils import extract_json
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaLLM(LLMBase):
@@ -55,16 +61,49 @@ class OllamaLLM(LLMBase):
         else:
             content = response.message.content
 
-        if tools:
-            processed_response = {
-                "content": content,
-                "tool_calls": [],
-            }
-
-            # Ollama doesn't support tool calls in the same way, so we return the content
-            return processed_response
-        else:
+        if not tools:
             return content
+
+        processed_response = {
+            "content": content,
+            "tool_calls": [],
+        }
+
+        tool_name = None
+        required_keys: List[str] = []
+        if tools:
+            function_spec = tools[0].get("function", {})
+            tool_name = function_spec.get("name")
+            required_keys = function_spec.get("parameters", {}).get("required", [])
+
+        if not tool_name:
+            return processed_response
+
+        raw_json = extract_json(content)
+        raw_json = re.sub(r"<think>.*?</think>", "", raw_json, flags=re.DOTALL).strip()
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse Ollama tool response JSON.")
+            return processed_response
+
+        if isinstance(parsed, list):
+            if "entities" in required_keys:
+                processed_response["tool_calls"].append(
+                    {"name": tool_name, "arguments": {"entities": parsed}}
+                )
+            else:
+                for item in parsed:
+                    if isinstance(item, dict):
+                        processed_response["tool_calls"].append(
+                            {"name": tool_name, "arguments": item}
+                        )
+        elif isinstance(parsed, dict):
+            processed_response["tool_calls"].append(
+                {"name": tool_name, "arguments": parsed}
+            )
+
+        return processed_response
 
     def generate_response(
         self,
@@ -87,26 +126,40 @@ class OllamaLLM(LLMBase):
         Returns:
             str: The generated response.
         """
+        request_messages = [dict(msg) for msg in messages]
+
         # Build parameters for Ollama
         params = {
             "model": self.config.model,
-            "messages": messages,
+            "messages": request_messages,
         }
 
         # Handle JSON response format by using Ollama's native format parameter
         if response_format and response_format.get("type") == "json_object":
             params["format"] = "json"
             # Also add JSON format instruction to the last message as a fallback
-            if messages and messages[-1]["role"] == "user":
-                messages[-1]["content"] += "\n\nPlease respond with valid JSON only."
+            if request_messages and request_messages[-1]["role"] == "user":
+                request_messages[-1]["content"] += "\n\nPlease respond with valid JSON only."
             else:
-                messages.append({"role": "user", "content": "Please respond with valid JSON only."})
+                request_messages.append({"role": "user", "content": "Please respond with valid JSON only."})
+
+        if tools and not response_format:
+            tool_schema = tools[0].get("function", {}).get("parameters")
+            if tool_schema:
+                params["format"] = tool_schema
+                if request_messages and request_messages[-1]["role"] == "user":
+                    request_messages[-1]["content"] += "\n\nRespond with JSON that matches the schema only."
+                else:
+                    request_messages.append(
+                        {"role": "user", "content": "Respond with JSON that matches the schema only."}
+                    )
 
         # Add options for Ollama (temperature, num_predict, top_p)
         options = {
             "temperature": self.config.temperature,
             "num_predict": self.config.max_tokens,
             "top_p": self.config.top_p,
+            "top_k": self.config.top_k,
         }
         params["options"] = options
 
@@ -114,4 +167,16 @@ class OllamaLLM(LLMBase):
         params.pop("max_tokens", None)  # Ollama uses different parameter names
 
         response = self.client.chat(**params)
-        return self._parse_response(response, tools)
+        parsed_response = self._parse_response(response, tools)
+        if tools and not parsed_response.get("tool_calls"):
+            retry_messages = request_messages + [
+                {
+                    "role": "user",
+                    "content": "Return JSON only and match the schema exactly. No extra text.",
+                }
+            ]
+            params["messages"] = retry_messages
+            response = self.client.chat(**params)
+            parsed_response = self._parse_response(response, tools)
+
+        return parsed_response

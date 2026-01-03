@@ -78,8 +78,8 @@ class TestSettingsValidation:
 
             assert "neo4j_password" in str(exc_info.value).lower()
 
-    def test_missing_openai_api_key_fails_fast(self):
-        """Settings should raise if OPENAI_API_KEY is missing."""
+    def test_missing_openai_api_key_is_allowed(self):
+        """Settings should allow missing OPENAI_API_KEY for local LLM usage."""
         env = {
             "JWT_SECRET_KEY": "test-jwt-secret-key-with-32-chars-minimum",
             "POSTGRES_PASSWORD": "test-postgres-password",
@@ -89,10 +89,9 @@ class TestSettingsValidation:
 
         with patch.dict(os.environ, env, clear=True):
             from app.settings import Settings
-            with pytest.raises(Exception) as exc_info:
-                Settings(_env_file=None)
+            settings = Settings(_env_file=None)
 
-            assert "openai_api_key" in str(exc_info.value).lower()
+            assert settings.openai_api_key in ("", None)
 
     def test_weak_jwt_secret_rejected(self):
         """JWT secret must be at least 32 characters."""

@@ -15,8 +15,9 @@ class BusinessConceptsConfig:
     Environment variables:
     - BUSINESS_CONCEPTS_ENABLED: Master switch for concept system (default: false)
     - BUSINESS_CONCEPTS_AUTO_EXTRACT: Enable auto-extraction on memory add (default: false)
-    - BUSINESS_CONCEPTS_OPENAI_API_KEY: OpenAI API key for extraction (required for auto-extract)
-    - BUSINESS_CONCEPTS_EXTRACTION_MODEL: Model for extraction (default: gpt-4o-mini)
+    - BUSINESS_CONCEPTS_OPENAI_API_KEY: OpenAI API key for concept embeddings (required if using OpenAI embeddings)
+    - BUSINESS_CONCEPTS_EXTRACTION_MODEL: Model for extraction (default: qwen3:8b)
+    - BUSINESS_CONCEPTS_OLLAMA_BASE_URL: Override Ollama base URL for extraction (optional)
     - BUSINESS_CONCEPTS_MIN_CONFIDENCE: Minimum confidence for concept storage (default: 0.5)
     - BUSINESS_CONCEPTS_CONTRADICTION_DETECTION: Enable contradiction detection (default: false)
 
@@ -53,13 +54,18 @@ class BusinessConceptsConfig:
 
     @staticmethod
     def get_openai_api_key() -> str:
-        """Get OpenAI API key for extraction."""
+        """Get OpenAI API key for concept embeddings."""
         return os.getenv("BUSINESS_CONCEPTS_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
 
     @staticmethod
     def get_extraction_model() -> str:
         """Get model for concept extraction."""
-        return os.getenv("BUSINESS_CONCEPTS_EXTRACTION_MODEL", "gpt-4o-mini")
+        return os.getenv("BUSINESS_CONCEPTS_EXTRACTION_MODEL", "qwen3:8b")
+
+    @staticmethod
+    def get_ollama_base_url() -> str:
+        """Get Ollama base URL for local concept extraction."""
+        return os.getenv("BUSINESS_CONCEPTS_OLLAMA_BASE_URL", os.getenv("OLLAMA_BASE_URL", ""))
 
     @staticmethod
     def get_min_confidence() -> float:

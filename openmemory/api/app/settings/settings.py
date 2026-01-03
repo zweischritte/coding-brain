@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     jwt_secret_key: str
     postgres_password: str
     neo4j_password: str
-    openai_api_key: str
+    # Optional: only needed for OpenAI-backed features (e.g., embeddings)
+    openai_api_key: str = ""
 
     # ==========================================
     # PostgreSQL Configuration

@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, Response, status
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -97,6 +98,31 @@ def _check_valkey() -> dict[str, Any]:
     return {"status": "unavailable", "error": "Ping failed"}
 
 
+def _get_ollama_base_url() -> str:
+    env_base_url = os.getenv("OLLAMA_BASE_URL")
+    if env_base_url:
+        return env_base_url
+    env_host = os.getenv("OLLAMA_HOST")
+    if env_host:
+        if env_host.startswith(("http://", "https://")):
+            return env_host
+        if ":" in env_host:
+            return f"http://{env_host}"
+        return f"http://{env_host}:11434"
+    if os.path.exists("/.dockerenv"):
+        return "http://ollama:11434"
+    return "http://localhost:11434"
+
+
+def _check_ollama() -> dict[str, Any]:
+    """Check Ollama connection health (internal)."""
+    base_url = _get_ollama_base_url().rstrip("/")
+    with httpx.Client(timeout=2.0) as client:
+        response = client.get(f"{base_url}/api/tags")
+        response.raise_for_status()
+    return {"status": "healthy"}
+
+
 def check_postgres_health() -> dict[str, Any]:
     """Check PostgreSQL connection health with latency measurement."""
     return _measure_health_check(_check_postgres)
@@ -122,6 +148,10 @@ def check_valkey_health() -> dict[str, Any]:
     return _measure_health_check(_check_valkey)
 
 
+def check_ollama_health() -> dict[str, Any]:
+    """Check Ollama connection health with latency measurement."""
+    return _measure_health_check(_check_ollama)
+
 @router.get("/live")
 async def liveness():
     """
@@ -145,6 +175,7 @@ async def readiness(response: Response):
     deps = {
         "postgres": check_postgres_health(),
         "neo4j": check_neo4j_health(),
+        "ollama": check_ollama_health(),
     }
 
     # Determine overall status
@@ -170,6 +201,7 @@ async def dependency_health(response: Response):
     - opensearch: OpenSearch for full-text search
     - qdrant: Qdrant vector database
     - valkey: Valkey (Redis-compatible) cache
+    - ollama: Ollama embedder service
     """
     deps = {
         "postgres": check_postgres_health(),
@@ -177,6 +209,7 @@ async def dependency_health(response: Response):
         "opensearch": check_opensearch_health(),
         "qdrant": check_qdrant_health(),
         "valkey": check_valkey_health(),
+        "ollama": check_ollama_health(),
     }
 
     # Determine overall status
