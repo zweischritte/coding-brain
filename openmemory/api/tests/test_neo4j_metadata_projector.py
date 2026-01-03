@@ -389,7 +389,7 @@ class TestMetadataProjector:
 
     def test_get_relations_for_memories(self, mock_session_factory, mock_session):
         """Test querying relations for memory IDs."""
-        # Mock the result
+        # Mock the result - include similarityScore and targetPreview (null for non-OM_SIMILAR)
         mock_records = [
             MagicMock(
                 __getitem__=lambda self, k: {
@@ -398,6 +398,8 @@ class TestMetadataProjector:
                     "targetLabel": "OM_Category",
                     "targetValue": "architecture",
                     "relationValue": None,
+                    "similarityScore": None,
+                    "targetPreview": None,
                 }[k]
             ),
             MagicMock(
@@ -407,6 +409,8 @@ class TestMetadataProjector:
                     "targetLabel": "OM_Entity",
                     "targetValue": "BMG",
                     "relationValue": None,
+                    "similarityScore": None,
+                    "targetPreview": None,
                 }[k]
             ),
         ]

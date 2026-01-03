@@ -28,6 +28,35 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Max OM_SIMILAR relations per memory in response (sorted by score)
+OM_SIMILAR_LIMIT = 5
+
+
+def _limit_similar_relations(relations: List[Dict], limit: int = OM_SIMILAR_LIMIT) -> List[Dict]:
+    """
+    Limit OM_SIMILAR relations to top N by score.
+
+    OM_SIMILAR edges can be numerous (40+). This function:
+    1. Separates OM_SIMILAR from other relation types
+    2. Sorts OM_SIMILAR by score descending
+    3. Takes top N (default 5)
+    4. Returns other relations + limited OM_SIMILAR
+
+    Args:
+        relations: List of relation dicts with 'type', 'target_value', optionally 'score'
+        limit: Max OM_SIMILAR to keep (default: OM_SIMILAR_LIMIT)
+
+    Returns:
+        Filtered list with at most `limit` OM_SIMILAR relations
+    """
+    similar = [r for r in relations if r.get("type") == "OM_SIMILAR"]
+    other = [r for r in relations if r.get("type") != "OM_SIMILAR"]
+
+    # Sort by score descending, treat missing/None as 0
+    similar_sorted = sorted(similar, key=lambda x: x.get("score") or 0, reverse=True)
+    return other + similar_sorted[:limit]
+
+
 DEFAULT_METADATA_RELATION_TYPES: List[str] = [
     "OM_ABOUT",
     "OM_IN_CATEGORY",
@@ -609,7 +638,12 @@ class CypherBuilder:
 
     @staticmethod
     def get_memory_relations_query() -> str:
-        """Generate query to get all relations for given memory IDs."""
+        """Generate query to get all relations for given memory IDs.
+
+        For OM_SIMILAR edges (to other OM_Memory nodes), also returns:
+        - similarityScore: The r.score property from the edge
+        - targetPreview: First 80 chars of target memory content
+        """
         return """
         MATCH (m:OM_Memory)-[r]->(target)
         WHERE m.id IN $memoryIds
@@ -617,6 +651,7 @@ class CypherBuilder:
                type(r) AS relationType,
                labels(target)[0] AS targetLabel,
                CASE
+                   WHEN target:OM_Memory THEN target.id
                    WHEN target:OM_Entity THEN target.name
                    WHEN target:OM_Category THEN target.name
                    WHEN target:OM_Scope THEN target.name
@@ -627,7 +662,15 @@ class CypherBuilder:
                    WHEN target:OM_App THEN target.name
                    ELSE null
                END AS targetValue,
-               r.tagValue AS relationValue
+               r.tagValue AS relationValue,
+               CASE
+                   WHEN type(r) = 'OM_SIMILAR' THEN r.score
+                   ELSE null
+               END AS similarityScore,
+               CASE
+                   WHEN target:OM_Memory THEN left(target.content, 80)
+                   ELSE null
+               END AS targetPreview
         """
 
 
@@ -870,6 +913,9 @@ class MetadataProjector:
         """
         Get all metadata relations for a list of memory IDs.
 
+        For OM_SIMILAR relations, includes score and preview fields.
+        OM_SIMILAR relations are limited to top N by score (see OM_SIMILAR_LIMIT).
+
         Args:
             memory_ids: List of memory UUIDs
 
@@ -900,7 +946,19 @@ class MetadataProjector:
                     if record["relationValue"] is not None:
                         relation["value"] = record["relationValue"]
 
+                    # Add score and preview for OM_SIMILAR relations
+                    if record["similarityScore"] is not None:
+                        relation["score"] = round(record["similarityScore"], 2)
+                    if record["targetPreview"] is not None:
+                        relation["preview"] = record["targetPreview"]
+
                     relations_by_memory[memory_id].append(relation)
+
+                # Apply OM_SIMILAR limit per memory
+                for memory_id in relations_by_memory:
+                    relations_by_memory[memory_id] = _limit_similar_relations(
+                        relations_by_memory[memory_id]
+                    )
 
                 return relations_by_memory
 
