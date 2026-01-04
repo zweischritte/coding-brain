@@ -36,6 +36,15 @@ from app.utils.structured_memory import (
     normalize_tag_list_input,
     SHARED_SCOPES,
 )
+from app.utils.code_reference import (
+    CodeReference,
+    CodeReferenceError,
+    validate_code_refs_input,
+    serialize_code_refs_to_tags,
+    deserialize_code_refs_from_tags,
+    format_code_refs_for_response,
+    has_code_refs_in_tags,
+)
 from app.utils.reranking import (
     SearchContext,
     ExclusionFilters,
@@ -629,11 +638,15 @@ Optional metadata:
   Format: <prefix>:<value> where prefix is user, team, project, or org
   Examples: user:grischa, team:cloudfactory/acme/billing/backend, org:cloudfactory
   You may pass access_entity="auto" (or omit it) to default when exactly one matching grant exists.
+- code_refs: List of code references linking memory to source code locations
+  Each code_ref is a dict with: file_path, line_start, line_end, symbol_id, git_commit, code_hash
+  Example: [{"file_path": "/src/auth.ts", "line_start": 42, "line_end": 87, "symbol_id": "AuthService#login"}]
 - infer: If true, use LLM extraction to infer memories (default: false)
 
 Examples:
 - add_memories(text="Use module boundaries for auth clients", category="architecture", scope="org", artifact_type="module", artifact_ref="auth/clients", entity="Platform", access_entity="org:cloudfactory", tags={"decision": true})
 - add_memories(text="Always run python -m pytest before merge", category="workflow", scope="team", entity="Backend", access_entity="team:cloudfactory/backend", evidence=["ADR-014"])
+- add_memories(text="createFileUploads uses S3 MultipartUpload", category="architecture", scope="project", entity="StorageService", code_refs=[{"file_path": "/apps/merlin/src/storage.ts", "line_start": 42, "line_end": 87}], access_entity="project:default_org/merlin")
 """)
 async def add_memories(
     text: str,
@@ -646,6 +659,7 @@ async def add_memories(
     evidence: list = None,
     tags: dict = None,
     access_entity: str = None,
+    code_refs: list = None,
     infer: bool = False,
 ) -> str:
     # Check scope - requires memories:write
@@ -710,6 +724,23 @@ async def add_memories(
         )
     except StructuredMemoryError as e:
         return json.dumps(_format_structured_memory_error(e))
+
+    # Validate and serialize code_refs into tags (Phase 1: tags-based storage)
+    validated_code_refs = []
+    if code_refs:
+        try:
+            validated_code_refs = validate_code_refs_input(code_refs)
+            code_ref_tags = serialize_code_refs_to_tags(validated_code_refs)
+            # Merge code_ref tags into existing tags
+            existing_tags = structured_metadata.get("tags", {})
+            if not isinstance(existing_tags, dict):
+                existing_tags = {}
+            structured_metadata["tags"] = {**existing_tags, **code_ref_tags}
+        except CodeReferenceError as e:
+            return json.dumps({
+                "error": str(e),
+                "code": "INVALID_CODE_REFS",
+            })
 
     combined_metadata = {
         "source_app": "openmemory",
@@ -3569,9 +3600,15 @@ async def explain_code(
         })
 
 
-@mcp.tool(description="""Find functions that call a given symbol.
+@mcp.tool(description="""Find functions that call a given symbol with automatic fallback.
 
-Traverse the call graph to find all callers of a symbol.
+Traverse the call graph to find all callers of a symbol. Uses a 4-stage
+fallback cascade when the symbol is not found in the graph:
+
+1. Graph-based search (SCIP index) - Primary
+2. Grep-based pattern matching - First fallback
+3. Semantic search (embeddings) - Second fallback
+4. Structured error with suggestions - Final fallback
 
 Required parameters:
 - repo_id: Repository ID (required)
@@ -3579,11 +3616,19 @@ Required parameters:
 
 Optional parameters:
 - depth: Traversal depth (default: 2, max: 5)
+- use_fallback: Enable fallback cascade (default: true)
 
 Returns:
 - nodes[]: Graph nodes (functions/methods)
 - edges[]: Graph edges (CALLS relationships)
-- meta: Response metadata
+- meta: Response metadata with fallback info
+- suggestions[]: Fallback suggestions (when fallback stage 4)
+
+Fallback meta fields:
+- degraded_mode: true when using fallback
+- fallback_stage: 1-4 indicating which stage succeeded
+- fallback_strategy: "grep" | "semantic_search" | "structured_error"
+- warning: Describes accuracy caveats
 
 Examples:
 - find_callers(repo_id="repo-123", symbol_name="main")
@@ -3594,8 +3639,9 @@ async def find_callers(
     symbol_name: str = None,
     symbol_id: str = None,
     depth: int = 2,
+    use_fallback: bool = True,
 ) -> str:
-    """Find functions that call a given symbol."""
+    """Find functions that call a given symbol with automatic fallback."""
     # Check scope
     scope_error = _check_tool_scope("graph:read")
     if scope_error:
@@ -3629,7 +3675,7 @@ async def find_callers(
         })
 
     try:
-        from tools.call_graph import CallGraphInput
+        from tools.call_graph import CallGraphInput, SymbolNotFoundError
         import dataclasses
 
         input_data = CallGraphInput(
@@ -3639,8 +3685,54 @@ async def find_callers(
             depth=min(max(1, depth or 2), 5),
         )
 
+        # Use fallback tool if enabled
+        if use_fallback:
+            try:
+                from tools.fallback_find_callers import (
+                    FallbackFindCallersTool,
+                    GrepTool,
+                )
+
+                # Create fallback tool with available dependencies
+                fallback_tool = FallbackFindCallersTool(
+                    graph_driver=toolkit.callers_tool.graph_driver,
+                    grep_tool=GrepTool(),  # Basic grep tool
+                    search_tool=toolkit.search_tool if hasattr(toolkit, 'search_tool') else None,
+                )
+
+                result = fallback_tool.find(input_data)
+
+                # Add fallback info to response
+                response = dataclasses.asdict(result)
+                if fallback_tool.fallback_used:
+                    response["_fallback_info"] = {
+                        "fallback_used": True,
+                        "fallback_stage": fallback_tool.fallback_stage,
+                        "stage_timings_ms": fallback_tool.get_stage_timings(),
+                        "warning": "Results from fallback strategy - verify accuracy",
+                    }
+
+                return json.dumps(response, default=str)
+
+            except ImportError:
+                logging.warning("FallbackFindCallersTool not available, using basic tool")
+                # Fall through to basic tool
+
+        # Basic tool (no fallback)
         result = toolkit.callers_tool.find(input_data)
         return json.dumps(dataclasses.asdict(result), default=str)
+
+    except SymbolNotFoundError as e:
+        # Return structured error with suggestions
+        logging.info(f"Symbol not found in find_callers: {e}")
+        error_response = e.to_dict()
+        error_response["nodes"] = []
+        error_response["edges"] = []
+        error_response["meta"] = _create_code_meta(
+            degraded=True,
+            error=str(e),
+        )
+        return json.dumps(error_response, default=str)
 
     except Exception as e:
         logging.exception(f"Error in find_callers: {e}")
