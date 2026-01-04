@@ -35,9 +35,66 @@ class CallGraphError(Exception):
 
 
 class SymbolNotFoundError(CallGraphError):
-    """Raised when a symbol cannot be found in the graph."""
+    """Raised when a symbol cannot be found in the graph.
 
-    pass
+    Includes structured suggestions for fallback strategies.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        symbol_name: Optional[str] = None,
+        repo_id: Optional[str] = None,
+    ):
+        """Initialize with structured suggestions.
+
+        Args:
+            message: Error message
+            symbol_name: The symbol that was not found
+            repo_id: Repository ID for context
+        """
+        super().__init__(message)
+        self.symbol_name = symbol_name or self._extract_symbol_from_message(message)
+        self.repo_id = repo_id
+        self.suggestions = self._build_suggestions()
+
+    def _extract_symbol_from_message(self, message: str) -> str:
+        """Extract symbol name from error message."""
+        # Try to extract from "Symbol not found: <name>" pattern
+        if ": " in message:
+            return message.split(": ", 1)[-1].strip()
+        return message
+
+    def _build_suggestions(self) -> list[str]:
+        """Build list of suggested fallback actions."""
+        symbol = self.symbol_name
+        suggestions = [
+            f"Try: search_code_hybrid(query='{symbol}')",
+            f"Try: grep -r '{symbol}' --include='*.ts' --include='*.py'",
+            "Symbol may be called via decorator (@OnEvent, @Subscribe, @EventHandler)",
+            "Symbol may be injected via DI (constructor injection)",
+            "Index may be stale - consider re-indexing with index_codebase(reset=true)",
+        ]
+        return suggestions
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for MCP response."""
+        return {
+            "error": "SYMBOL_NOT_FOUND",
+            "symbol": self.symbol_name,
+            "repo_id": self.repo_id,
+            "suggestions": self.suggestions,
+            "fallback_strategy": "RECOMMENDED",
+            "next_actions": [
+                {"tool": "search_code_hybrid", "query": self.symbol_name},
+                {"tool": "grep", "pattern": self.symbol_name, "include": "*.ts,*.py"},
+            ],
+            "explanation": (
+                "The symbol was not found in the indexed graph. "
+                "This may happen with decorators, event handlers, or dependency injection. "
+                "Use the suggested fallback tools to locate the symbol."
+            ),
+        }
 
 
 class InvalidInputError(CallGraphError):
@@ -130,6 +187,10 @@ class ResponseMeta:
     degraded_mode: bool = False
     missing_sources: list[str] = field(default_factory=list)
     next_cursor: Optional[str] = None
+    # Fallback-specific fields
+    fallback_stage: Optional[int] = None
+    fallback_strategy: Optional[str] = None
+    warning: Optional[str] = None
 
 
 @dataclass
@@ -143,6 +204,8 @@ class GraphOutput:
     edges: list[GraphEdge]
     meta: ResponseMeta
     next_cursor: Optional[str] = None
+    # Fallback suggestions (populated on Stage 4)
+    suggestions: list[str] = field(default_factory=list)
 
 
 # =============================================================================

@@ -48,6 +48,12 @@ __all__ = [
     "CallGraphError",
     "create_find_callers_tool",
     "create_find_callees_tool",
+    # fallback_find_callers tool
+    "FallbackConfig",
+    "FallbackFindCallersTool",
+    "GrepTool",
+    "GrepMatch",
+    "create_fallback_find_callers_tool",
     # symbol_definition tool
     "SymbolDefinitionConfig",
     "SymbolLookupInput",
@@ -139,6 +145,12 @@ _MODULE_MAP = {
     "CallGraphError": "call_graph",
     "create_find_callers_tool": "call_graph",
     "create_find_callees_tool": "call_graph",
+    # fallback_find_callers
+    "FallbackConfig": "fallback_find_callers",
+    "FallbackFindCallersTool": "fallback_find_callers",
+    "GrepTool": "fallback_find_callers",
+    "GrepMatch": "fallback_find_callers",
+    "create_fallback_find_callers_tool": "fallback_find_callers",
     # symbol_definition
     "SymbolDefinitionConfig": "symbol_definition",
     "SymbolLookupInput": "symbol_definition",
