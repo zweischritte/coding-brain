@@ -49,6 +49,7 @@ from app.utils.response_format import (
     format_search_results,
     format_memory_list,
     format_add_memories_response,
+    format_compact_relations,
 )
 from app.utils.db import get_user_and_app
 from app.utils.memory import get_memory_client
@@ -910,11 +911,16 @@ Parameters:
 - updated_before: ISO datetime - exclude memories updated after this
 - exclude_states: Comma-separated states to exclude (default: "deleted")
 - exclude_tags: Comma-separated tags to exclude (e.g., "rejected")
-- limit: Max results to return (default: 10, max: 50)
+- limit: Max results to return (default: 10, max: 50, for initial searches use 10)
 - verbose: If true, return full debug info (scores breakdown, query, filters)
 - use_rrf: Enable RRF multi-source fusion (default: true)
 - graph_seed_count: Top vector results to use as graph traversal seeds (default: 5)
 - auto_route: Enable intelligent query routing based on entity detection (default: true)
+- relation_detail: Output verbosity for meta_relations (default: "standard")
+  - "none": No meta_relations (minimal tokens)
+  - "minimal": Only artifact path + similar memory IDs
+  - "standard": + entities + tags + evidence (recommended, ~60% token reduction)
+  - "full": Verbose format with all OM_* relations (for debugging)
 
 HYBRID RETRIEVAL: When enabled (use_rrf=true), search combines:
 1. Vector similarity (Qdrant embeddings)
@@ -953,6 +959,16 @@ Examples:
 
 - Debug mode with full scoring:
   search_memory(query="Pattern", verbose=true)
+
+meta_relations compact format (default):
+- meta_relations[memory_id].artifact: File path for code navigation
+- meta_relations[memory_id].similar[]: List of {id, score, preview} for related memories
+- meta_relations[memory_id].entities[]: Related entity names
+- meta_relations[memory_id].tags: Tag key-value dict
+- meta_relations[memory_id].evidence[]: ADR/PR/issue references
+
+Note: With relation_detail="full", meta_relations includes all OM_* relations in verbose format.
+Use get_memory(memory_id) to fetch full content of related memories from similar[].id.
 """)
 async def search_memory(
     query: str,
@@ -982,6 +998,8 @@ async def search_memory(
     graph_seed_count: int = 5,
     # QUERY ROUTING (Phase 3: Intelligent Query Routing)
     auto_route: bool = True,
+    # RELATION OUTPUT (controls meta_relations format)
+    relation_detail: str = "standard",
 ) -> str:
     """Search memories with re-ranking. See tool description for full docs."""
     # Check scope - requires memories:read
@@ -1517,15 +1535,40 @@ async def search_memory(
 
             # Enrich with graph relations (only if graph is available)
             # This adds two new optional fields without changing existing response shape
+            # The relation_detail parameter controls the output format:
+            #   - "none": No meta_relations (minimal tokens)
+            #   - "minimal": Only artifact + similar IDs
+            #   - "standard": artifact + similar + entities + tags + evidence (default, compact)
+            #   - "full": Verbose format with all relation types (for debugging)
             try:
-                # Get memory IDs from results for meta_relations lookup
-                memory_ids = [str(r.get("id")) for r in results if r.get("id")]
+                # Skip meta_relations if relation_detail is "none"
+                if relation_detail != "none":
+                    # Get memory IDs from results for meta_relations lookup
+                    memory_ids = [str(r.get("id")) for r in results if r.get("id")]
 
-                # 1. meta_relations: deterministic metadata relations from Neo4j projection
-                if memory_ids and is_graph_enabled():
-                    meta_relations = get_meta_relations_for_memories(memory_ids)
-                    if meta_relations:
-                        response["meta_relations"] = meta_relations
+                    # 1. meta_relations: deterministic metadata relations from Neo4j projection
+                    if memory_ids and is_graph_enabled():
+                        raw_meta_relations = get_meta_relations_for_memories(memory_ids)
+                        if raw_meta_relations:
+                            if relation_detail == "full":
+                                # Full verbose format (for debugging)
+                                response["meta_relations"] = raw_meta_relations
+                            else:
+                                # Compact format (standard or minimal)
+                                compact_relations = {}
+                                for memory_id, relations in raw_meta_relations.items():
+                                    compact = format_compact_relations(relations)
+                                    if compact:
+                                        if relation_detail == "minimal":
+                                            # Only keep artifact(s) and similar
+                                            compact = {
+                                                k: v for k, v in compact.items()
+                                                if k in ("artifact", "artifacts", "similar")
+                                            }
+                                        if compact:  # Still has content after filtering
+                                            compact_relations[memory_id] = compact
+                                if compact_relations:
+                                    response["meta_relations"] = compact_relations
 
                 # 2. relations: Mem0 Graph Memory relations (LLM-extracted entities)
                 if is_mem0_graph_enabled():
@@ -1956,6 +1999,147 @@ async def list_memories() -> str:
         return f"Error getting memories: {e}"
 
 
+@mcp.tool(description="""Retrieve a single memory by UUID with all fields.
+
+Required:
+- memory_id: UUID of the memory to retrieve
+
+Returns all memory fields (consistent with list_memories format):
+- id: UUID for chaining with update_memory/delete_memories
+- memory: The actual content
+- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
+- scope: session | user | team | project | org | enterprise
+- artifact_type: repo | service | module | component | api | db | infra | file
+- artifact_ref: reference string (if present)
+- entity: team/service/component/person (if present)
+- source: user | inference (if present)
+- evidence: List of ADR/PR/issue refs (if present)
+- tags: Qualitative info (if present)
+- access_entity: ACL identifier (e.g., "org:cloudfactory", "team:acme/backend")
+- created_at: Berlin time (Europe/Berlin)
+- updated_at: Berlin time (if present)
+
+Errors:
+- {"error": "Memory not found", "code": "NOT_FOUND"} - memory doesn't exist or user lacks access
+- {"error": "Invalid memory_id format", "code": "INVALID_INPUT"} - malformed UUID
+
+Use cases:
+- Verify that an update_memory call succeeded
+- Debug ACL issues (see access_entity field)
+- Follow evidence chains between memories
+- Inspect memory state after operations
+
+Examples:
+- get_memory(memory_id="ba93af28-784d-4262-b8f9-adb08c45acab")
+""")
+async def get_memory(memory_id: str) -> str:
+    """Retrieve a single memory by UUID with all fields."""
+    # Check scope - requires memories:read
+    scope_error = _check_tool_scope("memories:read")
+    if scope_error:
+        return scope_error
+
+    uid = user_id_var.get(None)
+    client_name = client_name_var.get(None)
+
+    if not uid:
+        return json.dumps({"error": "user_id not provided"})
+    if not client_name:
+        return json.dumps({"error": "client_name not provided"})
+
+    # Validate UUID format
+    try:
+        memory_uuid = uuid.UUID(memory_id)
+    except (ValueError, TypeError):
+        return json.dumps({
+            "error": "Invalid memory_id format",
+            "code": "INVALID_INPUT",
+        })
+
+    try:
+        db = SessionLocal()
+        try:
+            # Get or create user and app
+            user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
+
+            # Query the memory
+            memory = db.query(Memory).filter(Memory.id == memory_uuid).first()
+
+            if not memory:
+                return json.dumps({
+                    "error": "Memory not found",
+                    "code": "NOT_FOUND",
+                })
+
+            # Access control check
+            principal = principal_var.get(None)
+            md = memory.metadata_ or {}
+            access_entity = md.get("access_entity")
+
+            if access_entity:
+                # Multi-user routing: check if principal has access to the access_entity
+                if principal:
+                    from app.security.access import can_read_access_entity
+                    if not can_read_access_entity(principal, access_entity):
+                        # Return NOT_FOUND to avoid leaking existence (security best practice)
+                        return json.dumps({
+                            "error": "Memory not found",
+                            "code": "NOT_FOUND",
+                        })
+                else:
+                    # No principal but memory has access_entity - check legacy owner access
+                    if memory.user_id != user.id:
+                        return json.dumps({
+                            "error": "Memory not found",
+                            "code": "NOT_FOUND",
+                        })
+            else:
+                # Legacy behavior: only owner can access memories without access_entity
+                if memory.user_id != user.id:
+                    return json.dumps({
+                        "error": "Memory not found",
+                        "code": "NOT_FOUND",
+                    })
+
+            # Build raw memory object for formatting
+            raw_memory = {
+                "id": str(memory.id),
+                "memory": memory.content,
+                "category": md.get("category"),
+                "scope": md.get("scope"),
+                "artifact_type": md.get("artifact_type"),
+                "artifact_ref": md.get("artifact_ref"),
+                "entity": md.get("entity"),
+                "access_entity": md.get("access_entity"),
+                "source": md.get("source"),
+                "evidence": md.get("evidence"),
+                "tags": md.get("tags"),
+                "created_at": memory.created_at.isoformat() if memory.created_at else None,
+                "updated_at": memory.updated_at.isoformat() if memory.updated_at else None,
+            }
+
+            # Create access log
+            access_log = MemoryAccessLog(
+                memory_id=memory.id,
+                app_id=app.id,
+                access_type="get",
+                metadata_={},
+            )
+            db.add(access_log)
+            db.commit()
+
+            # Apply lean formatting (without score since this is not a search result)
+            from app.utils.response_format import format_memory_result
+            formatted_memory = format_memory_result(raw_memory, include_score=False)
+
+            return json.dumps(formatted_memory, indent=2)
+        finally:
+            db.close()
+    except Exception as e:
+        logging.exception(f"Error getting memory: {e}")
+        return json.dumps({"error": f"Error getting memory: {e}"})
+
+
 @mcp.tool(description="Delete specific memories by their IDs")
 async def delete_memories(memory_ids: list[str]) -> str:
     # Check scope - requires memories:delete
@@ -2322,14 +2506,38 @@ async def update_memory(
             if not preserve_timestamps:
                 memory.updated_at = datetime.datetime.now(datetime.UTC)
 
-            # Update vector store if content changed
-            if content_updated:
-                memory_client = get_memory_client_safe()
-                if memory_client:
+            # Determine if metadata was updated
+            metadata_updated = bool(validated_fields or normalized_add_tags or normalized_remove_tags)
+
+            # Update vector store
+            memory_client = get_memory_client_safe()
+            if memory_client:
+                if content_updated:
+                    # Content changed -> re-embed and update payload
                     try:
                         memory_client.update(str(memory_id), content_text)
+                        # Also sync metadata (mem0's update doesn't include our structured metadata)
+                        from app.utils.vector_sync import sync_metadata_to_qdrant
+                        sync_metadata_to_qdrant(
+                            memory_id=str(memory_id),
+                            memory=memory,
+                            metadata=updated_metadata,
+                            memory_client=memory_client,
+                        )
                     except Exception as vs_error:
                         logging.warning(f"Failed to update vector store: {vs_error}")
+                elif metadata_updated:
+                    # Only metadata changed -> update payload without re-embedding
+                    try:
+                        from app.utils.vector_sync import sync_metadata_to_qdrant
+                        sync_metadata_to_qdrant(
+                            memory_id=str(memory_id),
+                            memory=memory,
+                            metadata=updated_metadata,
+                            memory_client=memory_client,
+                        )
+                    except Exception as vs_error:
+                        logging.warning(f"Failed to sync metadata to vector store: {vs_error}")
 
             # Create access log
             access_log = MemoryAccessLog(
@@ -2392,7 +2600,7 @@ No embedding computation at query time - edges are pre-computed.
 Parameters:
 - memory_id: UUID of the seed memory (required)
 - min_score: Minimum similarity score (0.0-1.0, default: 0.0)
-- limit: Max results to return (default: 10, max: 50)
+- limit: Max results to return (default: 10, max: 50, for initial searches use 10)
 
 Returns:
 - seed_memory_id
