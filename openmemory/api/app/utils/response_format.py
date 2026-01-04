@@ -403,3 +403,108 @@ def format_add_memories_response(
             "failed": len([r for r in formatted_results if not r.get("id")]),
         }
     }
+
+
+# =============================================================================
+# META RELATIONS FORMATTING
+# =============================================================================
+
+def format_compact_relations(relations: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Convert verbose meta_relations to compact navigation format.
+
+    This function reduces token usage by ~60% while preserving navigation utility.
+    It extracts the actionable relations and excludes noise (redundant metadata).
+
+    Extracts:
+    - artifact: File path from OM_REFERENCES_ARTIFACT (or artifacts[] if multiple)
+    - similar: List of {id, score, preview} from OM_SIMILAR
+    - entities: List of entity names from OM_ABOUT
+    - tags: Dict from OM_TAGGED
+    - evidence: List of evidence refs from OM_HAS_EVIDENCE
+
+    Excludes (noise - already in main result or never useful):
+    - OM_WRITTEN_VIA (never useful for code tasks)
+    - OM_IN_CATEGORY (already in main result)
+    - OM_IN_SCOPE (already in main result)
+    - OM_HAS_ARTIFACT_TYPE (redundant with artifact)
+
+    Args:
+        relations: List of relation dicts from get_meta_relations_for_memories()
+                   Each dict has: type, target_label, target_value, optional score/preview/value
+
+    Returns:
+        Compact dict with only navigation-relevant fields.
+        Returns empty dict if no actionable relations.
+
+    Example output:
+        {
+            "artifact": "apps/merlin/src/reports/abstract-report.service.ts",
+            "similar": [
+                {"id": "def-456", "score": 0.92, "preview": "BooksReportService extends..."},
+                {"id": "ghi-789", "score": 0.87, "preview": "MoviesReportService extends..."}
+            ],
+            "entities": ["ReportsModule", "Redis"],
+            "tags": {"area": "search", "importance": "high"},
+            "evidence": ["ADR-014", "PR-123"]
+        }
+    """
+    if not relations:
+        return {}
+
+    compact = {}
+
+    # Extract artifact path(s) from OM_REFERENCES_ARTIFACT
+    artifact_refs = [
+        r["target_value"]
+        for r in relations
+        if r.get("type") == "OM_REFERENCES_ARTIFACT" and r.get("target_value")
+    ]
+    if len(artifact_refs) == 1:
+        compact["artifact"] = artifact_refs[0]
+    elif len(artifact_refs) > 1:
+        compact["artifacts"] = artifact_refs
+
+    # Extract similar memories with scores and previews from OM_SIMILAR
+    similar = []
+    for r in relations:
+        if r.get("type") == "OM_SIMILAR" and r.get("target_value"):
+            entry = {"id": r["target_value"]}
+            if r.get("score") is not None:
+                entry["score"] = r["score"]
+            if r.get("preview"):
+                entry["preview"] = r["preview"]
+            similar.append(entry)
+    if similar:
+        compact["similar"] = similar
+
+    # Extract entity names from OM_ABOUT
+    entities = [
+        r["target_value"]
+        for r in relations
+        if r.get("type") == "OM_ABOUT" and r.get("target_value")
+    ]
+    if entities:
+        compact["entities"] = entities
+
+    # Extract tags as dict from OM_TAGGED
+    tags = {}
+    for r in relations:
+        if r.get("type") == "OM_TAGGED" and r.get("target_value"):
+            tag_key = r["target_value"]
+            # Use the 'value' field if present, otherwise default to True
+            tag_value = r.get("value") if r.get("value") is not None else True
+            tags[tag_key] = tag_value
+    if tags:
+        compact["tags"] = tags
+
+    # Extract evidence refs from OM_HAS_EVIDENCE
+    evidence_refs = [
+        r["target_value"]
+        for r in relations
+        if r.get("type") == "OM_HAS_EVIDENCE" and r.get("target_value")
+    ]
+    if evidence_refs:
+        compact["evidence"] = evidence_refs
+
+    return compact
