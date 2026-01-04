@@ -90,6 +90,22 @@ class SymbolType(Enum):
 
 
 @dataclass
+class DecoratorInfo:
+    """Information about a decorator applied to a symbol.
+
+    Used for NestJS/Angular decorator extraction to enable:
+    - Event-edge inference (@OnEvent -> emit() connections)
+    - HTTP endpoint mapping (@Get, @Post routes)
+    - DI graph extraction (@Injectable, @Inject)
+    """
+
+    name: str
+    decorator_type: Optional[str] = None  # event_handler, http_handler, di_provider, etc.
+    arguments: list[str] = field(default_factory=list)
+    raw_text: Optional[str] = None
+
+
+@dataclass
 class Symbol:
     """A symbol extracted from source code."""
 
@@ -103,6 +119,7 @@ class Symbol:
     parent_name: Optional[str] = None
     col_start: Optional[int] = None
     col_end: Optional[int] = None
+    decorators: list[DecoratorInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -430,6 +447,81 @@ class PythonPlugin(LanguagePlugin):
 # =============================================================================
 
 
+# Known NestJS/Angular decorator mappings for semantic classification
+KNOWN_DECORATORS: dict[str, str] = {
+    # === Event Handling ===
+    "OnEvent": "event_handler",
+    "OnQueueEvent": "event_handler",
+    "Process": "queue_processor",
+
+    # === HTTP Handlers ===
+    "Get": "http_handler",
+    "Post": "http_handler",
+    "Put": "http_handler",
+    "Patch": "http_handler",
+    "Delete": "http_handler",
+    "Head": "http_handler",
+    "Options": "http_handler",
+    "All": "http_handler",
+
+    # === Controllers ===
+    "Controller": "controller",
+    "Resolver": "graphql_resolver",
+
+    # === Microservices ===
+    "EventPattern": "message_handler",
+    "MessagePattern": "message_handler",
+    "GrpcMethod": "grpc_handler",
+    "GrpcStreamMethod": "grpc_stream_handler",
+
+    # === Dependency Injection ===
+    "Injectable": "di_provider",
+    "Inject": "di_injection",
+    "Optional": "di_optional",
+    "Global": "di_global",
+
+    # === Middleware ===
+    "UseGuards": "guard_chain",
+    "UseInterceptors": "interceptor_chain",
+    "UsePipes": "pipe_chain",
+    "UseFilters": "filter_chain",
+
+    # === Scheduling ===
+    "Cron": "scheduled_task",
+    "Interval": "scheduled_task",
+    "Timeout": "scheduled_task",
+
+    # === WebSockets ===
+    "WebSocketGateway": "websocket_gateway",
+    "SubscribeMessage": "websocket_handler",
+    "ConnectedSocket": "websocket_param",
+    "MessageBody": "websocket_param",
+
+    # === Validation / Params ===
+    "Body": "param_decorator",
+    "Query": "param_decorator",
+    "Param": "param_decorator",
+    "Headers": "param_decorator",
+
+    # === GraphQL ===
+    "Mutation": "graphql_mutation",
+    "Subscription": "graphql_subscription",
+    "ResolveField": "graphql_field_resolver",
+
+    # === Angular-specific ===
+    "Component": "component",
+    "Directive": "directive",
+    "Pipe": "pipe",
+    "NgModule": "module",
+    "Input": "input_binding",
+    "Output": "output_binding",
+    "HostListener": "host_listener",
+    "HostBinding": "host_binding",
+    "ViewChild": "view_child",
+    "ContentChild": "content_child",
+}
+
+
 class TypeScriptPlugin(LanguagePlugin):
     """Language plugin for TypeScript and TSX."""
 
@@ -515,13 +607,20 @@ class TypeScriptPlugin(LanguagePlugin):
         symbols: list[Symbol],
         parent_name: Optional[str],
     ) -> None:
-        """Extract class symbol."""
+        """Extract class symbol with decorators.
+
+        Extracts class-level decorators like @Controller, @Injectable, @Component
+        and attaches them to the Symbol.
+        """
         name_node = node.child_by_field_name("name")
         if not name_node:
             return
 
         name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
         docstring = self._extract_jsdoc(node, source)
+
+        # Extract class-level decorators
+        decorators = self._extract_decorators_from_node(node, source)
 
         symbols.append(
             Symbol(
@@ -532,6 +631,7 @@ class TypeScriptPlugin(LanguagePlugin):
                 language=Language.TYPESCRIPT,
                 docstring=docstring,
                 parent_name=parent_name,
+                decorators=decorators,
             )
         )
 
@@ -549,12 +649,19 @@ class TypeScriptPlugin(LanguagePlugin):
         symbols: list[Symbol],
         parent_name: str,
     ) -> None:
-        """Extract method symbol."""
+        """Extract method symbol with decorators.
+
+        Extracts method-level decorators like @Get, @Post, @OnEvent
+        and attaches them to the Symbol.
+        """
         name_node = node.child_by_field_name("name")
         if not name_node:
             return
 
         name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+
+        # Extract method-level decorators
+        decorators = self._extract_decorators_from_node(node, source)
 
         symbols.append(
             Symbol(
@@ -564,6 +671,7 @@ class TypeScriptPlugin(LanguagePlugin):
                 line_end=node.end_point[0] + 1,
                 language=Language.TYPESCRIPT,
                 parent_name=parent_name,
+                decorators=decorators,
             )
         )
 
@@ -665,6 +773,152 @@ class TypeScriptPlugin(LanguagePlugin):
                     cleaned.append(line)
                 return " ".join(cleaned).strip()
         return None
+
+    def _extract_decorator_info(self, node: Node, source: bytes) -> Optional[DecoratorInfo]:
+        """Extract decorator information from a decorator AST node.
+
+        Handles two decorator forms:
+        1. @OnEvent('file.uploaded') - call_expression with arguments
+        2. @Injectable - plain identifier without arguments
+
+        Args:
+            node: Tree-sitter Node of type "decorator"
+            source: Source code as bytes
+
+        Returns:
+            DecoratorInfo or None if not a valid decorator
+        """
+        if node.type != "decorator":
+            return None
+
+        # Case 1: @OnEvent('x') - decorator with call_expression
+        for child in node.children:
+            if child.type == "call_expression":
+                func_node = child.child_by_field_name("function")
+                args_node = child.child_by_field_name("arguments")
+
+                if func_node:
+                    name = source[func_node.start_byte : func_node.end_byte].decode("utf-8")
+                    arguments = self._extract_call_arguments(args_node, source) if args_node else []
+
+                    return DecoratorInfo(
+                        name=name,
+                        decorator_type=KNOWN_DECORATORS.get(name),
+                        arguments=arguments,
+                        raw_text=source[node.start_byte : node.end_byte].decode("utf-8"),
+                    )
+
+            # Case 2: @Injectable - decorator with plain identifier
+            elif child.type == "identifier":
+                name = source[child.start_byte : child.end_byte].decode("utf-8")
+                return DecoratorInfo(
+                    name=name,
+                    decorator_type=KNOWN_DECORATORS.get(name),
+                    arguments=[],
+                    raw_text=source[node.start_byte : node.end_byte].decode("utf-8"),
+                )
+
+        return None
+
+    def _extract_call_arguments(self, args_node: Node, source: bytes) -> list[str]:
+        """Extract arguments from a call expression arguments node.
+
+        Handles various argument types:
+        - Strings: 'event.name' or "event.name"
+        - Template strings: `event.${type}`
+        - Numbers: 5000
+        - Identifiers: AuthGuard
+        - Objects: { path: 'users' }
+
+        Args:
+            args_node: Tree-sitter Node of type "arguments"
+            source: Source code as bytes
+
+        Returns:
+            List of argument values as strings
+        """
+        if not args_node:
+            return []
+
+        args = []
+        for child in args_node.children:
+            if child.type in ("string", "template_string", "number", "identifier", "true", "false"):
+                args.append(source[child.start_byte : child.end_byte].decode("utf-8"))
+            elif child.type == "object":
+                # For @Controller({ path: 'users' }) - capture full object
+                args.append(source[child.start_byte : child.end_byte].decode("utf-8"))
+            elif child.type == "array":
+                # For @UseGuards([Guard1, Guard2])
+                args.append(source[child.start_byte : child.end_byte].decode("utf-8"))
+        return args
+
+    def _extract_decorators_from_node(self, node: Node, source: bytes) -> list[DecoratorInfo]:
+        """Extract all decorators from a class or method node.
+
+        Tree-sitter parses decorators in several ways depending on context:
+
+        1. Method decorators in class body:
+           class_body -> [decorator, method_definition]
+           (decorator is a preceding sibling of method_definition)
+
+        2. Exported decorated class:
+           export_statement -> [decorator, export, class_declaration]
+           (decorator is a preceding sibling of class_declaration inside export_statement)
+
+        3. Non-exported decorated class:
+           class_declaration -> [decorator, class, type_identifier, class_body]
+           (decorator is a child of class_declaration, before the 'class' keyword)
+
+        This method handles all cases.
+
+        Args:
+            node: The class_declaration or method_definition node
+            source: Source code as bytes
+
+        Returns:
+            List of DecoratorInfo for all decorators on this node
+        """
+        decorators = []
+
+        # Strategy 1: Look for decorator siblings preceding this node
+        # (works for methods in class body and exported classes)
+        current = node.prev_sibling
+        while current:
+            if current.type == "decorator":
+                dec_info = self._extract_decorator_info(current, source)
+                if dec_info:
+                    decorators.append(dec_info)
+            elif current.type in ("comment", "export"):
+                # Skip comments and 'export' keyword between decorator and class
+                pass
+            else:
+                # Stop when we hit a non-decorator/non-comment/non-export node
+                break
+            current = current.prev_sibling
+
+        # Strategy 2: For class_declaration, also check children for decorators
+        # (works for non-exported decorated classes where decorator is a child)
+        if not decorators and node.type == "class_declaration":
+            for child in node.children:
+                if child.type == "decorator":
+                    dec_info = self._extract_decorator_info(child, source)
+                    if dec_info:
+                        decorators.append(dec_info)
+                elif child.type == "class":
+                    # Stop when we hit the 'class' keyword
+                    break
+
+        # Decorators were collected in reverse order (nearest first) for strategy 1
+        # but in order for strategy 2. Reverse only if we used strategy 1.
+        if decorators and node.prev_sibling:
+            # Check if first decorator was a sibling (strategy 1)
+            check = node.prev_sibling
+            while check and check.type in ("comment", "export"):
+                check = check.prev_sibling
+            if check and check.type == "decorator":
+                decorators.reverse()
+
+        return decorators
 
 
 # =============================================================================
@@ -1084,3 +1338,191 @@ def create_parser(
 ) -> ASTParser:
     """Create an AST parser with optional configuration and plugins."""
     return ASTParser(config=config, plugins=plugins)
+
+
+# =============================================================================
+# Event Registry for NestJS Event-Based Call Edges
+# =============================================================================
+
+
+import re
+
+
+@dataclass
+class EventEdge:
+    """Represents an event-based connection between publisher and subscriber.
+
+    Used to generate TRIGGERS_EVENT edges in the code graph.
+    """
+
+    publisher_symbol_id: str
+    subscriber_symbol_id: str
+    event_name: str
+    edge_type: str = "TRIGGERS_EVENT"
+
+
+@dataclass
+class EventRegistry:
+    """Registry for event publishers and subscribers.
+
+    Collects @OnEvent handlers and emit() calls to generate call edges
+    between event emitters and handlers.
+    """
+
+    publishers: dict[str, list[str]] = field(default_factory=dict)  # event_name -> [symbol_ids]
+    subscribers: dict[str, list[str]] = field(default_factory=dict)  # event_name -> [symbol_ids]
+
+    def register_publisher(self, event_name: str, symbol_id: str) -> None:
+        """Register an event publisher (emit() caller)."""
+        if event_name not in self.publishers:
+            self.publishers[event_name] = []
+        if symbol_id not in self.publishers[event_name]:
+            self.publishers[event_name].append(symbol_id)
+
+    def register_subscriber(self, event_name: str, symbol_id: str) -> None:
+        """Register an event subscriber (@OnEvent handler)."""
+        if event_name not in self.subscribers:
+            self.subscribers[event_name] = []
+        if symbol_id not in self.subscribers[event_name]:
+            self.subscribers[event_name].append(symbol_id)
+
+    def get_edges(self) -> list[EventEdge]:
+        """Generate EventEdge objects for all publisher->subscriber connections.
+
+        Returns:
+            List of EventEdge objects representing TRIGGERS_EVENT relationships
+        """
+        edges = []
+        for event_name, subscriber_ids in self.subscribers.items():
+            publisher_ids = self.publishers.get(event_name, [])
+            for pub_id in publisher_ids:
+                for sub_id in subscriber_ids:
+                    edges.append(EventEdge(
+                        publisher_symbol_id=pub_id,
+                        subscriber_symbol_id=sub_id,
+                        event_name=event_name,
+                    ))
+        return edges
+
+
+# Regex pattern for emit() calls
+# Matches: .emit('event.name', ...) or .emit("event.name", ...)
+_EMIT_PATTERN = re.compile(
+    r"""
+    \.emit\s*\(\s*       # .emit(
+    ['"]([^'"]+)['"]     # 'event.name' or "event.name" - capture group 1
+    """,
+    re.VERBOSE,
+)
+
+
+def discover_event_publishers(symbol: Symbol, source_body: str) -> list[str]:
+    """Discover event names that a symbol publishes via emit() calls.
+
+    Searches the symbol's body for patterns like:
+    - this.eventEmitter.emit('event.name', payload)
+    - eventEmitter.emit('event.name')
+    - this.emit('event.name')
+
+    Args:
+        symbol: The Symbol to search for emit() calls
+        source_body: The source code body of the symbol
+
+    Returns:
+        List of event names that this symbol publishes
+    """
+    matches = _EMIT_PATTERN.findall(source_body)
+    return list(set(matches))  # Deduplicate
+
+
+def discover_event_subscribers(symbols: list[Symbol]) -> dict[str, list[Symbol]]:
+    """Collect all @OnEvent handlers from a list of symbols.
+
+    Scans decorators for event_handler type decorators and extracts
+    the event name from the decorator arguments.
+
+    Args:
+        symbols: List of Symbol objects to scan
+
+    Returns:
+        Dict mapping event_name -> [handler_symbols]
+    """
+    subscribers: dict[str, list[Symbol]] = {}
+
+    for sym in symbols:
+        for dec in sym.decorators:
+            if dec.decorator_type == "event_handler" and dec.arguments:
+                # Extract event name from first argument
+                # Arguments look like: ["'file.uploaded'"] or ['"file.uploaded"']
+                event_name = dec.arguments[0].strip("'\"")
+                if event_name not in subscribers:
+                    subscribers[event_name] = []
+                subscribers[event_name].append(sym)
+
+    return subscribers
+
+
+def build_event_registry(
+    symbols: list[Symbol],
+    symbol_id_map: dict[str, str],
+    source_map: dict[str, str],
+) -> EventRegistry:
+    """Build an EventRegistry from parsed symbols.
+
+    Args:
+        symbols: List of all parsed Symbol objects
+        symbol_id_map: Mapping from symbol name to symbol ID
+        source_map: Mapping from symbol name to source code body
+
+    Returns:
+        Populated EventRegistry with publishers and subscribers
+    """
+    registry = EventRegistry()
+
+    # Register subscribers from @OnEvent decorators
+    event_subscribers = discover_event_subscribers(symbols)
+    for event_name, handler_symbols in event_subscribers.items():
+        for sym in handler_symbols:
+            symbol_key = f"{sym.parent_name}.{sym.name}" if sym.parent_name else sym.name
+            symbol_id = symbol_id_map.get(symbol_key, symbol_key)
+            registry.register_subscriber(event_name, symbol_id)
+
+    # Register publishers from emit() calls
+    for sym in symbols:
+        symbol_key = f"{sym.parent_name}.{sym.name}" if sym.parent_name else sym.name
+        source_body = source_map.get(symbol_key, "")
+        if source_body:
+            event_names = discover_event_publishers(sym, source_body)
+            for event_name in event_names:
+                symbol_id = symbol_id_map.get(symbol_key, symbol_key)
+                registry.register_publisher(event_name, symbol_id)
+
+    return registry
+
+
+def generate_event_edges(
+    registry: EventRegistry,
+    repo_id: str,
+) -> list[dict]:
+    """Generate Neo4j-compatible edge data from EventRegistry.
+
+    Args:
+        registry: Populated EventRegistry
+        repo_id: Repository ID for edge properties
+
+    Returns:
+        List of edge dicts for Neo4j import
+    """
+    edges = []
+    for edge in registry.get_edges():
+        edges.append({
+            "source_id": edge.publisher_symbol_id,
+            "target_id": edge.subscriber_symbol_id,
+            "relationship": edge.edge_type,
+            "properties": {
+                "event_name": edge.event_name,
+                "repo_id": repo_id,
+                "inferred": True,
+            },
+        })
+    return edges

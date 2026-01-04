@@ -22,6 +22,7 @@ from openmemory.api.indexing.ast_parser import (
     Language,
     SymbolType,
     Symbol,
+    DecoratorInfo,
     ParseResult,
     ParseError,
     ParseStatistics,
@@ -38,6 +39,15 @@ from openmemory.api.indexing.ast_parser import (
     # Exceptions
     UnsupportedLanguageError,
     ParseFailedError,
+    # Decorator mappings
+    KNOWN_DECORATORS,
+    # Event Registry
+    EventEdge,
+    EventRegistry,
+    discover_event_publishers,
+    discover_event_subscribers,
+    build_event_registry,
+    generate_event_edges,
 )
 
 
@@ -628,6 +638,640 @@ export const PUBLIC_CONST = 42;
 
         assert any(s.name == "publicFunc" for s in symbols)
         assert any(s.name == "PublicClass" for s in symbols)
+
+
+# =============================================================================
+# TypeScript Decorator Tests (NestJS/Angular)
+# =============================================================================
+
+
+class TestTypeScriptDecorators:
+    """Tests for NestJS/Angular decorator extraction from TypeScript."""
+
+    @pytest.fixture
+    def plugin(self):
+        """Create TypeScript plugin instance."""
+        return TypeScriptPlugin()
+
+    def test_on_event_decorator_extracted(self, plugin):
+        """@OnEvent decorator is correctly extracted."""
+        code = '''
+import { OnEvent } from '@nestjs/event-emitter';
+
+class FileService {
+    @OnEvent('file.uploaded')
+    handleFileUploaded(payload: FileUploadedEvent) {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        # Find handleFileUploaded method
+        method = next((s for s in symbols if s.name == "handleFileUploaded"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+
+        dec = method.decorators[0]
+        assert dec.name == "OnEvent"
+        assert dec.decorator_type == "event_handler"
+        assert len(dec.arguments) == 1
+        assert "'file.uploaded'" in dec.arguments[0]
+
+    def test_multiple_decorators_extracted(self, plugin):
+        """Multiple decorators on a method are all extracted."""
+        code = '''
+class UserController {
+    @UseGuards(AuthGuard)
+    @Post('/users')
+    createUser(@Body() dto: CreateUserDto) {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        method = next((s for s in symbols if s.name == "createUser"), None)
+        assert method is not None
+        assert len(method.decorators) == 2
+
+        decorator_names = [d.name for d in method.decorators]
+        assert "UseGuards" in decorator_names
+        assert "Post" in decorator_names
+
+    def test_controller_decorator_with_prefix(self, plugin):
+        """@Controller with route prefix is extracted."""
+        code = '''
+@Controller('users')
+export class UserController {}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        cls = next((s for s in symbols if s.name == "UserController"), None)
+        assert cls is not None
+        assert len(cls.decorators) == 1
+
+        dec = cls.decorators[0]
+        assert dec.name == "Controller"
+        assert dec.decorator_type == "controller"
+        assert len(dec.arguments) == 1
+        assert "'users'" in dec.arguments[0]
+
+    def test_injectable_decorator_without_args(self, plugin):
+        """@Injectable decorator without arguments is extracted."""
+        code = '''
+@Injectable()
+export class StorageService {}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        cls = next((s for s in symbols if s.name == "StorageService"), None)
+        assert cls is not None
+        assert len(cls.decorators) == 1
+
+        dec = cls.decorators[0]
+        assert dec.name == "Injectable"
+        assert dec.decorator_type == "di_provider"
+        assert len(dec.arguments) == 0
+
+    def test_http_handlers_extracted(self, plugin):
+        """HTTP handler decorators (@Get, @Post, etc.) are correctly typed."""
+        code = '''
+@Controller('api')
+class ApiController {
+    @Get('/items')
+    getItems() {}
+
+    @Post('/items')
+    createItem() {}
+
+    @Put('/items/:id')
+    updateItem() {}
+
+    @Delete('/items/:id')
+    deleteItem() {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        methods = [s for s in symbols if s.symbol_type == SymbolType.METHOD]
+        assert len(methods) == 4
+
+        for method in methods:
+            assert len(method.decorators) == 1
+            assert method.decorators[0].decorator_type == "http_handler"
+
+    def test_cron_decorator_extracted(self, plugin):
+        """@Cron scheduled task decorator is extracted with cron expression."""
+        code = '''
+class TaskService {
+    @Cron('0 * * * *')
+    handleHourlyTask() {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        method = next((s for s in symbols if s.name == "handleHourlyTask"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+
+        dec = method.decorators[0]
+        assert dec.name == "Cron"
+        assert dec.decorator_type == "scheduled_task"
+        assert "'0 * * * *'" in dec.arguments[0]
+
+    def test_websocket_decorators(self, plugin):
+        """WebSocket decorators are extracted."""
+        code = '''
+@WebSocketGateway()
+class EventsGateway {
+    @SubscribeMessage('events')
+    handleEvent(data: string) {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        gateway_cls = next((s for s in symbols if s.name == "EventsGateway"), None)
+        assert gateway_cls is not None
+        assert len(gateway_cls.decorators) == 1
+        assert gateway_cls.decorators[0].decorator_type == "websocket_gateway"
+
+        method = next((s for s in symbols if s.name == "handleEvent"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+        assert method.decorators[0].decorator_type == "websocket_handler"
+
+    def test_event_pattern_decorator(self, plugin):
+        """@EventPattern microservice decorator is extracted."""
+        code = '''
+class MessageController {
+    @EventPattern('user.created')
+    handleUserCreated(data: any) {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        method = next((s for s in symbols if s.name == "handleUserCreated"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+
+        dec = method.decorators[0]
+        assert dec.name == "EventPattern"
+        assert dec.decorator_type == "message_handler"
+
+    def test_decorator_raw_text_preserved(self, plugin):
+        """Decorator raw text is preserved for debugging."""
+        code = '''
+class MyClass {
+    @OnEvent('complex.event', { async: true })
+    handleEvent() {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        method = next((s for s in symbols if s.name == "handleEvent"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+
+        dec = method.decorators[0]
+        assert dec.raw_text is not None
+        assert "@OnEvent" in dec.raw_text
+
+    def test_unknown_decorator_has_none_type(self, plugin):
+        """Unknown decorators have decorator_type=None."""
+        code = '''
+class MyClass {
+    @CustomDecorator()
+    myMethod() {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        method = next((s for s in symbols if s.name == "myMethod"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+
+        dec = method.decorators[0]
+        assert dec.name == "CustomDecorator"
+        assert dec.decorator_type is None  # Unknown decorator
+
+    def test_class_and_method_decorators_separate(self, plugin):
+        """Class decorators and method decorators are kept separate."""
+        code = '''
+@Controller('users')
+class UserController {
+    @Get()
+    findAll() {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        cls = next((s for s in symbols if s.name == "UserController"), None)
+        assert cls is not None
+        assert len(cls.decorators) == 1
+        assert cls.decorators[0].name == "Controller"
+
+        method = next((s for s in symbols if s.name == "findAll"), None)
+        assert method is not None
+        assert len(method.decorators) == 1
+        assert method.decorators[0].name == "Get"
+
+
+class TestDecoratorInfo:
+    """Tests for DecoratorInfo dataclass."""
+
+    def test_decorator_info_creation(self):
+        """DecoratorInfo can be created with all fields."""
+        dec = DecoratorInfo(
+            name="OnEvent",
+            decorator_type="event_handler",
+            arguments=["'file.uploaded'"],
+            raw_text="@OnEvent('file.uploaded')",
+        )
+        assert dec.name == "OnEvent"
+        assert dec.decorator_type == "event_handler"
+        assert dec.arguments == ["'file.uploaded'"]
+        assert dec.raw_text == "@OnEvent('file.uploaded')"
+
+    def test_decorator_info_defaults(self):
+        """DecoratorInfo has sensible defaults."""
+        dec = DecoratorInfo(name="Injectable")
+        assert dec.name == "Injectable"
+        assert dec.decorator_type is None
+        assert dec.arguments == []
+        assert dec.raw_text is None
+
+
+class TestKnownDecorators:
+    """Tests for KNOWN_DECORATORS mapping."""
+
+    def test_known_decorators_contains_event_handlers(self):
+        """KNOWN_DECORATORS includes event handling decorators."""
+        assert KNOWN_DECORATORS.get("OnEvent") == "event_handler"
+        assert KNOWN_DECORATORS.get("OnQueueEvent") == "event_handler"
+
+    def test_known_decorators_contains_http_handlers(self):
+        """KNOWN_DECORATORS includes HTTP handler decorators."""
+        for method in ["Get", "Post", "Put", "Patch", "Delete", "Head", "Options"]:
+            assert KNOWN_DECORATORS.get(method) == "http_handler"
+
+    def test_known_decorators_contains_di_decorators(self):
+        """KNOWN_DECORATORS includes DI decorators."""
+        assert KNOWN_DECORATORS.get("Injectable") == "di_provider"
+        assert KNOWN_DECORATORS.get("Inject") == "di_injection"
+
+    def test_known_decorators_contains_scheduling(self):
+        """KNOWN_DECORATORS includes scheduling decorators."""
+        assert KNOWN_DECORATORS.get("Cron") == "scheduled_task"
+        assert KNOWN_DECORATORS.get("Interval") == "scheduled_task"
+
+
+# =============================================================================
+# Event Registry Tests
+# =============================================================================
+
+
+class TestEventEdge:
+    """Tests for EventEdge dataclass."""
+
+    def test_event_edge_creation(self):
+        """EventEdge can be created with all fields."""
+        edge = EventEdge(
+            publisher_symbol_id="pub-123",
+            subscriber_symbol_id="sub-456",
+            event_name="file.uploaded",
+        )
+        assert edge.publisher_symbol_id == "pub-123"
+        assert edge.subscriber_symbol_id == "sub-456"
+        assert edge.event_name == "file.uploaded"
+        assert edge.edge_type == "TRIGGERS_EVENT"
+
+    def test_event_edge_custom_type(self):
+        """EventEdge can have custom edge type."""
+        edge = EventEdge(
+            publisher_symbol_id="pub-123",
+            subscriber_symbol_id="sub-456",
+            event_name="file.uploaded",
+            edge_type="CUSTOM_TYPE",
+        )
+        assert edge.edge_type == "CUSTOM_TYPE"
+
+
+class TestEventRegistry:
+    """Tests for EventRegistry class."""
+
+    def test_empty_registry(self):
+        """Empty registry returns no edges."""
+        registry = EventRegistry()
+        assert registry.get_edges() == []
+
+    def test_register_subscriber(self):
+        """Subscriber can be registered."""
+        registry = EventRegistry()
+        registry.register_subscriber("file.uploaded", "handler-1")
+
+        assert "file.uploaded" in registry.subscribers
+        assert "handler-1" in registry.subscribers["file.uploaded"]
+
+    def test_register_publisher(self):
+        """Publisher can be registered."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+
+        assert "file.uploaded" in registry.publishers
+        assert "emitter-1" in registry.publishers["file.uploaded"]
+
+    def test_get_edges_with_match(self):
+        """Matching publisher and subscriber generate edges."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_subscriber("file.uploaded", "handler-1")
+
+        edges = registry.get_edges()
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge.publisher_symbol_id == "emitter-1"
+        assert edge.subscriber_symbol_id == "handler-1"
+        assert edge.event_name == "file.uploaded"
+
+    def test_get_edges_no_match(self):
+        """Non-matching events generate no edges."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_subscriber("user.created", "handler-1")
+
+        edges = registry.get_edges()
+        assert len(edges) == 0
+
+    def test_multiple_subscribers_one_publisher(self):
+        """Multiple subscribers for one event generate multiple edges."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_subscriber("file.uploaded", "handler-1")
+        registry.register_subscriber("file.uploaded", "handler-2")
+
+        edges = registry.get_edges()
+        assert len(edges) == 2
+
+    def test_multiple_publishers_one_subscriber(self):
+        """Multiple publishers for one event generate multiple edges."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_publisher("file.uploaded", "emitter-2")
+        registry.register_subscriber("file.uploaded", "handler-1")
+
+        edges = registry.get_edges()
+        assert len(edges) == 2
+
+    def test_no_duplicate_registrations(self):
+        """Duplicate registrations are ignored."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_subscriber("file.uploaded", "handler-1")
+
+        edges = registry.get_edges()
+        assert len(edges) == 1
+
+
+class TestDiscoverEventPublishers:
+    """Tests for discover_event_publishers function."""
+
+    def test_find_single_emit(self):
+        """Find single emit() call in source."""
+        symbol = Symbol(
+            name="uploadFile",
+            symbol_type=SymbolType.FUNCTION,
+            line_start=1,
+            line_end=5,
+            language=Language.TYPESCRIPT,
+        )
+        source = """
+        async uploadFile(file: File) {
+            await this.saveFile(file);
+            this.eventEmitter.emit('file.uploaded', { fileId: file.id });
+        }
+        """
+        events = discover_event_publishers(symbol, source)
+        assert events == ["file.uploaded"]
+
+    def test_find_multiple_emits(self):
+        """Find multiple emit() calls in source."""
+        symbol = Symbol(
+            name="processFile",
+            symbol_type=SymbolType.FUNCTION,
+            line_start=1,
+            line_end=10,
+            language=Language.TYPESCRIPT,
+        )
+        source = """
+        async processFile(file: File) {
+            this.eventEmitter.emit('file.processing.started', { fileId: file.id });
+            await this.transform(file);
+            this.eventEmitter.emit('file.processing.completed', { fileId: file.id });
+        }
+        """
+        events = discover_event_publishers(symbol, source)
+        assert len(events) == 2
+        assert "file.processing.started" in events
+        assert "file.processing.completed" in events
+
+    def test_no_emit_calls(self):
+        """No events when no emit() calls."""
+        symbol = Symbol(
+            name="simpleMethod",
+            symbol_type=SymbolType.FUNCTION,
+            line_start=1,
+            line_end=3,
+            language=Language.TYPESCRIPT,
+        )
+        source = """
+        simpleMethod() {
+            return this.value;
+        }
+        """
+        events = discover_event_publishers(symbol, source)
+        assert events == []
+
+    def test_double_quoted_events(self):
+        """Find emit() calls with double-quoted strings."""
+        symbol = Symbol(
+            name="emitEvent",
+            symbol_type=SymbolType.FUNCTION,
+            line_start=1,
+            line_end=3,
+            language=Language.TYPESCRIPT,
+        )
+        source = '''
+        emitEvent() {
+            this.emit("user.created", payload);
+        }
+        '''
+        events = discover_event_publishers(symbol, source)
+        assert events == ["user.created"]
+
+
+class TestDiscoverEventSubscribers:
+    """Tests for discover_event_subscribers function."""
+
+    def test_find_on_event_handler(self):
+        """Find @OnEvent decorated method."""
+        symbols = [
+            Symbol(
+                name="handleFileUploaded",
+                symbol_type=SymbolType.METHOD,
+                line_start=1,
+                line_end=5,
+                language=Language.TYPESCRIPT,
+                decorators=[
+                    DecoratorInfo(
+                        name="OnEvent",
+                        decorator_type="event_handler",
+                        arguments=["'file.uploaded'"],
+                    ),
+                ],
+            ),
+        ]
+        subscribers = discover_event_subscribers(symbols)
+        assert "file.uploaded" in subscribers
+        assert len(subscribers["file.uploaded"]) == 1
+
+    def test_find_multiple_handlers_same_event(self):
+        """Find multiple handlers for same event."""
+        symbols = [
+            Symbol(
+                name="handler1",
+                symbol_type=SymbolType.METHOD,
+                line_start=1,
+                line_end=5,
+                language=Language.TYPESCRIPT,
+                decorators=[
+                    DecoratorInfo(
+                        name="OnEvent",
+                        decorator_type="event_handler",
+                        arguments=["'file.uploaded'"],
+                    ),
+                ],
+            ),
+            Symbol(
+                name="handler2",
+                symbol_type=SymbolType.METHOD,
+                line_start=6,
+                line_end=10,
+                language=Language.TYPESCRIPT,
+                decorators=[
+                    DecoratorInfo(
+                        name="OnEvent",
+                        decorator_type="event_handler",
+                        arguments=["'file.uploaded'"],
+                    ),
+                ],
+            ),
+        ]
+        subscribers = discover_event_subscribers(symbols)
+        assert "file.uploaded" in subscribers
+        assert len(subscribers["file.uploaded"]) == 2
+
+    def test_no_event_handlers(self):
+        """No handlers when no @OnEvent decorators."""
+        symbols = [
+            Symbol(
+                name="regularMethod",
+                symbol_type=SymbolType.METHOD,
+                line_start=1,
+                line_end=5,
+                language=Language.TYPESCRIPT,
+                decorators=[
+                    DecoratorInfo(
+                        name="Get",
+                        decorator_type="http_handler",
+                        arguments=["'/items'"],
+                    ),
+                ],
+            ),
+        ]
+        subscribers = discover_event_subscribers(symbols)
+        assert len(subscribers) == 0
+
+
+class TestBuildEventRegistry:
+    """Tests for build_event_registry function."""
+
+    def test_build_registry_with_matches(self):
+        """Build registry with matching publishers and subscribers."""
+        symbols = [
+            Symbol(
+                name="uploadFile",
+                symbol_type=SymbolType.METHOD,
+                line_start=1,
+                line_end=5,
+                language=Language.TYPESCRIPT,
+                parent_name="UploadService",
+            ),
+            Symbol(
+                name="handleFileUploaded",
+                symbol_type=SymbolType.METHOD,
+                line_start=10,
+                line_end=15,
+                language=Language.TYPESCRIPT,
+                parent_name="ProcessingService",
+                decorators=[
+                    DecoratorInfo(
+                        name="OnEvent",
+                        decorator_type="event_handler",
+                        arguments=["'file.uploaded'"],
+                    ),
+                ],
+            ),
+        ]
+
+        symbol_id_map = {
+            "UploadService.uploadFile": "sym-1",
+            "ProcessingService.handleFileUploaded": "sym-2",
+        }
+
+        source_map = {
+            "UploadService.uploadFile": """
+                this.eventEmitter.emit('file.uploaded', { fileId: file.id });
+            """,
+        }
+
+        registry = build_event_registry(symbols, symbol_id_map, source_map)
+
+        edges = registry.get_edges()
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge.publisher_symbol_id == "sym-1"
+        assert edge.subscriber_symbol_id == "sym-2"
+        assert edge.event_name == "file.uploaded"
+
+
+class TestGenerateEventEdges:
+    """Tests for generate_event_edges function."""
+
+    def test_generate_neo4j_edges(self):
+        """Generate Neo4j-compatible edge data."""
+        registry = EventRegistry()
+        registry.register_publisher("file.uploaded", "emitter-1")
+        registry.register_subscriber("file.uploaded", "handler-1")
+
+        edges = generate_event_edges(registry, "test-repo")
+
+        assert len(edges) == 1
+        edge = edges[0]
+        assert edge["source_id"] == "emitter-1"
+        assert edge["target_id"] == "handler-1"
+        assert edge["relationship"] == "TRIGGERS_EVENT"
+        assert edge["properties"]["event_name"] == "file.uploaded"
+        assert edge["properties"]["repo_id"] == "test-repo"
+        assert edge["properties"]["inferred"] is True
 
 
 # =============================================================================

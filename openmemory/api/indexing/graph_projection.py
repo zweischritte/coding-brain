@@ -76,6 +76,7 @@ class CodeEdgeType(Enum):
     READS = "READS"  # Symbol reads a variable
     WRITES = "WRITES"  # Symbol writes a variable
     DATA_FLOWS_TO = "DATA_FLOWS_TO"  # Data flows from source to sink
+    TRIGGERS_EVENT = "TRIGGERS_EVENT"  # Event emitter triggers event handler (@OnEvent)
 
 
 class BatchOperationType(Enum):
