@@ -102,8 +102,30 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from mcp.server.fastmcp import FastMCP
+from mcp.server.lowlevel import NotificationOptions
+from mcp.types import ToolAnnotations
 from app.mcp.sse_transport import SessionAwareSseTransport
 from app.security.session_binding import get_session_binding_store
+
+# Import task routing (lazy to avoid circular imports)
+try:
+    from app.routing import (
+        is_routing_enabled,
+        enable_routing,
+        disable_routing,
+        get_routing_metrics,
+        classify_query,
+        force_state_transition,
+        reset_session,
+        handle_state_command,
+        get_filtered_tools,
+        TaskType,
+        TaskState,
+    )
+    HAS_ROUTING = True
+except ImportError:
+    HAS_ROUTING = False
+    logging.warning("Task routing module not available")
 
 # Load environment variables
 load_dotenv()
@@ -620,34 +642,28 @@ async def get_embedder_info() -> str:
         "vector_store_dims": vector_store_dims,
     })
 
-@mcp.tool(description="""Add a new memory with structured parameters.
+@mcp.tool(
+    description="""Add a new memory with structured metadata.
 
-Required:
-- text: Pure content, no markers
-- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
-- scope: session | user | team | project | org | enterprise
+Use when: Documenting decisions, conventions, architecture, or learnings worth remembering.
 
-Optional metadata:
-- artifact_type: repo | service | module | component | api | db | infra | file
-- artifact_ref: reference string (repo name, file path, symbol, service)
-- entity: team/service/component/person
-- source: user (default) or inference
-- evidence: List of ADR/PR/issue refs (or comma-separated string)
-- tags: Dict with string keys (or list of strings)
-- access_entity: Access control entity (required for shared scopes: team, project, org, enterprise)
-  Format: <prefix>:<value> where prefix is user, team, project, or org
-  Examples: user:grischa, team:cloudfactory/acme/billing/backend, org:cloudfactory
-  You may pass access_entity="auto" (or omit it) to default when exactly one matching grant exists.
-- code_refs: List of code references linking memory to source code locations
-  Each code_ref is a dict with: file_path, line_start, line_end, symbol_id, git_commit, code_hash
-  Example: [{"file_path": "/src/auth.ts", "line_start": 42, "line_end": 87, "symbol_id": "AuthService#login"}]
-- infer: If true, use LLM extraction to infer memories (default: false)
+Parameters:
+- text: Memory content (required)
+- category: decision | convention | architecture | workflow | etc. (required)
+- scope: user | team | project | org (required)
+- entity: What/who this is about (e.g., "AuthService", "Backend Team")
+- access_entity: Access control (e.g., "project:org/repo") - required for shared scopes
+- tags: Key-value metadata (e.g., {"priority": "high"})
+- evidence: References (e.g., ["ADR-014", "PR-123"])
+- code_refs: Link to source code (e.g., [{"file_path": "/src/auth.ts", "line_start": 42}])
 
-Examples:
-- add_memories(text="Use module boundaries for auth clients", category="architecture", scope="org", artifact_type="module", artifact_ref="auth/clients", entity="Platform", access_entity="org:cloudfactory", tags={"decision": true})
-- add_memories(text="Always run python -m pytest before merge", category="workflow", scope="team", entity="Backend", access_entity="team:cloudfactory/backend", evidence=["ADR-014"])
-- add_memories(text="createFileUploads uses S3 MultipartUpload", category="architecture", scope="project", entity="StorageService", code_refs=[{"file_path": "/apps/merlin/src/storage.ts", "line_start": 42, "line_end": 87}], access_entity="project:default_org/merlin")
-""")
+Returns: id of created memory, plus saved metadata.
+
+Example:
+- add_memories(text="Use JWT for auth", category="decision", scope="project", entity="AuthService", access_entity="project:cloudfactory/vgbk")
+""",
+    annotations=ToolAnnotations(readOnlyHint=False, title="Add Memory")
+)
 async def add_memories(
     text: str,
     category: str,
@@ -911,96 +927,33 @@ async def add_memories(
         return json.dumps({"error": f"Error adding to memory: {e}"})
 
 
-@mcp.tool(description="""Search memories with semantic search and metadata-based re-ranking.
+@mcp.tool(
+    description="""Search memories with semantic search and metadata boosting.
 
-BOOST parameters (category, scope, artifact_type, artifact_ref, entity, tags) influence
-ranking but do NOT exclude results. All semantically relevant memories
-are returned, with contextually matching ones ranked higher.
+Use when: Finding past decisions, conventions, or context. Add entity/category filters for precision.
 
-RECENCY boost (recency_weight) prioritizes newer memories without excluding
-older ones. Use this for "current situation" queries. Set to 0 for
-"core pattern" queries where old insights are equally valuable.
-
-DATE FILTER parameters (created_after/before, updated_after/before) are
-TRUE FILTERS that exclude results outside the range. Use these for
-explicit time windows like "last week" or "Q4 2025".
+NOT for: Code tracing or bug hunting - use search_code_hybrid + Read tool instead. Memory results may be stale.
 
 Parameters:
-- query: Search query (required)
-- category: Boost memories with this category (decision, convention, etc.)
-- scope: Boost memories with this scope (team, project, org, etc.)
-- artifact_type: Boost memories for this artifact type (repo, api, file, etc.)
-- artifact_ref: Boost memories for this artifact reference
-- entity: Boost memories about this entity
-- tags: Comma-separated tags to boost (e.g., "trigger,important")
-- recency_weight: How much to prioritize recent memories (0.0-1.0)
-                  0.0 = off (default), 0.4 = moderate, 0.7 = strong
-- recency_halflife_days: Days until recency boost is halved (default: 45)
-- created_after: ISO datetime - exclude memories created before this
-- created_before: ISO datetime - exclude memories created after this
-- updated_after: ISO datetime - exclude memories updated before this
-- updated_before: ISO datetime - exclude memories updated after this
-- exclude_states: Comma-separated states to exclude (default: "deleted")
-- exclude_tags: Comma-separated tags to exclude (e.g., "rejected")
-- limit: Max results to return (default: 10, max: 50, for initial searches use 10)
-- verbose: If true, return full debug info (scores breakdown, query, filters)
-- use_rrf: Enable RRF multi-source fusion (default: true)
-- graph_seed_count: Top vector results to use as graph traversal seeds (default: 5)
-- auto_route: Enable intelligent query routing based on entity detection (default: true)
-- relation_detail: Output verbosity for meta_relations (default: "standard")
-  - "none": No meta_relations (minimal tokens)
-  - "minimal": Only artifact path + similar memory IDs
-  - "standard": + entities + tags + evidence (recommended, ~60% token reduction)
-  - "full": Verbose format with all OM_* relations (for debugging)
+- query: Search text (required)
+- entity: Boost memories about this entity (e.g., "AuthService")
+- category: Boost by category (decision, architecture, workflow, etc.)
+- scope: Boost by scope (project, team, org)
+- limit: Max results (default: 10, max: 50)
+- created_after/before: Filter by date range (ISO format)
+- recency_weight: Prioritize recent (0.0-1.0, default: 0.0)
+- relation_detail: Output verbosity ("none", "minimal", "standard", "full")
 
-HYBRID RETRIEVAL: When enabled (use_rrf=true), search combines:
-1. Vector similarity (Qdrant embeddings)
-2. Graph topology (Neo4j OM_SIMILAR edges)
-3. Entity centrality (PageRank boost for important entities)
+Returns: results[] with id, memory, score, category, scope, entity, access_entity
 
-Query routing automatically selects search strategy:
-- VECTOR_ONLY: No entities detected, pure semantic search
-- HYBRID: Single entity, balanced vector+graph fusion
-- GRAPH_PRIMARY: Multiple entities or relationship keywords, graph-preferred
-
-Returns lean JSON optimized for LLM processing:
-- results[].id: UUID for chaining with update_memory/delete_memories
-- results[].memory: The actual content
-- results[].score: Final relevance score (2 decimals)
-- results[].category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
-- results[].scope: session | user | team | project | org | enterprise
-- results[].artifact_type: repo | service | module | component | api | db | infra | file
-- results[].artifact_ref: reference string (if present)
-- results[].entity: team/service/component/person (if present)
-- results[].access_entity: ACL identifier (e.g., "org:cloudfactory", "team:acme/backend")
-- results[].tags: Qualitative info (if present)
-- results[].created_at: Berlin time (Europe/Berlin)
-- results[].updated_at: Berlin time (if present)
-- results[].visibility_reason: (verbose only) Which grants matched for access
+IMPORTANT: For code-related memories, ALWAYS verify against actual code before answering.
 
 Examples:
-- Core pattern search (no recency bias):
-  search_memory(query="Kritik-Trigger", entity="BMG")
-
-- Current situation (prefer recent):
-  search_memory(query="Projekt-Status", recency_weight=0.5)
-
-- Explicit time window:
-  search_memory(query="Meeting", created_after="2025-11-28T00:00:00Z")
-
-- Debug mode with full scoring:
-  search_memory(query="Pattern", verbose=true)
-
-meta_relations compact format (default):
-- meta_relations[memory_id].artifact: File path for code navigation
-- meta_relations[memory_id].similar[]: List of {id, score, preview} for related memories
-- meta_relations[memory_id].entities[]: Related entity names
-- meta_relations[memory_id].tags: Tag key-value dict
-- meta_relations[memory_id].evidence[]: ADR/PR/issue references
-
-Note: With relation_detail="full", meta_relations includes all OM_* relations in verbose format.
-Use get_memory(memory_id) to fetch full content of related memories from similar[].id.
-""")
+- search_memory(query="auth flow", entity="AuthService", limit=5)
+- search_memory(query="Q4 decisions", created_after="2025-10-01T00:00:00Z")
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Search Memories")
+)
 async def search_memory(
     query: str,
     # BOOST context (soft ranking - does NOT exclude)
@@ -1615,6 +1568,9 @@ async def search_memory(
                 logging.warning(f"Graph enrichment failed: {graph_error}")
                 # Don't fail the search, just skip graph enrichment
 
+            # Add verification instruction for code-related memories
+            response["_instructions"] = "VERIFY: For code-related memories, read the actual file before answering."
+
             return json.dumps(response, default=str)
 
         finally:
@@ -1625,22 +1581,22 @@ async def search_memory(
         return json.dumps({"error": f"Error searching memories: {str(e)}"})
 
 
-@mcp.tool(description="""Find memories related to a seed memory via the Neo4j metadata subgraph.
+@mcp.tool(
+    description="""Find memories related by metadata (tags, entity, category, etc.).
 
-This tool is deterministic (no LLM). It uses the OM_* metadata graph that is
-projected from your Qdrant/OpenMemory metadata.
+Use when: Exploring connections based on shared metadata dimensions.
+
+NOT for: Semantic similarity - use graph_similar_memories instead.
 
 Parameters:
-- memory_id: UUID of the seed memory (required)
-- via: Optional comma-separated list of dimensions to traverse:
-       tag, entity, category, scope, artifact_type, artifact_ref, evidence, app
-       (you can also pass explicit OM_* relationship types)
-- limit: Max related memories to return (default: 10, max: 100)
+- memory_id: UUID of seed memory (required)
+- via: Dimensions to traverse (tag, entity, category, scope, etc.)
+- limit: Max results (default: 10)
 
-Returns:
-- seed_memory_id
-- related[]: each item includes shared_relations + shared_count
-""")
+Returns: related[] with shared_relations and shared_count.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Related Memories (Metadata)")
+)
 async def graph_related_memories(
     memory_id: str,
     via: str = None,
@@ -1716,18 +1672,19 @@ async def graph_related_memories(
         return json.dumps({"error": f"Error finding related memories: {str(e)}"})
 
 
-@mcp.tool(description="""Return a small neighborhood subgraph around a memory (Neo4j metadata graph).
+@mcp.tool(
+    description="""Get neighborhood subgraph around a memory.
 
-depth:
-- 1: only seed memory + its dimension nodes
-- 2: also include other memories connected through shared dimensions
+Use when: Visualizing or exploring memory connections in graph form.
 
 Parameters:
-- memory_id: UUID of the seed memory (required)
-- depth: 1 or 2 (default: 2)
-- via: Optional comma-separated dimensions to use for the depth=2 expansion
-- related_limit: Max number of related memory nodes to include (default: 25)
-""")
+- memory_id: UUID of seed memory (required)
+- depth: 1 (direct) or 2 (include connected memories, default: 2)
+- via: Dimensions to traverse
+- related_limit: Max related nodes (default: 25)
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Memory Subgraph")
+)
 async def graph_subgraph(
     memory_id: str,
     depth: int = 2,
@@ -1802,12 +1759,17 @@ async def graph_subgraph(
         return json.dumps({"error": f"Error building subgraph: {str(e)}"})
 
 
-@mcp.tool(description="""Aggregate memories by a Neo4j metadata dimension.
+@mcp.tool(
+    description="""Aggregate memories by dimension (category, entity, scope, etc.).
+
+Use when: Getting overview counts - e.g., how many decisions vs workflows.
 
 Parameters:
-- group_by: category | scope | artifact_type | artifact_ref | tag | entity | app | evidence | source | state
-- limit: max buckets to return (default: 20)
-""")
+- group_by: category | scope | entity | tag | artifact_type | etc. (required)
+- limit: Max buckets (default: 20)
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Aggregate Memories")
+)
 async def graph_aggregate(group_by: str, limit: int = 20) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -1856,13 +1818,17 @@ async def graph_aggregate(group_by: str, limit: int = 20) -> str:
         return json.dumps({"error": f"Error aggregating memories: {str(e)}"})
 
 
-@mcp.tool(description="""Find frequently co-occurring tags across memories (Neo4j metadata graph).
+@mcp.tool(
+    description="""Find tags that frequently appear together.
+
+Use when: Discovering tag patterns or finding related concepts.
 
 Parameters:
-- limit: max tag pairs to return (default: 20)
-- min_count: minimum co-occurrence count to include (default: 2)
-- sample_size: number of example memory IDs per pair (default: 3)
-""")
+- limit: Max tag pairs (default: 20)
+- min_count: Minimum co-occurrence (default: 2)
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Tag Co-occurrence")
+)
 async def graph_tag_cooccurrence(limit: int = 20, min_count: int = 2, sample_size: int = 3) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -1907,13 +1873,18 @@ async def graph_tag_cooccurrence(limit: int = 20, min_count: int = 2, sample_siz
         return json.dumps({"error": f"Error computing tag co-occurrence: {str(e)}"})
 
 
-@mcp.tool(description="""Find a shortest path between two entities through the Neo4j metadata graph.
+@mcp.tool(
+    description="""Find shortest path between two entities through memories.
+
+Use when: Understanding how two concepts/people/services are connected.
 
 Parameters:
-- entity_a: Name of entity A (matches metadata.entity projection)
-- entity_b: Name of entity B
-- max_hops: cap for traversal (default: 6, max: 12)
-""")
+- entity_a: First entity (required)
+- entity_b: Second entity (required)
+- max_hops: Maximum path length (default: 6)
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Path Between Entities")
+)
 async def graph_path_between_entities(entity_a: str, entity_b: str, max_hops: int = 6) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -1953,21 +1924,19 @@ async def graph_path_between_entities(entity_a: str, entity_b: str, max_hops: in
         return json.dumps({"error": f"Error finding path: {str(e)}"})
 
 
-@mcp.tool(description="""List all memories in the user's memory.
+@mcp.tool(
+    description="""List all accessible memories.
 
-Returns lean JSON optimized for LLM processing:
-- id: UUID for chaining with update_memory/delete_memories
-- memory: The actual content
-- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
-- scope: session | user | team | project | org | enterprise
-- artifact_type: repo | service | module | component | api | db | infra | file
-- artifact_ref: reference string (if present)
-- entity: team/service/component/person (if present)
-- access_entity: ACL identifier (e.g., "org:cloudfactory", "team:acme/backend")
-- tags: Qualitative info (if present)
-- created_at: Berlin time (Europe/Berlin)
-- updated_at: Berlin time (if present)
-""")
+Use when: Getting an overview of what's stored, or when you need to see everything.
+
+NOT for: Searching or filtering - use search_memory with query/filters instead.
+
+Returns: All memories with id, content, category, scope, entity, access_entity, timestamps.
+
+NOTE: Returns potentially large result set. For targeted retrieval, use search_memory.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="List All Memories")
+)
 async def list_memories() -> str:
     # Check scope - requires memories:read
     scope_error = _check_tool_scope("memories:read")
@@ -2030,39 +1999,20 @@ async def list_memories() -> str:
         return f"Error getting memories: {e}"
 
 
-@mcp.tool(description="""Retrieve a single memory by UUID with all fields.
+@mcp.tool(
+    description="""Retrieve a single memory by its UUID.
 
-Required:
-- memory_id: UUID of the memory to retrieve
+Use when: Fetching full details of a specific memory, verifying updates, or following evidence chains.
 
-Returns all memory fields (consistent with list_memories format):
-- id: UUID for chaining with update_memory/delete_memories
-- memory: The actual content
-- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
-- scope: session | user | team | project | org | enterprise
-- artifact_type: repo | service | module | component | api | db | infra | file
-- artifact_ref: reference string (if present)
-- entity: team/service/component/person (if present)
-- source: user | inference (if present)
-- evidence: List of ADR/PR/issue refs (if present)
-- tags: Qualitative info (if present)
-- access_entity: ACL identifier (e.g., "org:cloudfactory", "team:acme/backend")
-- created_at: Berlin time (Europe/Berlin)
-- updated_at: Berlin time (if present)
+Parameters:
+- memory_id: UUID of the memory (required)
 
-Errors:
-- {"error": "Memory not found", "code": "NOT_FOUND"} - memory doesn't exist or user lacks access
-- {"error": "Invalid memory_id format", "code": "INVALID_INPUT"} - malformed UUID
+Returns: Full memory with id, content, category, scope, entity, access_entity, tags, evidence, timestamps.
 
-Use cases:
-- Verify that an update_memory call succeeded
-- Debug ACL issues (see access_entity field)
-- Follow evidence chains between memories
-- Inspect memory state after operations
-
-Examples:
-- get_memory(memory_id="ba93af28-784d-4262-b8f9-adb08c45acab")
-""")
+Errors: NOT_FOUND (doesn't exist or no access), INVALID_INPUT (bad UUID format)
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Get Memory")
+)
 async def get_memory(memory_id: str) -> str:
     """Retrieve a single memory by UUID with all fields."""
     # Check scope - requires memories:read
@@ -2171,7 +2121,20 @@ async def get_memory(memory_id: str) -> str:
         return json.dumps({"error": f"Error getting memory: {e}"})
 
 
-@mcp.tool(description="Delete specific memories by their IDs")
+@mcp.tool(
+    description="""Delete specific memories by their IDs.
+
+Use when: Removing incorrect, outdated, or duplicate memories.
+
+Parameters:
+- memory_ids: List of memory UUIDs to delete
+
+WARNING: This action is IRREVERSIBLE. For soft-delete, use update_memory to add a "deprecated" tag instead.
+
+NOTE: You can only delete memories you have access to based on access_entity permissions.
+""",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, title="Delete Memories")
+)
 async def delete_memories(memory_ids: list[str]) -> str:
     # Check scope - requires memories:delete
     scope_error = _check_tool_scope("memories:delete")
@@ -2279,7 +2242,18 @@ async def delete_memories(memory_ids: list[str]) -> str:
         return f"Error deleting memories: {e}"
 
 
-@mcp.tool(description="Delete all memories in the user's memory")
+@mcp.tool(
+    description="""Delete ALL memories accessible to the current user.
+
+Use when: Complete reset of user's memory space. Rarely needed.
+
+WARNING: This action is IRREVERSIBLE and deletes ALL accessible memories.
+Consider using search_memory + delete_memories for targeted cleanup instead.
+
+NOTE: Only deletes memories where access_entity matches your grants.
+""",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, title="Delete All Memories")
+)
 async def delete_all_memories() -> str:
     # Check scope - requires memories:delete
     scope_error = _check_tool_scope("memories:delete")
@@ -2374,41 +2348,26 @@ async def delete_all_memories() -> str:
         return f"Error deleting memories: {e}"
 
 
-@mcp.tool(description="""Update a memory's content, structure, or tags.
+@mcp.tool(
+    description="""Update a memory's content, metadata, or tags.
 
-Required:
-- memory_id: UUID of the memory to update
+Use when: Correcting, enriching, or evolving existing memories. Only provided fields are updated.
 
-Optional content:
+Parameters:
+- memory_id: UUID of memory to update (required)
 - text: New content text
+- category, scope, artifact_type, artifact_ref: Update structure
+- entity, evidence: Update metadata
+- add_tags: Dict of tags to add (e.g., {"confirmed": true})
+- remove_tags: List of tag keys to remove
 
-Optional structure (only provided fields are updated):
-- category: decision | convention | architecture | dependency | workflow | testing | security | performance | runbook | glossary
-- scope: session | user | team | project | org | enterprise
-- artifact_type: repo | service | module | component | api | db | infra | file
-- artifact_ref: reference string (path, symbol, service)
-- access_entity: Access control entity (format: <prefix>:<value>)
-  When changing access_entity, you must have permission for both the old AND new access_entity
+Returns: Updated memory with all fields.
 
-Optional metadata:
-- entity: Reference entity
-- source: user|inference
-- evidence: List of evidence items
-
-Tag operations:
-- add_tags: Dict of tags to add/update (or list of strings)
-- remove_tags: List of tag keys to remove (or comma-separated string)
-
-Maintenance mode:
-- preserve_timestamps: If true, don't update updated_at (for migrations/fixes)
-
-Examples:
-- update_memory(memory_id="abc-123", text="Kritik triggert jetzt Neugier", add_tags={"evolved": true})
-- update_memory(memory_id="abc-123", category="decision", scope="project", preserve_timestamps=true)
-- update_memory(memory_id="abc-123", add_tags={"confirmed": true})
-- update_memory(memory_id="abc-123", remove_tags=["silent"])
-- update_memory(memory_id="abc-123", access_entity="team:cloudfactory/backend")
-""")
+Example:
+- update_memory(memory_id="abc-123", add_tags={"verified": true}, evidence=["PR-456"])
+""",
+    annotations=ToolAnnotations(readOnlyHint=False, title="Update Memory")
+)
 async def update_memory(
     memory_id: str,
     # Content
@@ -2623,22 +2582,22 @@ async def update_memory(
         return json.dumps({"error": f"Error updating memory: {e}"})
 
 
-@mcp.tool(description="""Get pre-computed similar memories via OM_SIMILAR edges.
+@mcp.tool(
+    description="""Find semantically similar memories (embedding-based).
 
-Uses the materialized similarity graph from Qdrant embeddings for O(1) lookup.
-No embedding computation at query time - edges are pre-computed.
+Use when: Finding memories with similar meaning/content.
+
+NOT for: Metadata connections - use graph_related_memories instead.
 
 Parameters:
-- memory_id: UUID of the seed memory (required)
-- min_score: Minimum similarity score (0.0-1.0, default: 0.0)
-- limit: Max results to return (default: 10, max: 50, for initial searches use 10)
+- memory_id: UUID of seed memory (required)
+- min_score: Minimum similarity (0.0-1.0, default: 0.0)
+- limit: Max results (default: 10)
 
-Returns:
-- seed_memory_id
-- similar[]: each item includes content, similarity_score, rank
-- count: number of results
-- similarity_enabled: whether feature is active
-""")
+Returns: similar[] with content, similarity_score, rank.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Similar Memories (Semantic)")
+)
 async def graph_similar_memories(
     memory_id: str,
     min_score: float = 0.0,
@@ -2710,22 +2669,20 @@ async def graph_similar_memories(
         return json.dumps({"error": f"Error finding similar memories: {str(e)}"})
 
 
-@mcp.tool(description="""Get an entity's co-mention network via OM_CO_MENTIONED edges.
+@mcp.tool(
+    description="""Get entities frequently co-mentioned with a given entity.
 
-Shows other entities that frequently appear in the same memories as this entity.
-Useful for understanding relationship networks (people, places, concepts).
+Use when: Understanding relationship networks between people, services, or concepts.
 
 Parameters:
-- entity_name: Name of the entity to explore (required)
+- entity_name: Entity to explore (required)
 - min_count: Minimum co-mention count (default: 1)
-- limit: Max connections to return (default: 20, max: 100)
+- limit: Max connections (default: 20)
 
-Returns:
-- entity: the queried entity name
-- connections[]: each has {name, count, sample_memory_ids}
-- total: number of connections
-- graph_enabled: whether feature is active
-""")
+Returns: connections[] with name, count, sample_memory_ids.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Entity Network")
+)
 async def graph_entity_network(
     entity_name: str,
     min_count: int = 1,
@@ -3435,26 +3392,28 @@ async def index_codebase_cancel(job_id: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool(description="""Search code using tri-hybrid retrieval (lexical + semantic + graph).
+@mcp.tool(
+    description="""Search code using hybrid retrieval (lexical + semantic + graph).
 
-Combines lexical, semantic, and graph-based search for comprehensive code discovery.
+Use when: Finding code by concept, function name, or pattern. Primary tool for code discovery.
 
-Required parameters:
-- query: Search query text (required)
+NOT for: Reading full file context - use Read tool after finding the file.
 
-Optional parameters:
-- repo_id: Filter by repository ID
-- language: Filter by programming language
-- limit: Maximum results (default: 10, max: 100)
+Parameters:
+- query: Search text (required)
+- repo_id: Filter by repository
+- language: Filter by language (python, typescript, etc.)
+- limit: Max results (default: 10, max: 100)
 
-Returns:
-- results[]: Array of code hits with symbol info, scores, and snippets
-- meta: Response metadata including degraded_mode indicator
+Returns: results[] with symbol info, file paths, line numbers, and code snippets.
 
-Examples:
-- search_code_hybrid(query="database connection pooling")
-- search_code_hybrid(query="authentication handler", language="python", limit=20)
-""")
+IMPORTANT: Results are snippets only. Use Read tool to see full file context before answering.
+
+Example:
+- search_code_hybrid(query="authentication middleware", language="python")
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Search Code")
+)
 async def search_code_hybrid(
     query: str,
     repo_id: str = None,
@@ -3516,26 +3475,23 @@ async def search_code_hybrid(
         })
 
 
-@mcp.tool(description="""Explain a code symbol with full context.
+@mcp.tool(
+    description="""Explain a code symbol with full call graph context.
 
-Get detailed explanation of a code symbol including callers, callees, and usages.
+Use when: Understanding a function's role - who calls it, what it calls, and its signature.
 
-Required parameters:
-- symbol_id: ID of the symbol to explain (required)
-
-Optional parameters:
+Parameters:
+- symbol_id: SCIP symbol ID (required) - get from search_code_hybrid results
 - depth: Analysis depth (default: 2, max: 5)
-- include_callers: Include functions that call this symbol (default: true)
-- include_callees: Include functions called by this symbol (default: true)
+- include_callers: Show incoming calls (default: true)
+- include_callees: Show outgoing calls (default: true)
 
-Returns:
-- explanation: Symbol details with call graph context
-- meta: Response metadata
+Returns: Symbol explanation with call graph context.
 
-Examples:
-- explain_code(symbol_id="sym-abc123")
-- explain_code(symbol_id="sym-abc123", depth=3)
-""")
+FALLBACK: If symbol not found, use search_code_hybrid first, then Read the file directly.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Explain Code")
+)
 async def explain_code(
     symbol_id: str,
     depth: int = 2,
@@ -3600,40 +3556,28 @@ async def explain_code(
         })
 
 
-@mcp.tool(description="""Find functions that call a given symbol with automatic fallback.
+@mcp.tool(
+    description="""Find functions that call a given symbol.
 
-Traverse the call graph to find all callers of a symbol. Uses a 4-stage
-fallback cascade when the symbol is not found in the graph:
+Use when: Tracing who calls a function/method in the codebase.
 
-1. Graph-based search (SCIP index) - Primary
-2. Grep-based pattern matching - First fallback
-3. Semantic search (embeddings) - Second fallback
-4. Structured error with suggestions - Final fallback
-
-Required parameters:
+Parameters:
 - repo_id: Repository ID (required)
-- symbol_name OR symbol_id: The symbol to find callers for (one required)
-
-Optional parameters:
+- symbol_name: Function/method name to find callers for
+- symbol_id: SCIP symbol ID (alternative to symbol_name)
 - depth: Traversal depth (default: 2, max: 5)
-- use_fallback: Enable fallback cascade (default: true)
 
-Returns:
-- nodes[]: Graph nodes (functions/methods)
-- edges[]: Graph edges (CALLS relationships)
-- meta: Response metadata with fallback info
-- suggestions[]: Fallback suggestions (when fallback stage 4)
+Returns: nodes[] and edges[] representing the call graph.
 
-Fallback meta fields:
-- degraded_mode: true when using fallback
-- fallback_stage: 1-4 indicating which stage succeeded
-- fallback_strategy: "grep" | "semantic_search" | "structured_error"
-- warning: Describes accuracy caveats
+FALLBACK: If "Symbol not found", automatic cascade tries:
+1. Grep(pattern=symbol_name)
+2. search_code_hybrid(query=symbol_name)
+3. Returns suggestions if all fail
 
-Examples:
-- find_callers(repo_id="repo-123", symbol_name="main")
-- find_callers(repo_id="repo-123", symbol_id="sym-abc", depth=3)
-""")
+NEVER guess callers - use fallback results or admit uncertainty.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Find Callers")
+)
 async def find_callers(
     repo_id: str,
     symbol_name: str = None,
@@ -3674,10 +3618,11 @@ async def find_callers(
             ),
         })
 
-    try:
-        from tools.call_graph import CallGraphInput, SymbolNotFoundError
-        import dataclasses
+    # Import at function level to avoid circular imports
+    from tools.call_graph import CallGraphInput, SymbolNotFoundError
+    import dataclasses
 
+    try:
         input_data = CallGraphInput(
             repo_id=repo_id,
             symbol_id=symbol_id,
@@ -3732,6 +3677,7 @@ async def find_callers(
             degraded=True,
             error=str(e),
         )
+        error_response["_instructions"] = "NEVER guess the caller. Use Grep fallback or ask user for file path."
         return json.dumps(error_response, default=str)
 
     except Exception as e:
@@ -3743,26 +3689,23 @@ async def find_callers(
         })
 
 
-@mcp.tool(description="""Find functions called by a given symbol.
+@mcp.tool(
+    description="""Find functions called BY a given symbol (outgoing calls).
 
-Traverse the call graph to find all functions that a symbol calls.
+Use when: Understanding what a function depends on or calls internally.
 
-Required parameters:
+Parameters:
 - repo_id: Repository ID (required)
-- symbol_name OR symbol_id: The symbol to find callees for (one required)
-
-Optional parameters:
+- symbol_name: Function/method name
+- symbol_id: SCIP symbol ID (alternative)
 - depth: Traversal depth (default: 2, max: 5)
 
-Returns:
-- nodes[]: Graph nodes (functions/methods)
-- edges[]: Graph edges (CALLS relationships)
-- meta: Response metadata
+Returns: nodes[] and edges[] representing outgoing call graph.
 
-Examples:
-- find_callees(repo_id="repo-123", symbol_name="main")
-- find_callees(repo_id="repo-123", symbol_id="sym-abc", depth=3)
-""")
+FALLBACK: If symbol not found, use search_code_hybrid to locate it first.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Find Callees")
+)
 async def find_callees(
     repo_id: str,
     symbol_name: str = None,
@@ -4870,10 +4813,14 @@ async def handle_sse(request: Request):
                     dpop_thumbprint=dpop_thumbprint,
                 )
 
+            # Enable tools_changed notification for dynamic tool filtering
+            init_options = mcp._mcp_server.create_initialization_options(
+                notification_options=NotificationOptions(tools_changed=True),
+            )
             await mcp._mcp_server.run(
                 read_stream,
                 write_stream,
-                mcp._mcp_server.create_initialization_options(),
+                init_options,
             )
     finally:
         # Clean up session binding on disconnect
@@ -5190,10 +5137,231 @@ async def handle_concept_post_message(request: Request):
         principal_var.reset(principal_token)
 
 
+# --- Task Routing MCP Tools ---
+
+@mcp.tool(description="""Manage task-based tool routing for the current session.
+
+Task routing dynamically filters available tools based on the current task type,
+reducing context window usage and improving agent focus.
+
+Parameters:
+- action: "status" | "classify" | "transition" | "reset" | "metrics"
+- query: Query text for "classify" action
+- task_type: Task type for "transition" action (CODE_TRACE, CODE_UNDERSTAND,
+            MEMORY_QUERY, MEMORY_WRITE, PR_REVIEW, TEST_WRITE, GENERAL)
+
+Actions:
+- status: Get current routing state and available tools
+- classify: Classify a query and update routing state
+- transition: Force transition to a specific task type
+- reset: Reset routing state to INITIAL
+- metrics: Get routing metrics for monitoring
+
+Returns:
+- routing_enabled: Whether routing is active
+- state: Current task state
+- task_type: Classified task type (for classify action)
+- available_tools: List of tools available in current state
+""")
+async def task_router(
+    action: str = "status",
+    query: str = None,
+    task_type: str = None,
+) -> str:
+    """Manage task-based tool routing."""
+    if not HAS_ROUTING:
+        return json.dumps({
+            "error": "Task routing module not available",
+            "routing_enabled": False,
+        })
+
+    # Get session ID from context (we need to track this per-session)
+    # For now, use user_id as session identifier
+    session_id = user_id_var.get("default")
+
+    if action == "status":
+        try:
+            from app.routing import get_session_router
+            router = get_session_router()
+            state = router.get_session_state(session_id)
+
+            return json.dumps({
+                "routing_enabled": is_routing_enabled(),
+                "state": state.name if state else "INITIAL",
+                "session_id": session_id[:8] + "..." if session_id else None,
+            })
+        except Exception as e:
+            return json.dumps({
+                "routing_enabled": is_routing_enabled(),
+                "error": str(e),
+            })
+
+    elif action == "classify":
+        if not query:
+            return json.dumps({
+                "error": "query parameter required for classify action",
+            })
+
+        try:
+            result = classify_query(session_id, query)
+            if result:
+                # If state changed, notify client to refresh tool list
+                if result.transitioned:
+                    try:
+                        ctx = mcp.get_context()
+                        if ctx and ctx.session:
+                            await ctx.session.send_tool_list_changed()
+                            logging.debug(f"Sent tool_list_changed notification after classify")
+                    except Exception as notify_err:
+                        logging.warning(f"Failed to send tool_list_changed: {notify_err}")
+
+                return json.dumps({
+                    "routing_enabled": is_routing_enabled(),
+                    "task_type": result.classification.intent.name,
+                    "confidence": result.classification.confidence,
+                    "state": result.current_state.name,
+                    "transitioned": result.transitioned,
+                })
+            else:
+                return json.dumps({
+                    "routing_enabled": False,
+                    "message": "Routing disabled or classification failed",
+                })
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+            })
+
+    elif action == "transition":
+        if not task_type:
+            return json.dumps({
+                "error": "task_type parameter required for transition action",
+                "valid_types": [t.name for t in TaskType],
+            })
+
+        try:
+            # Parse task_type string to enum
+            task_type_enum = TaskType[task_type.upper()]
+            new_state = force_state_transition(session_id, task_type_enum)
+
+            if new_state:
+                # Notify client to refresh tool list
+                try:
+                    ctx = mcp.get_context()
+                    if ctx and ctx.session:
+                        await ctx.session.send_tool_list_changed()
+                        logging.debug(f"Sent tool_list_changed notification after transition")
+                except Exception as notify_err:
+                    logging.warning(f"Failed to send tool_list_changed: {notify_err}")
+
+                return json.dumps({
+                    "routing_enabled": is_routing_enabled(),
+                    "task_type": task_type_enum.name,
+                    "state": new_state.name,
+                    "message": f"Transitioned to {new_state.name}",
+                })
+            else:
+                return json.dumps({
+                    "routing_enabled": False,
+                    "message": "Routing disabled",
+                })
+        except KeyError:
+            return json.dumps({
+                "error": f"Invalid task_type: {task_type}",
+                "valid_types": [t.name for t in TaskType],
+            })
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+            })
+
+    elif action == "reset":
+        try:
+            reset_session(session_id)
+
+            # Notify client to refresh tool list
+            try:
+                ctx = mcp.get_context()
+                if ctx and ctx.session:
+                    await ctx.session.send_tool_list_changed()
+                    logging.debug(f"Sent tool_list_changed notification after reset")
+            except Exception as notify_err:
+                logging.warning(f"Failed to send tool_list_changed: {notify_err}")
+
+            return json.dumps({
+                "routing_enabled": is_routing_enabled(),
+                "state": "INITIAL",
+                "message": "Session routing state reset",
+            })
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+            })
+
+    elif action == "metrics":
+        try:
+            metrics = get_routing_metrics()
+            return json.dumps(metrics)
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+            })
+
+    else:
+        return json.dumps({
+            "error": f"Unknown action: {action}",
+            "valid_actions": ["status", "classify", "transition", "reset", "metrics"],
+        })
+
+
 def setup_mcp_server(app: FastAPI):
     """Setup MCP server with the FastAPI application"""
     mcp._mcp_server.name = "mem0-mcp-server"
     concept_mcp._mcp_server.name = "business-concepts-mcp-server"
+
+    # Enable task-based routing with tool filtering
+    if HAS_ROUTING:
+        enable_routing()
+        logging.info("Task-based routing enabled")
+
+        # Override list_tools to filter based on session state
+        original_list_tools = mcp.list_tools
+
+        async def filtered_list_tools():
+            """List tools filtered by current session state."""
+            from mcp.types import Tool as MCPTool
+
+            # Get all tools from original method
+            all_tools = mcp._tool_manager.list_tools()
+
+            # Get session ID from context
+            session_id = user_id_var.get("default")
+
+            # Get filtered tool names
+            all_tool_names = [t.name for t in all_tools]
+            filtered_names = set(get_filtered_tools(session_id, all_tool_names))
+
+            # Return only filtered tools
+            return [
+                MCPTool(
+                    name=info.name,
+                    title=info.title,
+                    description=info.description,
+                    inputSchema=info.parameters,
+                    outputSchema=info.output_schema,
+                    annotations=info.annotations,
+                    icons=info.icons,
+                    _meta=info.meta,
+                )
+                for info in all_tools
+                if info.name in filtered_names
+            ]
+
+        # Replace the list_tools method
+        mcp.list_tools = filtered_list_tools
+        # Also update the handler in the low-level server
+        mcp._mcp_server.list_tools()(filtered_list_tools)
+        logging.info("Tool filtering activated")
 
     # Include MCP router in the FastAPI app
     app.include_router(mcp_router)
