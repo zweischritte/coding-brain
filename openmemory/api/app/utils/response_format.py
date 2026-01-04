@@ -18,6 +18,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
+from app.utils.code_reference import (
+    deserialize_code_refs_from_tags,
+    format_code_refs_for_response,
+    has_code_refs_in_tags,
+)
+
 
 # =============================================================================
 # CONSTANTS
@@ -159,7 +165,20 @@ def format_memory_result(
     if isinstance(tags, list):
         tags = {t: True for t in tags}
     if tags and isinstance(tags, dict) and len(tags) > 0:
-        formatted["tags"] = tags
+        # Extract code_refs from tags (Phase 1: stored in tags)
+        if has_code_refs_in_tags(tags):
+            code_refs = deserialize_code_refs_from_tags(tags)
+            if code_refs:
+                formatted["code_refs"] = format_code_refs_for_response(code_refs)
+            # Remove code_ref_* keys from tags for clean output
+            clean_tags = {
+                k: v for k, v in tags.items()
+                if not k.startswith("code_ref_")
+            }
+            if clean_tags:
+                formatted["tags"] = clean_tags
+        else:
+            formatted["tags"] = tags
 
     # Access entity (always included for visibility auditing)
     access_entity = metadata.get("access_entity")
