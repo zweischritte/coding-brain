@@ -102,30 +102,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from mcp.server.fastmcp import FastMCP
-from mcp.server.lowlevel import NotificationOptions
 from mcp.types import ToolAnnotations
 from app.mcp.sse_transport import SessionAwareSseTransport
 from app.security.session_binding import get_session_binding_store
-
-# Import task routing (lazy to avoid circular imports)
-try:
-    from app.routing import (
-        is_routing_enabled,
-        enable_routing,
-        disable_routing,
-        get_routing_metrics,
-        classify_query,
-        force_state_transition,
-        reset_session,
-        handle_state_command,
-        get_filtered_tools,
-        TaskType,
-        TaskState,
-    )
-    HAS_ROUTING = True
-except ImportError:
-    HAS_ROUTING = False
-    logging.warning("Task routing module not available")
 
 # Load environment variables
 load_dotenv()
@@ -4813,14 +4792,10 @@ async def handle_sse(request: Request):
                     dpop_thumbprint=dpop_thumbprint,
                 )
 
-            # Enable tools_changed notification for dynamic tool filtering
-            init_options = mcp._mcp_server.create_initialization_options(
-                notification_options=NotificationOptions(tools_changed=True),
-            )
             await mcp._mcp_server.run(
                 read_stream,
                 write_stream,
-                init_options,
+                mcp._mcp_server.create_initialization_options(),
             )
     finally:
         # Clean up session binding on disconnect
@@ -5137,231 +5112,10 @@ async def handle_concept_post_message(request: Request):
         principal_var.reset(principal_token)
 
 
-# --- Task Routing MCP Tools ---
-
-@mcp.tool(description="""Manage task-based tool routing for the current session.
-
-Task routing dynamically filters available tools based on the current task type,
-reducing context window usage and improving agent focus.
-
-Parameters:
-- action: "status" | "classify" | "transition" | "reset" | "metrics"
-- query: Query text for "classify" action
-- task_type: Task type for "transition" action (CODE_TRACE, CODE_UNDERSTAND,
-            MEMORY_QUERY, MEMORY_WRITE, PR_REVIEW, TEST_WRITE, GENERAL)
-
-Actions:
-- status: Get current routing state and available tools
-- classify: Classify a query and update routing state
-- transition: Force transition to a specific task type
-- reset: Reset routing state to INITIAL
-- metrics: Get routing metrics for monitoring
-
-Returns:
-- routing_enabled: Whether routing is active
-- state: Current task state
-- task_type: Classified task type (for classify action)
-- available_tools: List of tools available in current state
-""")
-async def task_router(
-    action: str = "status",
-    query: str = None,
-    task_type: str = None,
-) -> str:
-    """Manage task-based tool routing."""
-    if not HAS_ROUTING:
-        return json.dumps({
-            "error": "Task routing module not available",
-            "routing_enabled": False,
-        })
-
-    # Get session ID from context (we need to track this per-session)
-    # For now, use user_id as session identifier
-    session_id = user_id_var.get("default")
-
-    if action == "status":
-        try:
-            from app.routing import get_session_router
-            router = get_session_router()
-            state = router.get_session_state(session_id)
-
-            return json.dumps({
-                "routing_enabled": is_routing_enabled(),
-                "state": state.name if state else "INITIAL",
-                "session_id": session_id[:8] + "..." if session_id else None,
-            })
-        except Exception as e:
-            return json.dumps({
-                "routing_enabled": is_routing_enabled(),
-                "error": str(e),
-            })
-
-    elif action == "classify":
-        if not query:
-            return json.dumps({
-                "error": "query parameter required for classify action",
-            })
-
-        try:
-            result = classify_query(session_id, query)
-            if result:
-                # If state changed, notify client to refresh tool list
-                if result.transitioned:
-                    try:
-                        ctx = mcp.get_context()
-                        if ctx and ctx.session:
-                            await ctx.session.send_tool_list_changed()
-                            logging.debug(f"Sent tool_list_changed notification after classify")
-                    except Exception as notify_err:
-                        logging.warning(f"Failed to send tool_list_changed: {notify_err}")
-
-                return json.dumps({
-                    "routing_enabled": is_routing_enabled(),
-                    "task_type": result.classification.intent.name,
-                    "confidence": result.classification.confidence,
-                    "state": result.current_state.name,
-                    "transitioned": result.transitioned,
-                })
-            else:
-                return json.dumps({
-                    "routing_enabled": False,
-                    "message": "Routing disabled or classification failed",
-                })
-        except Exception as e:
-            return json.dumps({
-                "error": str(e),
-            })
-
-    elif action == "transition":
-        if not task_type:
-            return json.dumps({
-                "error": "task_type parameter required for transition action",
-                "valid_types": [t.name for t in TaskType],
-            })
-
-        try:
-            # Parse task_type string to enum
-            task_type_enum = TaskType[task_type.upper()]
-            new_state = force_state_transition(session_id, task_type_enum)
-
-            if new_state:
-                # Notify client to refresh tool list
-                try:
-                    ctx = mcp.get_context()
-                    if ctx and ctx.session:
-                        await ctx.session.send_tool_list_changed()
-                        logging.debug(f"Sent tool_list_changed notification after transition")
-                except Exception as notify_err:
-                    logging.warning(f"Failed to send tool_list_changed: {notify_err}")
-
-                return json.dumps({
-                    "routing_enabled": is_routing_enabled(),
-                    "task_type": task_type_enum.name,
-                    "state": new_state.name,
-                    "message": f"Transitioned to {new_state.name}",
-                })
-            else:
-                return json.dumps({
-                    "routing_enabled": False,
-                    "message": "Routing disabled",
-                })
-        except KeyError:
-            return json.dumps({
-                "error": f"Invalid task_type: {task_type}",
-                "valid_types": [t.name for t in TaskType],
-            })
-        except Exception as e:
-            return json.dumps({
-                "error": str(e),
-            })
-
-    elif action == "reset":
-        try:
-            reset_session(session_id)
-
-            # Notify client to refresh tool list
-            try:
-                ctx = mcp.get_context()
-                if ctx and ctx.session:
-                    await ctx.session.send_tool_list_changed()
-                    logging.debug(f"Sent tool_list_changed notification after reset")
-            except Exception as notify_err:
-                logging.warning(f"Failed to send tool_list_changed: {notify_err}")
-
-            return json.dumps({
-                "routing_enabled": is_routing_enabled(),
-                "state": "INITIAL",
-                "message": "Session routing state reset",
-            })
-        except Exception as e:
-            return json.dumps({
-                "error": str(e),
-            })
-
-    elif action == "metrics":
-        try:
-            metrics = get_routing_metrics()
-            return json.dumps(metrics)
-        except Exception as e:
-            return json.dumps({
-                "error": str(e),
-            })
-
-    else:
-        return json.dumps({
-            "error": f"Unknown action: {action}",
-            "valid_actions": ["status", "classify", "transition", "reset", "metrics"],
-        })
-
-
 def setup_mcp_server(app: FastAPI):
     """Setup MCP server with the FastAPI application"""
     mcp._mcp_server.name = "mem0-mcp-server"
     concept_mcp._mcp_server.name = "business-concepts-mcp-server"
-
-    # Enable task-based routing with tool filtering
-    if HAS_ROUTING:
-        enable_routing()
-        logging.info("Task-based routing enabled")
-
-        # Override list_tools to filter based on session state
-        original_list_tools = mcp.list_tools
-
-        async def filtered_list_tools():
-            """List tools filtered by current session state."""
-            from mcp.types import Tool as MCPTool
-
-            # Get all tools from original method
-            all_tools = mcp._tool_manager.list_tools()
-
-            # Get session ID from context
-            session_id = user_id_var.get("default")
-
-            # Get filtered tool names
-            all_tool_names = [t.name for t in all_tools]
-            filtered_names = set(get_filtered_tools(session_id, all_tool_names))
-
-            # Return only filtered tools
-            return [
-                MCPTool(
-                    name=info.name,
-                    title=info.title,
-                    description=info.description,
-                    inputSchema=info.parameters,
-                    outputSchema=info.output_schema,
-                    annotations=info.annotations,
-                    icons=info.icons,
-                    _meta=info.meta,
-                )
-                for info in all_tools
-                if info.name in filtered_names
-            ]
-
-        # Replace the list_tools method
-        mcp.list_tools = filtered_list_tools
-        # Also update the handler in the low-level server
-        mcp._mcp_server.list_tools()(filtered_list_tools)
-        logging.info("Tool filtering activated")
 
     # Include MCP router in the FastAPI app
     app.include_router(mcp_router)

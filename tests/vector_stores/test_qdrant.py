@@ -296,5 +296,38 @@ class TestQdrant(unittest.TestCase):
         self.qdrant.col_info()
         self.client_mock.get_collection.assert_called_once_with(collection_name="test_collection")
 
+    def test_set_payload(self):
+        """Test set_payload updates only payload without touching vector."""
+        vector_id = str(uuid.uuid4())
+        payload = {
+            "data": "Updated content",
+            "entity": "TestEntity",
+            "category": "decision",
+        }
+
+        self.qdrant.set_payload(vector_id=vector_id, payload=payload)
+
+        # Verify set_payload was called with correct args
+        self.client_mock.set_payload.assert_called_once_with(
+            collection_name="test_collection",
+            payload=payload,
+            points=[vector_id],
+        )
+
+        # Verify upsert was NOT called (which would delete the vector)
+        self.client_mock.upsert.assert_not_called()
+
+    def test_set_payload_preserves_existing_vector(self):
+        """Test that set_payload does not call upsert (upsert with vector=None deletes vector)."""
+        vector_id = str(uuid.uuid4())
+        payload = {"entity": "Test"}
+
+        self.qdrant.set_payload(vector_id=vector_id, payload=payload)
+
+        # The critical assertion: upsert should NOT be called
+        # because set_payload uses the dedicated Qdrant set_payload API
+        self.client_mock.upsert.assert_not_called()
+        self.client_mock.set_payload.assert_called_once()
+
     def tearDown(self):
         del self.qdrant

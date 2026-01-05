@@ -207,6 +207,24 @@ class Qdrant(VectorStoreBase):
         point = PointStruct(id=vector_id, vector=vector, payload=payload)
         self.client.upsert(collection_name=self.collection_name, points=[point])
 
+    def set_payload(self, vector_id: str, payload: dict) -> None:
+        """
+        Update only the payload without changing the vector.
+
+        Uses Qdrant's set_payload API which preserves the existing vector.
+        This is essential for metadata-only updates where we don't want to
+        re-compute embeddings.
+
+        Args:
+            vector_id: ID of the point to update (string UUID)
+            payload: New payload (replaces existing payload)
+        """
+        self.client.set_payload(
+            collection_name=self.collection_name,
+            payload=payload,
+            points=[vector_id],
+        )
+
     def get(self, vector_id: int) -> dict:
         """
         Retrieve a vector by ID.

@@ -242,6 +242,23 @@ whoami()
 ```
 Returns the current MCP auth context (user_id, org_id, scopes, grants, client_name).
 
+### Memory Tools (MCP)
+
+#### get_memory
+
+Retrieve a single memory by UUID with all fields:
+
+```text
+get_memory(memory_id="ba93af28-784d-4262-b8f9-adb08c45acab")
+```
+
+Returns all fields including `access_entity`, useful for:
+
+- Verifying updates succeeded
+- Debugging ACL issues
+- Following evidence chains between memories
+- Exploring similar memories from search results (via `OM_SIMILAR` edges)
+
 ### Claude Code Configuration
 
 On macOS, Claude Code stores MCP settings in `~/.claude.json`. Add the following to connect to Coding Brain:
