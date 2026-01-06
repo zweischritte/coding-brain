@@ -210,6 +210,7 @@ services:
     volumes:
       - ./api:/usr/src/openmemory
       - ..:/usr/src/coding-brain:ro
+      - ~/git:/repos:ro
     networks:
       - codingbrain-net
     healthcheck:
@@ -291,6 +292,7 @@ services:
     volumes:
       - ./api:/usr/src/openmemory
       - ..:/usr/src/coding-brain:ro
+      - ~/git:/repos:ro
     networks:
       - codingbrain-net
     command: python -m app.workers.indexing_worker
