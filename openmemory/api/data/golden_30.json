@@ -1,0 +1,217 @@
+{
+  "version": "1.0",
+  "created_at": "2026-01-07",
+  "description": "Golden dataset for RAG quality evaluation (PRD-08-SIMPLE). 30 samples across local, global, and code query types.",
+  "samples": [
+    {
+      "id": "local_001",
+      "query": "What database does the AuthService use?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["PostgreSQL", "database", "auth"]
+    },
+    {
+      "id": "local_002",
+      "query": "Who is responsible for the PaymentService?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["owner", "responsible", "payment"]
+    },
+    {
+      "id": "local_003",
+      "query": "What is our convention for error handling in TypeScript?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["try", "catch", "error", "throw"]
+    },
+    {
+      "id": "local_004",
+      "query": "What logging framework do we use?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["log", "logger", "winston", "pino"]
+    },
+    {
+      "id": "local_005",
+      "query": "What is the token expiry time for JWT?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["JWT", "expiry", "token", "minute", "hour"]
+    },
+    {
+      "id": "local_006",
+      "query": "What testing framework do we use?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["jest", "pytest", "test", "testing"]
+    },
+    {
+      "id": "local_007",
+      "query": "What is the naming convention for API endpoints?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["REST", "endpoint", "naming", "kebab", "camel"]
+    },
+    {
+      "id": "local_008",
+      "query": "How do we handle database migrations?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["migration", "alembic", "schema", "database"]
+    },
+    {
+      "id": "local_009",
+      "query": "What is our branching strategy?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["branch", "git", "main", "feature", "merge"]
+    },
+    {
+      "id": "local_010",
+      "query": "What CI/CD pipeline do we use?",
+      "query_type": "local",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["CI", "CD", "pipeline", "github", "actions"]
+    },
+    {
+      "id": "global_001",
+      "query": "What are the main architectural patterns in the codebase?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["architecture", "pattern", "service", "module"]
+    },
+    {
+      "id": "global_002",
+      "query": "How does authentication work in our system?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["auth", "JWT", "token", "login", "session"]
+    },
+    {
+      "id": "global_003",
+      "query": "What security measures do we have in place?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["security", "auth", "encryption", "validation"]
+    },
+    {
+      "id": "global_004",
+      "query": "How do services communicate with each other?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["service", "API", "event", "message", "REST"]
+    },
+    {
+      "id": "global_005",
+      "query": "What is our approach to error handling across services?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["error", "exception", "handling", "retry"]
+    },
+    {
+      "id": "global_006",
+      "query": "How do we handle data validation?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["validation", "schema", "input", "sanitize"]
+    },
+    {
+      "id": "global_007",
+      "query": "What is our caching strategy?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["cache", "redis", "memory", "TTL"]
+    },
+    {
+      "id": "global_008",
+      "query": "How do we handle deployments?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["deploy", "release", "rollback", "staging"]
+    },
+    {
+      "id": "global_009",
+      "query": "What monitoring and observability do we have?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["monitor", "log", "metric", "alert", "trace"]
+    },
+    {
+      "id": "global_010",
+      "query": "How do we manage configuration across environments?",
+      "query_type": "global",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["config", "environment", "env", "secret"]
+    },
+    {
+      "id": "code_001",
+      "query": "What functions call the authenticate method?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["authenticate", "caller", "login", "middleware"]
+    },
+    {
+      "id": "code_002",
+      "query": "What does the validateToken function do?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["validate", "token", "JWT", "verify"]
+    },
+    {
+      "id": "code_003",
+      "query": "Where is the database connection configured?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["database", "connection", "config", "pool"]
+    },
+    {
+      "id": "code_004",
+      "query": "What middleware is applied to API routes?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["middleware", "route", "auth", "logging"]
+    },
+    {
+      "id": "code_005",
+      "query": "How is password hashing implemented?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["hash", "password", "bcrypt", "salt"]
+    },
+    {
+      "id": "code_006",
+      "query": "What events does the UserService emit?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["event", "emit", "user", "created", "updated"]
+    },
+    {
+      "id": "code_007",
+      "query": "Where are API rate limits configured?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["rate", "limit", "throttle", "config"]
+    },
+    {
+      "id": "code_008",
+      "query": "What is the structure of the User model?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["user", "model", "schema", "field", "property"]
+    },
+    {
+      "id": "code_009",
+      "query": "How are background jobs scheduled?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["job", "schedule", "cron", "queue", "worker"]
+    },
+    {
+      "id": "code_010",
+      "query": "What decorators are used in the AuthController?",
+      "query_type": "code",
+      "expected_memory_ids": [],
+      "expected_answer_keywords": ["decorator", "controller", "route", "guard"]
+    }
+  ]
+}
