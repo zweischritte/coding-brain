@@ -320,6 +320,7 @@ async def create_memory(
         except StructuredMemoryError:
             scope_value = None
 
+    # PRD-13: If scope is provided but access_entity is not, try to resolve it
     if scope_value and access_entity_input is None:
         resolved_access_entity, options = resolve_access_entity_for_scope(
             principal=principal,
@@ -337,6 +338,12 @@ async def create_memory(
                     "options": options,
                 },
             )
+
+    # PRD-13: If neither scope nor access_entity is provided, default to user scope with user access_entity
+    # This will be handled by normalize_metadata_for_create which derives scope from access_entity
+    # For now, we set a default access_entity for the user
+    if scope_value is None and access_entity_input is None:
+        raw_metadata["access_entity"] = get_default_access_entity(principal)
 
     try:
         clean_text = validate_text(request.text)

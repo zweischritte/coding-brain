@@ -77,6 +77,15 @@ SCOPE_TO_ACCESS_ENTITY_PREFIX = {
     "enterprise": "org",  # Enterprise uses org prefix
 }
 
+# Reverse mapping: access_entity prefix to scope (for derivation)
+# Note: session and enterprise are special cases handled separately
+ACCESS_ENTITY_PREFIX_TO_SCOPE = {
+    "user": "user",
+    "team": "team",
+    "project": "project",
+    "org": "org",
+}
+
 LEGACY_KEYS = {
     "re",
     "src",
@@ -308,6 +317,61 @@ def sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in metadata.items() if k not in LEGACY_KEYS}
 
 
+def derive_scope(
+    access_entity: Optional[str],
+    explicit_scope: Optional[str],
+) -> str:
+    """
+    Derive scope from access_entity, unless explicitly provided.
+
+    PRD-13: access_entity is the Single Source of Truth for Access Control.
+    scope is derived from access_entity prefix (unless explicitly provided).
+
+    Rules:
+    - If explicit_scope is 'session' or 'enterprise', always use it (special cases)
+    - If explicit_scope is provided and not empty, use it
+    - If access_entity is None or invalid format, default to 'user'
+    - Otherwise, derive from access_entity prefix
+
+    Args:
+        access_entity: The access control entity (e.g., 'user:grischa', 'team:org/path')
+        explicit_scope: Explicitly provided scope (may be None)
+
+    Returns:
+        The derived or explicit scope string
+
+    Raises:
+        ValueError: If access_entity has an unknown prefix
+    """
+    # Handle explicit scope for special cases (session, enterprise)
+    if explicit_scope in ("session", "enterprise"):
+        return explicit_scope
+
+    # If explicit scope is provided (and not empty string), use it
+    if explicit_scope is not None and explicit_scope.strip():
+        return explicit_scope
+
+    # If no access_entity or empty/whitespace, default to user
+    if not access_entity or not access_entity.strip():
+        return "user"
+
+    access_entity = access_entity.strip()
+
+    # Check for valid format (must contain colon)
+    if ":" not in access_entity:
+        return "user"
+
+    # Extract prefix (case-insensitive)
+    prefix = access_entity.split(":", 1)[0].lower()
+
+    # Look up scope from prefix
+    scope = ACCESS_ENTITY_PREFIX_TO_SCOPE.get(prefix)
+    if scope is None:
+        raise ValueError(f"Unknown access_entity prefix: {prefix}")
+
+    return scope
+
+
 # =============================================================================
 # STRUCTURED MEMORY BUILDER
 # =============================================================================
@@ -319,7 +383,7 @@ class StructuredMemoryInput:
 
     text: str
     category: str
-    scope: str
+    scope: Optional[str] = None  # Now optional - derived from access_entity if not provided
 
     artifact_type: Optional[str] = None
     artifact_ref: Optional[str] = None
@@ -332,7 +396,23 @@ class StructuredMemoryInput:
     def __post_init__(self):
         self.text = validate_text(self.text)
         self.category = validate_category(self.category)
-        self.scope = validate_scope(self.scope)
+
+        # Normalize empty access_entity to None
+        if self.access_entity is not None and not self.access_entity.strip():
+            self.access_entity = None
+
+        # PRD-13: Derive scope from access_entity if not explicitly provided
+        # This makes scope optional while keeping it as a persisted field
+        if self.scope is None:
+            # Derive scope from access_entity
+            try:
+                self.scope = derive_scope(self.access_entity, explicit_scope=None)
+            except ValueError:
+                # Unknown prefix - will be caught by validate_access_entity later
+                self.scope = "user"
+        else:
+            # Explicit scope provided - validate it
+            self.scope = validate_scope(self.scope)
 
         if self.artifact_type is not None:
             self.artifact_type = validate_artifact_type(self.artifact_type)
@@ -344,6 +424,8 @@ class StructuredMemoryInput:
             self.entity = validate_entity(self.entity)
 
         # Validate access_entity requirement based on scope
+        # Only require access_entity for shared scopes when scope is EXPLICITLY provided
+        # If scope was derived, we already have a valid access_entity
         if self.scope in SHARED_SCOPES:
             if self.access_entity is None:
                 raise StructuredMemoryError(
@@ -395,7 +477,7 @@ class StructuredMemoryInput:
 def build_structured_memory(
     text: str,
     category: str,
-    scope: str,
+    scope: Optional[str] = None,  # Now optional - derived from access_entity if not provided
     artifact_type: Optional[str] = None,
     artifact_ref: Optional[str] = None,
     entity: Optional[str] = None,
@@ -404,7 +486,11 @@ def build_structured_memory(
     evidence: Optional[List[str]] = None,
     tags: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    """Build and validate structured memory input."""
+    """Build and validate structured memory input.
+
+    PRD-13: scope is now optional. If not provided, it will be derived from
+    access_entity prefix. If neither is provided, defaults to 'user' scope.
+    """
     memory = StructuredMemoryInput(
         text=text,
         category=category,
@@ -422,14 +508,30 @@ def build_structured_memory(
 
 
 def normalize_metadata_for_create(metadata: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate metadata dict for create requests."""
+    """Validate metadata dict for create requests.
+
+    PRD-13: scope is now optional. If not provided, it will be derived from
+    access_entity prefix. If neither is provided, defaults to 'user' scope.
+    """
     metadata = sanitize_metadata(metadata)
     category = metadata.get("category")
     scope = metadata.get("scope")
-    if category is None or scope is None:
-        raise StructuredMemoryError("metadata must include 'category' and 'scope'")
+    access_entity = metadata.get("access_entity")
 
-    validated_scope = validate_scope(scope)
+    # Category is always required
+    if category is None:
+        raise StructuredMemoryError("metadata must include 'category'")
+
+    # PRD-13: scope is now optional - derive from access_entity if not provided
+    if scope is None:
+        # Derive scope from access_entity
+        try:
+            validated_scope = derive_scope(access_entity, explicit_scope=None)
+        except ValueError:
+            # Unknown prefix - will be caught by validate_access_entity later
+            validated_scope = "user"
+    else:
+        validated_scope = validate_scope(scope)
 
     validated = {
         "category": validate_category(category),
@@ -447,8 +549,8 @@ def normalize_metadata_for_create(metadata: Dict[str, Any]) -> Dict[str, Any]:
         validated["entity"] = validate_entity(metadata["entity"])
 
     # Validate access_entity requirement based on scope
-    access_entity = metadata.get("access_entity")
-    if validated_scope in SHARED_SCOPES:
+    # Only require access_entity for shared scopes when scope is EXPLICITLY provided
+    if scope is not None and validated_scope in SHARED_SCOPES:
         if access_entity is None:
             raise StructuredMemoryError(
                 f"access_entity is required for scope='{validated_scope}'. "

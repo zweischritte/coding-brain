@@ -629,7 +629,7 @@ Use when: Documenting decisions, conventions, architecture, or learnings worth r
 Parameters:
 - text: Memory content (required)
 - category: decision | convention | architecture | workflow | etc. (required)
-- scope: user | team | project | org (required)
+- scope: user | team | project | org (optional - derived from access_entity if not provided)
 - entity: What/who this is about (e.g., "AuthService", "Backend Team")
 - access_entity: Access control (e.g., "project:org/repo") - required for shared scopes
 - tags: Key-value metadata (e.g., {"priority": "high"})
@@ -639,14 +639,14 @@ Parameters:
 Returns: id of created memory, plus saved metadata.
 
 Example:
-- add_memories(text="Use JWT for auth", category="decision", scope="project", entity="AuthService", access_entity="project:cloudfactory/vgbk")
+- add_memories(text="Use JWT for auth", category="decision", entity="AuthService", access_entity="project:cloudfactory/vgbk")
 """,
     annotations=ToolAnnotations(readOnlyHint=False, title="Add Memory")
 )
 async def add_memories(
     text: str,
     category: str,
-    scope: str,
+    scope: str = None,  # PRD-13: Now optional - derived from access_entity if not provided
     artifact_type: str = None,
     artifact_ref: str = None,
     entity: str = None,
@@ -674,24 +674,35 @@ async def add_memories(
     if access_entity == "auto":
         access_entity = None
 
-    if principal and (access_entity is None):
+    # PRD-13: Derive scope from access_entity if not provided
+    # This happens later in build_structured_memory, but we need scope here
+    # for the access_entity resolution logic
+    effective_scope = scope
+    if effective_scope is None and access_entity:
+        from app.utils.structured_memory import derive_scope
+        try:
+            effective_scope = derive_scope(access_entity, explicit_scope=None)
+        except ValueError:
+            effective_scope = None
+
+    if principal and (access_entity is None) and effective_scope:
         resolved_access_entity, options = resolve_access_entity_for_scope(
             principal=principal,
-            scope=scope,
+            scope=effective_scope,
             access_entity=access_entity,
         )
         if resolved_access_entity:
             access_entity = resolved_access_entity
-        elif scope in SHARED_SCOPES and options:
+        elif effective_scope in SHARED_SCOPES and options:
             return json.dumps({
-                "error": f"access_entity is required for scope='{scope}'. Multiple grants available.",
+                "error": f"access_entity is required for scope='{effective_scope}'. Multiple grants available.",
                 "code": "ACCESS_ENTITY_AMBIGUOUS",
                 "options": options,
                 "hint": "Pick one of the available access_entity values.",
             })
 
-    # Default access_entity to user:<uid> for personal scopes
-    if access_entity is None and scope in ("user", "session"):
+    # Default access_entity to user:<uid> for personal scopes (including when scope is None)
+    if access_entity is None and (effective_scope is None or effective_scope in ("user", "session")):
         access_entity = f"user:{uid}"
 
     # Access control check: verify principal can create memory with this access_entity
