@@ -245,6 +245,8 @@ def get_memory_node_from_graph(
     memory_id: str,
     user_id: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Get a memory node from the Neo4j metadata projection.
@@ -259,6 +261,8 @@ def get_memory_node_from_graph(
             memory_id=memory_id,
             user_id=user_id,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except Exception as e:
         logger.warning(f"Error getting memory node {memory_id} from graph: {e}")
@@ -269,6 +273,8 @@ def find_related_memories_in_graph(
     memory_id: str,
     user_id: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     via: Optional[str] = None,
     limit: int = 10,
 ) -> List[Dict[str, Any]]:
@@ -292,6 +298,8 @@ def find_related_memories_in_graph(
             memory_id=memory_id,
             user_id=user_id,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             rel_types=rel_types,
             limit=limit,
         )
@@ -306,6 +314,8 @@ def aggregate_memories_in_graph(
     user_id: str,
     group_by: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """
@@ -322,6 +332,8 @@ def aggregate_memories_in_graph(
             user_id=user_id,
             group_by=group_by,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             limit=limit,
         )
     except ValueError as e:
@@ -335,6 +347,8 @@ def aggregate_memories_in_graph(
 def tag_cooccurrence_in_graph(
     user_id: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     limit: int = 20,
     min_count: int = 2,
     sample_size: int = 3,
@@ -350,6 +364,8 @@ def tag_cooccurrence_in_graph(
         return projector.tag_cooccurrence(
             user_id=user_id,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             limit=limit,
             min_count=min_count,
             sample_size=sample_size,
@@ -364,6 +380,8 @@ def path_between_entities_in_graph(
     entity_a: str,
     entity_b: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     max_hops: int = 6,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -379,6 +397,8 @@ def path_between_entities_in_graph(
             entity_a=entity_a,
             entity_b=entity_b,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             max_hops=max_hops,
         )
     except Exception as e:
@@ -390,6 +410,8 @@ def get_memory_subgraph_from_graph(
     memory_id: str,
     user_id: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     depth: int = 2,
     via: Optional[str] = None,
     related_limit: int = 25,
@@ -418,6 +440,8 @@ def get_memory_subgraph_from_graph(
         memory_id=memory_id,
         user_id=user_id,
         allowed_memory_ids=allowed_memory_ids,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
     if seed is None:
         return None
@@ -430,21 +454,26 @@ def get_memory_subgraph_from_graph(
             memory_id=memory_id,
             user_id=user_id,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             via=via,
             limit=related_limit,
         )
 
-    def node_id_for(label: str, value: Any) -> str:
+    def node_id_for(label: str, value: Any, access_entity: Optional[str] = None) -> str:
         if label == "OM_Memory":
             return f"OM_Memory:{value}"
         if label == "OM_Entity":
-            return f"OM_Entity:{user_id}:{value}"
+            if access_entity:
+                return f"OM_Entity:{access_entity}:{value}"
+            return f"OM_Entity:{value}"
         return f"{label}:{value}"
 
     nodes: Dict[str, Dict[str, Any]] = {}
     edges: List[Dict[str, Any]] = []
 
     seed_node_id = node_id_for("OM_Memory", seed["id"])
+    seed_access_entity = seed.get("accessEntity")
     nodes[seed_node_id] = {
         "id": seed_node_id,
         "label": "OM_Memory",
@@ -465,13 +494,15 @@ def get_memory_subgraph_from_graph(
         target_value = rel.get("target_value")
         if not target_label or target_value is None:
             continue
-        dim_id = node_id_for(target_label, target_value)
+        dim_id = node_id_for(target_label, target_value, seed_access_entity if target_label == "OM_Entity" else None)
         if dim_id not in nodes:
             nodes[dim_id] = {
                 "id": dim_id,
                 "label": target_label,
                 "value": target_value,
             }
+        if target_label == "OM_Entity" and rel.get("target_display_name"):
+            nodes[dim_id]["displayName"] = rel.get("target_display_name")
         edge = {
             "source": seed_node_id,
             "target": dim_id,
@@ -486,6 +517,7 @@ def get_memory_subgraph_from_graph(
         rid = rm.get("id")
         if not rid:
             continue
+        rm_access_entity = rm.get("accessEntity")
         rm_node_id = node_id_for("OM_Memory", rid)
         if rm_node_id not in nodes:
             nodes[rm_node_id] = {
@@ -508,13 +540,19 @@ def get_memory_subgraph_from_graph(
             target_value = shared.get("target_value")
             if not target_label or target_value is None:
                 continue
-            dim_id = node_id_for(target_label, target_value)
+            dim_id = node_id_for(
+                target_label,
+                target_value,
+                rm_access_entity if target_label == "OM_Entity" else None,
+            )
             if dim_id not in nodes:
                 nodes[dim_id] = {
                     "id": dim_id,
                     "label": target_label,
                     "value": target_value,
                 }
+            if target_label == "OM_Entity" and shared.get("targetDisplayName"):
+                nodes[dim_id]["displayName"] = shared.get("targetDisplayName")
             edge = {
                 "source": rm_node_id,
                 "target": dim_id,
@@ -688,6 +726,8 @@ def get_entity_network_from_graph(
     user_id: str,
     min_count: int = 1,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Get the co-mention network for an entity.
@@ -714,13 +754,65 @@ def get_entity_network_from_graph(
             user_id=user_id,
             min_count=min_count,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except Exception as e:
         logger.warning(f"Error getting entity network for {entity_name}: {e}")
         return None
 
 
-def backfill_entity_edges_in_graph(user_id: str, min_count: int = 1) -> int:
+def get_entity_display_name_from_graph(
+    entity_name: str,
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Optional[str]:
+    """
+    Resolve displayName for a given entity name.
+    """
+    from app.graph.neo4j_client import get_neo4j_session, is_neo4j_configured, is_neo4j_healthy
+
+    if not is_neo4j_configured():
+        return None
+    if not is_neo4j_healthy():
+        return None
+
+    query = """
+    MATCH (e:OM_Entity {name: $entityName})
+    WHERE (
+      (e.accessEntity IS NOT NULL AND (
+        e.accessEntity IN $accessEntities
+        OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+      ))
+      OR (e.accessEntity IS NULL AND e.userId = $userId)
+    )
+    RETURN coalesce(e.displayName, e.name) AS displayName
+    LIMIT 1
+    """
+
+    try:
+        with get_neo4j_session() as session:
+            result = session.run(
+                query,
+                userId=user_id,
+                entityName=entity_name,
+                accessEntities=access_entities or [f"user:{user_id}"],
+                accessEntityPrefixes=access_entity_prefixes or [],
+            )
+            record = result.single()
+            if record and record.get("displayName"):
+                return record["displayName"]
+    except Exception as e:
+        logger.warning(f"Error getting entity displayName for {entity_name}: {e}")
+    return None
+
+
+def backfill_entity_edges_in_graph(
+    user_id: str,
+    min_count: int = 1,
+    access_entity: Optional[str] = None,
+) -> int:
     """
     Backfill all OM_CO_MENTIONED edges for a user.
 
@@ -736,13 +828,19 @@ def backfill_entity_edges_in_graph(user_id: str, min_count: int = 1) -> int:
         return 0
 
     try:
-        return projector.backfill_entity_edges(user_id, min_count)
+        return projector.backfill_entity_edges(user_id, min_count, access_entity=access_entity)
     except Exception as e:
         logger.warning(f"Error backfilling entity edges for {user_id}: {e}")
         return 0
 
 
-def get_entities_for_memory_from_graph(memory_id: str, user_id: str, limit: int = 200) -> List[str]:
+def get_entities_for_memory_from_graph(
+    memory_id: str,
+    user_id: str,
+    limit: int = 200,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> List[str]:
     """
     Get all entity names connected to a memory via OM_ABOUT.
 
@@ -763,15 +861,35 @@ def get_entities_for_memory_from_graph(memory_id: str, user_id: str, limit: int 
         return []
 
     query = """
-    MATCH (m:OM_Memory {id: $memoryId, userId: $userId})-[:OM_ABOUT]->(e:OM_Entity {userId: $userId})
+    MATCH (m:OM_Memory {id: $memoryId})-[:OM_ABOUT]->(e:OM_Entity)
+    WHERE (
+      (m.accessEntity IS NOT NULL AND (
+        m.accessEntity IN $accessEntities
+        OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+      ))
+      OR (m.accessEntity IS NULL AND m.userId = $userId)
+    )
+      AND (
+        (e.accessEntity IS NOT NULL AND e.accessEntity = m.accessEntity)
+        OR (e.accessEntity IS NULL AND e.userId = $userId)
+      )
     RETURN DISTINCT e.name AS name
     ORDER BY name
     LIMIT $limit
     """
 
     try:
+        access_entities = access_entities or [f"user:{user_id}"]
+        access_entity_prefixes = access_entity_prefixes or []
         with get_neo4j_session() as session:
-            result = session.run(query, memoryId=memory_id, userId=user_id, limit=limit)
+            result = session.run(
+                query,
+                memoryId=memory_id,
+                userId=user_id,
+                limit=limit,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             names: List[str] = []
             for record in result:
                 name = record.get("name")
@@ -786,6 +904,7 @@ def get_entities_for_memory_from_graph(memory_id: str, user_id: str, limit: int 
 def refresh_co_mention_edges_for_entities(
     user_id: str,
     entity_names: List[str],
+    access_entity: Optional[str] = None,
     *,
     max_entities: int = 80,
     max_pairs: int = 3000,
@@ -840,19 +959,21 @@ def refresh_co_mention_edges_for_entities(
 
     query = """
     UNWIND $pairs AS pair
-    MATCH (e1:OM_Entity {userId: $userId, name: pair[0]})
-    MATCH (e2:OM_Entity {userId: $userId, name: pair[1]})
-    OPTIONAL MATCH (e1)<-[:OM_ABOUT]-(m:OM_Memory {userId: $userId})-[:OM_ABOUT]->(e2)
+    MATCH (e1:OM_Entity {accessEntity: $accessEntity, name: pair[0]})
+    MATCH (e2:OM_Entity {accessEntity: $accessEntity, name: pair[1]})
+    OPTIONAL MATCH (e1)<-[:OM_ABOUT]-(m:OM_Memory)-[:OM_ABOUT]->(e2)
+    WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
     WITH e1, e2, count(DISTINCT m) AS cnt, collect(DISTINCT m.id)[0..5] AS memoryIds
     FOREACH (_ IN CASE WHEN cnt > 0 THEN [1] ELSE [] END |
-      MERGE (e1)-[r:OM_CO_MENTIONED {userId: $userId}]->(e2)
-      ON CREATE SET r.createdAt = datetime()
+      MERGE (e1)-[r:OM_CO_MENTIONED {accessEntity: $accessEntity}]->(e2)
+      ON CREATE SET r.createdAt = datetime(),
+                    r.userId = $userId
       SET r.count = cnt,
           r.memoryIds = memoryIds,
           r.updatedAt = datetime()
     )
     FOREACH (_ IN CASE WHEN cnt = 0 THEN [1] ELSE [] END |
-      MATCH (e1)-[r:OM_CO_MENTIONED {userId: $userId}]->(e2)
+      MATCH (e1)-[r:OM_CO_MENTIONED {accessEntity: $accessEntity}]->(e2)
       DELETE r
     )
     RETURN count(*) AS processed
@@ -860,7 +981,13 @@ def refresh_co_mention_edges_for_entities(
 
     try:
         with get_neo4j_session() as session:
-            session.run(query, userId=user_id, pairs=pairs).consume()
+            session.run(
+                query,
+                userId=user_id,
+                pairs=pairs,
+                accessEntity=access_entity or f"user:{user_id}",
+                legacyAccessEntity=f"user:{user_id}",
+            ).consume()
         return True
     except Exception as e:
         logger.warning(f"Error refreshing co-mention edges: {e}")
@@ -901,6 +1028,8 @@ def get_related_tags_from_graph(
     user_id: str,
     min_count: int = 1,
     limit: int = 20,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get co-occurring tags for a given tag.
@@ -924,6 +1053,8 @@ def get_related_tags_from_graph(
             user_id=user_id,
             min_count=min_count,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except Exception as e:
         logger.warning(f"Error getting related tags for {tag_key}: {e}")
@@ -934,6 +1065,7 @@ def backfill_tag_edges_in_graph(
     user_id: str,
     min_count: int = 2,
     min_pmi: float = 0.0,
+    access_entity: Optional[str] = None,
 ) -> int:
     """
     Backfill all OM_COOCCURS edges for a user with PMI calculation.
@@ -951,7 +1083,12 @@ def backfill_tag_edges_in_graph(
         return 0
 
     try:
-        return projector.backfill_tag_edges(user_id, min_count, min_pmi)
+        return projector.backfill_tag_edges(
+            user_id,
+            min_count,
+            min_pmi,
+            access_entity=access_entity,
+        )
     except Exception as e:
         logger.warning(f"Error backfilling tag edges for {user_id}: {e}")
         return 0
@@ -1140,11 +1277,19 @@ def retrieve_via_similarity_graph(
             # Ranks by number of seed connections (more = more relevant)
             query = """
             UNWIND $seedIds AS seedId
-            MATCH (seed:OM_Memory {id: seedId, userId: $userId})
+            MATCH (seed:OM_Memory {id: seedId})
+            WITH seed, seedId, coalesce(seed.accessEntity, $legacyAccessEntity) AS accessEntity
             MATCH (seed)-[r:OM_SIMILAR]->(candidate:OM_Memory)
             WHERE r.score >= $minScore
               AND candidate.id NOT IN $seedIds
-              AND candidate.userId = $userId
+              AND (
+                (candidate.accessEntity IS NOT NULL AND candidate.accessEntity = accessEntity)
+                OR (candidate.accessEntity IS NULL AND candidate.userId = $userId)
+              )
+              AND (
+                (r.accessEntity IS NOT NULL AND r.accessEntity = accessEntity)
+                OR (r.accessEntity IS NULL AND r.userId = $userId)
+              )
             WITH candidate,
                  count(DISTINCT seedId) AS seedConnections,
                  max(r.score) AS maxSimilarity,
@@ -1169,6 +1314,7 @@ def retrieve_via_similarity_graph(
                 userId=user_id,
                 minScore=min_score,
                 limit=limit,
+                legacyAccessEntity=f"user:{user_id}",
             )
 
             memories: List[Dict[str, Any]] = []
@@ -1212,6 +1358,8 @@ def retrieve_via_entity_graph(
     entity_names: List[str],
     allowed_memory_ids: Optional[set] = None,
     limit: int = 30,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve memories connected to specific entities.
@@ -1247,11 +1395,26 @@ def retrieve_via_entity_graph(
             # Find memories connected to any of the specified entities
             query = """
             UNWIND $entityNames AS entityName
-            MATCH (e:OM_Entity {userId: $userId, name: entityName})
-            MATCH (m:OM_Memory {userId: $userId})-[:OM_ABOUT]->(e)
+            MATCH (e:OM_Entity {name: entityName})
+            WHERE (
+              (e.accessEntity IS NOT NULL AND (
+                e.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+              ))
+              OR (e.accessEntity IS NULL AND e.userId = $userId)
+            )
+            MATCH (m:OM_Memory)-[:OM_ABOUT]->(e)
+            WHERE (
+              (m.accessEntity IS NOT NULL AND m.accessEntity = e.accessEntity)
+              OR (m.accessEntity IS NULL AND m.userId = $userId)
+            )
             WITH m,
                  count(DISTINCT entityName) AS matchedEntities,
-                 collect(DISTINCT entityName) AS entityNames
+                 collect(DISTINCT entityName) AS entityNames,
+                 collect(DISTINCT {
+                     name: e.name,
+                     displayName: coalesce(e.displayName, e.name)
+                 }) AS entityDetails
             ORDER BY matchedEntities DESC
             LIMIT $limit
             RETURN m.id AS id,
@@ -1261,7 +1424,8 @@ def retrieve_via_entity_graph(
                    m.artifactType AS artifactType,
                    m.artifactRef AS artifactRef,
                    matchedEntities,
-                   entityNames
+                   entityNames,
+                   entityDetails
             """
 
             result = session.run(
@@ -1269,6 +1433,8 @@ def retrieve_via_entity_graph(
                 entityNames=entity_names,
                 userId=user_id,
                 limit=limit,
+                accessEntities=access_entities or [f"user:{user_id}"],
+                accessEntityPrefixes=access_entity_prefixes or [],
             )
 
             memories: List[Dict[str, Any]] = []
@@ -1282,6 +1448,7 @@ def retrieve_via_entity_graph(
                     "artifactRef": record["artifactRef"],
                     "matchedEntities": record["matchedEntities"],
                     "entityNames": record["entityNames"],
+                    "entityDetails": record.get("entityDetails") or [],
                 }
 
                 if allowed_memory_ids is None or mem["id"] in allowed_memory_ids:
@@ -1300,6 +1467,8 @@ def find_bridge_entities(
     max_bridges: int = 5,
     min_count: int = 2,
     max_hops: int = 3,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find entities that bridge between query entities via OM_CO_MENTIONED.
@@ -1343,14 +1512,30 @@ def find_bridge_entities(
             # max_hops controls path length (3 = A→B→C→D)
             query = f"""
             UNWIND $entityNames AS name
-            MATCH (e:OM_Entity {{userId: $userId, name: name}})
-            MATCH (e)-[r:OM_CO_MENTIONED*1..{max_hops}]-(bridge:OM_Entity {{userId: $userId}})
+            MATCH (e:OM_Entity {{name: name}})
+            WHERE (
+              (e.accessEntity IS NOT NULL AND (
+                e.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+              ))
+              OR (e.accessEntity IS NULL AND e.userId = $userId)
+            )
+            MATCH (e)-[r:OM_CO_MENTIONED*1..{max_hops}]-(bridge:OM_Entity)
             WHERE NOT bridge.name IN $entityNames
+              AND (
+                (bridge.accessEntity IS NOT NULL AND bridge.accessEntity = e.accessEntity)
+                OR (bridge.accessEntity IS NULL AND bridge.userId = $userId)
+              )
+              AND all(rel IN r WHERE (
+                (rel.accessEntity IS NOT NULL AND rel.accessEntity = e.accessEntity)
+                OR (rel.accessEntity IS NULL AND rel.userId = $userId)
+              ))
             WITH bridge,
                  collect(DISTINCT name) AS connectedEntities,
                  sum(reduce(s = 0, rel IN r | s + coalesce(rel.count, 1))) AS totalStrength
             WHERE size(connectedEntities) >= 2
             RETURN bridge.name AS name,
+                   coalesce(bridge.displayName, bridge.name) AS displayName,
                    totalStrength AS connectionStrength,
                    connectedEntities AS connects
             ORDER BY size(connectedEntities) DESC, totalStrength DESC
@@ -1362,6 +1547,8 @@ def find_bridge_entities(
                 entityNames=[e.lower() for e in entity_names],
                 userId=user_id,
                 maxBridges=max_bridges,
+                accessEntities=access_entities or [f"user:{user_id}"],
+                accessEntityPrefixes=access_entity_prefixes or [],
             )
 
             bridges = [dict(record) for record in result]
@@ -1385,6 +1572,8 @@ def fulltext_search_memories_in_graph(
     search_text: str,
     user_id: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """
@@ -1414,6 +1603,8 @@ def fulltext_search_memories_in_graph(
             search_text=search_text,
             user_id=user_id,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             limit=limit,
         )
     except Exception as e:
@@ -1424,6 +1615,8 @@ def fulltext_search_memories_in_graph(
 def fulltext_search_entities_in_graph(
     search_text: str,
     user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """
@@ -1445,6 +1638,8 @@ def fulltext_search_entities_in_graph(
         return projector.fulltext_search_entities(
             search_text=search_text,
             user_id=user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             limit=limit,
         )
     except Exception as e:
@@ -1458,6 +1653,8 @@ def fulltext_search_entities_in_graph(
 
 def get_entity_centrality_from_graph(
     user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """
@@ -1477,7 +1674,12 @@ def get_entity_centrality_from_graph(
         return []
 
     try:
-        return projector.get_entity_centrality(user_id=user_id, limit=limit)
+        return projector.get_entity_centrality(
+            user_id=user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+            limit=limit,
+        )
     except Exception as e:
         logger.warning(f"Failed to get entity centrality: {e}")
         return []
@@ -1486,6 +1688,8 @@ def get_entity_centrality_from_graph(
 def get_memory_connectivity_from_graph(
     user_id: str,
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """
@@ -1509,6 +1713,8 @@ def get_memory_connectivity_from_graph(
         return projector.get_memory_connectivity(
             user_id=user_id,
             allowed_memory_ids=allowed_memory_ids,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
             limit=limit,
         )
     except Exception as e:
@@ -1516,7 +1722,11 @@ def get_memory_connectivity_from_graph(
         return []
 
 
-def get_graph_statistics(user_id: str) -> Dict[str, Any]:
+def get_graph_statistics(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Get statistics about the user's graph.
 
@@ -1531,7 +1741,11 @@ def get_graph_statistics(user_id: str) -> Dict[str, Any]:
         return {}
 
     try:
-        return projector.get_graph_statistics(user_id=user_id)
+        return projector.get_graph_statistics(
+            user_id=user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
     except Exception as e:
         logger.warning(f"Failed to get graph statistics: {e}")
         return {}
@@ -1584,6 +1798,8 @@ def get_entity_pagerank(
     user_id: str,
     limit: int = 50,
     write_to_nodes: bool = False,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run PageRank on entity co-mention network.
@@ -1594,9 +1810,11 @@ def get_entity_pagerank(
     Requires Neo4j GDS plugin.
 
     Args:
-        user_id: String user ID
+        user_id: String user ID (legacy fallback)
         limit: Maximum results to return
         write_to_nodes: Whether to write pageRank property to nodes
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of entities with pageRankScore
@@ -1610,13 +1828,19 @@ def get_entity_pagerank(
             user_id=user_id,
             limit=limit,
             write_to_nodes=write_to_nodes,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except Exception as e:
         logger.warning(f"Failed to run entity PageRank: {e}")
         return []
 
 
-def detect_entity_communities(user_id: str) -> Dict[str, Any]:
+def detect_entity_communities(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Detect communities in the entity co-mention network using Louvain.
 
@@ -1625,7 +1849,9 @@ def detect_entity_communities(user_id: str) -> Dict[str, Any]:
     Requires Neo4j GDS plugin.
 
     Args:
-        user_id: String user ID
+        user_id: String user ID (legacy fallback)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Dict with communities list and statistics
@@ -1635,13 +1861,21 @@ def detect_entity_communities(user_id: str) -> Dict[str, Any]:
         return {"communities": [], "stats": {}}
 
     try:
-        return gds.detect_entity_communities(user_id=user_id)
+        return gds.detect_entity_communities(
+            user_id=user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
     except Exception as e:
         logger.warning(f"Failed to detect entity communities: {e}")
         return {"communities": [], "stats": {}}
 
 
-def detect_memory_communities(user_id: str) -> Dict[str, Any]:
+def detect_memory_communities(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Detect communities in the memory similarity network.
 
@@ -1650,7 +1884,9 @@ def detect_memory_communities(user_id: str) -> Dict[str, Any]:
     Requires Neo4j GDS plugin.
 
     Args:
-        user_id: String user ID
+        user_id: String user ID (legacy fallback)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Dict with communities list and statistics
@@ -1660,7 +1896,11 @@ def detect_memory_communities(user_id: str) -> Dict[str, Any]:
         return {"communities": [], "stats": {}}
 
     try:
-        return gds.detect_memory_communities(user_id=user_id)
+        return gds.detect_memory_communities(
+            user_id=user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
     except Exception as e:
         logger.warning(f"Failed to detect memory communities: {e}")
         return {"communities": [], "stats": {}}
@@ -1670,6 +1910,8 @@ def find_similar_entities_gds(
     user_id: str,
     entity_name: Optional[str] = None,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find similar entities based on shared memory connections using GDS.
@@ -1679,9 +1921,11 @@ def find_similar_entities_gds(
     Requires Neo4j GDS plugin.
 
     Args:
-        user_id: String user ID
+        user_id: String user ID (legacy fallback)
         entity_name: Optional specific entity to find similar to
         limit: Maximum results to return
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of entity pairs with similarity scores
@@ -1695,6 +1939,8 @@ def find_similar_entities_gds(
             user_id=user_id,
             entity_name=entity_name,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except Exception as e:
         logger.warning(f"Failed to find similar entities: {e}")
@@ -1704,6 +1950,8 @@ def find_similar_entities_gds(
 def get_entity_betweenness(
     user_id: str,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Calculate betweenness centrality for entities.
@@ -1714,8 +1962,10 @@ def get_entity_betweenness(
     Requires Neo4j GDS plugin.
 
     Args:
-        user_id: String user ID
+        user_id: String user ID (legacy fallback)
         limit: Maximum results to return
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of entities with betweenness scores
@@ -1725,7 +1975,12 @@ def get_entity_betweenness(
         return []
 
     try:
-        return gds.entity_betweenness(user_id=user_id, limit=limit)
+        return gds.entity_betweenness(
+            user_id=user_id,
+            limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
     except Exception as e:
         logger.warning(f"Failed to calculate betweenness centrality: {e}")
         return []
@@ -1735,6 +1990,8 @@ def generate_entity_embeddings(
     user_id: str,
     write_to_nodes: bool = False,
     limit: int = 100,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Generate FastRP graph embeddings for entities.
@@ -1745,9 +2002,11 @@ def generate_entity_embeddings(
     Requires Neo4j GDS plugin.
 
     Args:
-        user_id: String user ID
+        user_id: String user ID (legacy fallback)
         write_to_nodes: Whether to write embeddings to node properties
         limit: Maximum results to return
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of entities with embeddings
@@ -1761,6 +2020,8 @@ def generate_entity_embeddings(
             user_id=user_id,
             write_to_nodes=write_to_nodes,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except Exception as e:
         logger.warning(f"Failed to generate entity embeddings: {e}")
@@ -1774,6 +2035,7 @@ def generate_entity_embeddings(
 def find_duplicate_entities_in_graph(
     user_id: str,
     min_variants: int = 2,
+    access_entity: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find duplicate entity candidates for normalization.
@@ -1787,7 +2049,7 @@ def find_duplicate_entities_in_graph(
     """
     try:
         from app.graph.entity_normalizer import identify_duplicates
-        duplicates = identify_duplicates(user_id, min_variants)
+        duplicates = identify_duplicates(user_id, min_variants, access_entity=access_entity)
         return [
             {
                 "canonical": d.canonical,
@@ -1807,6 +2069,7 @@ def normalize_entities_in_graph(
     variant_names: Optional[List[str]] = None,
     auto: bool = False,
     dry_run: bool = True,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Normalize entity duplicates.
@@ -1831,13 +2094,14 @@ def normalize_entities_in_graph(
         )
 
         if auto:
-            return auto_normalize_entities(user_id, dry_run=dry_run)
+            return auto_normalize_entities(user_id, dry_run=dry_run, access_entity=access_entity)
         elif canonical_name and variant_names:
             return merge_entity_variants(
                 user_id=user_id,
                 canonical_name=canonical_name,
                 variant_names=variant_names,
                 dry_run=dry_run,
+                access_entity=access_entity,
             )
         else:
             return {"error": "Either set auto=True or provide canonical_name + variant_names"}
@@ -1853,6 +2117,7 @@ def normalize_entities_in_graph(
 async def find_semantic_duplicates(
     user_id: str,
     threshold: float = 0.7,
+    access_entity: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find semantic entity duplicates using multi-phase detection.
@@ -1875,7 +2140,12 @@ async def find_semantic_duplicates(
             get_all_user_entities,
         )
 
-        entities = await get_all_user_entities(user_id)
+        access_entities = [access_entity] if access_entity else None
+        entities = await get_all_user_entities(
+            user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=None,
+        )
         if len(entities) < 2:
             return []
 
@@ -1906,6 +2176,7 @@ async def normalize_entities_semantic(
     auto: bool = False,
     threshold: float = 0.7,
     dry_run: bool = True,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Normalize entities using semantic detection.
@@ -1951,7 +2222,12 @@ async def normalize_entities_semantic(
             groups = [group]
         elif auto:
             # Auto-detect and merge
-            entities = await get_all_user_entities(user_id)
+            access_entities = [access_entity] if access_entity else None
+            entities = await get_all_user_entities(
+                user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=None,
+            )
             if len(entities) < 2:
                 return {"message": "Less than 2 entities, nothing to normalize"}
 
@@ -1968,6 +2244,7 @@ async def normalize_entities_semantic(
                     user_id=user_id,
                     canonical=group.canonical,
                     variants=group.variants,
+                    access_entity=access_entity,
                 )
                 results["merges"].append({
                     "canonical": group.canonical,
@@ -1982,6 +2259,7 @@ async def normalize_entities_semantic(
                     group=group,
                     allowed_memory_ids=None,
                     dry_run=False,
+                    access_entity=access_entity,
                 )
                 results["merges"].append(merge_result)
                 if merge_result.get("edge_migration"):
@@ -1991,7 +2269,10 @@ async def normalize_entities_semantic(
 
         # Refresh signals after merge
         if not dry_run and groups:
-            gds_stats = await refresh_graph_signals(user_id)
+            gds_stats = await refresh_graph_signals(
+                user_id,
+                access_entities=[access_entity] if access_entity else None,
+            )
             results["gds_refresh"] = gds_stats
 
         return results
@@ -2012,6 +2293,8 @@ def get_entity_relations_from_graph(
     category: Optional[str] = None,
     direction: str = "both",
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get typed relationships for an entity.
@@ -2056,11 +2339,27 @@ def get_entity_relations_from_graph(
         type_filter_clause = "AND r.type IN $typeFilter"
 
     query = f"""
-    MATCH (e:OM_Entity {{userId: $userId, name: $entityName}})
+    MATCH (e:OM_Entity {{name: $entityName}})
+    WHERE (
+      (e.accessEntity IS NOT NULL AND (
+        e.accessEntity IN $accessEntities
+        OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+      ))
+      OR (e.accessEntity IS NULL AND e.userId = $userId)
+    )
     MATCH {match_pattern}
     WHERE e <> other {type_filter_clause}
+      AND (
+        (r.accessEntity IS NOT NULL AND r.accessEntity = e.accessEntity)
+        OR (r.accessEntity IS NULL AND r.userId = $userId)
+      )
+      AND (
+        (other.accessEntity IS NOT NULL AND other.accessEntity = e.accessEntity)
+        OR (other.accessEntity IS NULL AND other.userId = $userId)
+      )
     RETURN
         other.name AS target,
+        coalesce(other.displayName, other.name) AS targetDisplayName,
         r.type AS relationType,
         r.memoryId AS memoryId,
         coalesce(r.count, 1) AS count,
@@ -2081,10 +2380,13 @@ def get_entity_relations_from_graph(
                 entityName=entity_name,
                 typeFilter=type_filter,
                 limit=limit,
+                accessEntities=access_entities or [f"user:{user_id}"],
+                accessEntityPrefixes=access_entity_prefixes or [],
             )
             for record in result:
                 relations.append({
                     "target": record["target"],
+                    "targetDisplayName": record.get("targetDisplayName") or record["target"],
                     "type": record["relationType"],
                     "direction": record["direction"],
                     "memory_id": record["memoryId"],
@@ -2107,6 +2409,8 @@ def get_biography_timeline_from_graph(
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get the biographical timeline for a user or specific entity.
@@ -2131,6 +2435,8 @@ def get_biography_timeline_from_graph(
             start_year=start_year,
             end_year=end_year,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
     except ImportError:
         logger.debug("Temporal events module not available")
@@ -2149,6 +2455,7 @@ def create_temporal_event_in_graph(
     description: Optional[str] = None,
     entity: Optional[str] = None,
     memory_ids: Optional[List[str]] = None,
+    access_entity: Optional[str] = None,
 ) -> bool:
     """
     Create a temporal event in the graph.
@@ -2185,7 +2492,7 @@ def create_temporal_event_in_graph(
             memory_ids=memory_ids or [],
         )
 
-        return create_temporal_event(user_id, event)
+        return create_temporal_event(user_id, event, access_entity=access_entity)
     except ImportError:
         logger.debug("Temporal events module not available")
         return False

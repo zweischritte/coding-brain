@@ -143,6 +143,7 @@ class TestCallGraphConfig:
         assert config.depth == 1
         assert config.max_nodes == 100
         assert config.include_properties is True
+        assert config.include_inferred_edges is True
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -152,11 +153,13 @@ class TestCallGraphConfig:
             depth=3,
             max_nodes=50,
             include_properties=False,
+            include_inferred_edges=False,
         )
 
         assert config.depth == 3
         assert config.max_nodes == 50
         assert config.include_properties is False
+        assert config.include_inferred_edges is False
 
 
 # =============================================================================

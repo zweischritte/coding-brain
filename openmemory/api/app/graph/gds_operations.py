@@ -26,11 +26,73 @@ Usage:
         similar = gds.find_similar_entities(user_id="grischadallmer", entity_name="BMG")
 """
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_graph_suffix(value: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in value)
+
+
+def _escape_cypher(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _cypher_list(values: List[str]) -> str:
+    return "[" + ", ".join(f"'{_escape_cypher(v)}'" for v in values) + "]"
+
+
+def _normalize_access_filters(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Tuple[List[str], List[str]]:
+    return (
+        access_entities or [f"user:{user_id}"],
+        access_entity_prefixes or [],
+    )
+
+
+def _access_filter_clause(
+    alias: str,
+    access_entities_literal: str,
+    access_entity_prefixes_literal: str,
+    escaped_user_id: str,
+) -> str:
+    return (
+        "("
+        f"({alias}.accessEntity IS NOT NULL AND ("
+        f"{alias}.accessEntity IN {access_entities_literal} "
+        f"OR any(prefix IN {access_entity_prefixes_literal} "
+        f"WHERE {alias}.accessEntity STARTS WITH prefix)"
+        ")) "
+        f"OR ({alias}.accessEntity IS NULL AND {alias}.userId = '{escaped_user_id}')"
+        ")"
+    )
+
+
+def _graph_name_for_scope(
+    base: str,
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> str:
+    normalized_entities, normalized_prefixes = _normalize_access_filters(
+        user_id,
+        access_entities,
+        access_entity_prefixes,
+    )
+    safe_user_id = _sanitize_graph_suffix(user_id)
+    if normalized_entities == [f"user:{user_id}"] and not normalized_prefixes:
+        return f"{base}_{safe_user_id}"
+
+    key = "|".join(sorted(normalized_entities) + [f"{p}*" for p in sorted(normalized_prefixes)])
+    digest = hashlib.md5(key.encode()).hexdigest()[:8]
+    return f"{base}_{safe_user_id}_{digest}"
 
 
 @dataclass
@@ -212,6 +274,7 @@ class GDSCypherBuilder:
         YIELD nodeId, score
         WITH gds.util.asNode(nodeId) AS node, score
         RETURN node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                labels(node)[0] AS label,
                score AS pageRankScore
         ORDER BY score DESC
@@ -248,6 +311,7 @@ class GDSCypherBuilder:
         WITH gds.util.asNode(nodeId) AS node, communityId, intermediateCommunityIds
         RETURN node.id AS id,
                node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                labels(node)[0] AS label,
                communityId,
                intermediateCommunityIds
@@ -274,6 +338,7 @@ class GDSCypherBuilder:
         WITH gds.util.asNode(nodeId) AS node, componentId
         RETURN node.id AS id,
                node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                labels(node)[0] AS label,
                componentId
         ORDER BY componentId, name
@@ -294,7 +359,9 @@ class GDSCypherBuilder:
         YIELD node1, node2, similarity
         WITH gds.util.asNode(node1) AS n1, gds.util.asNode(node2) AS n2, similarity
         RETURN n1.name AS entity1,
+               coalesce(n1.displayName, n1.name) AS entity1DisplayName,
                n2.name AS entity2,
+               coalesce(n2.displayName, n2.name) AS entity2DisplayName,
                labels(n1)[0] AS label1,
                labels(n2)[0] AS label2,
                similarity
@@ -314,7 +381,9 @@ class GDSCypherBuilder:
         YIELD node1, node2, similarity
         WITH gds.util.asNode(node1) AS n1, gds.util.asNode(node2) AS n2, similarity
         RETURN n1.name AS name1,
+               coalesce(n1.displayName, n1.name) AS name1DisplayName,
                n2.name AS name2,
+               coalesce(n2.displayName, n2.name) AS name2DisplayName,
                similarity
         ORDER BY similarity DESC
         LIMIT $limit
@@ -332,6 +401,7 @@ class GDSCypherBuilder:
         YIELD nodeId, score
         WITH gds.util.asNode(nodeId) AS node, score
         RETURN node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                labels(node)[0] AS label,
                score AS betweenness
         ORDER BY score DESC
@@ -346,6 +416,7 @@ class GDSCypherBuilder:
         YIELD nodeId, score
         WITH gds.util.asNode(nodeId) AS node, score
         RETURN node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                labels(node)[0] AS label,
                score AS degree
         ORDER BY score DESC
@@ -368,6 +439,7 @@ class GDSCypherBuilder:
         WITH gds.util.asNode(nodeId) AS node, embedding
         RETURN node.id AS id,
                node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                labels(node)[0] AS label,
                embedding
         LIMIT $limit
@@ -438,6 +510,9 @@ class GDSOperations:
         self,
         graph_name: str,
         projection_type: str = "entity",
+        user_id: str = "",
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> bool:
         """
         Ensure an in-memory graph is projected.
@@ -445,6 +520,9 @@ class GDSOperations:
         Args:
             graph_name: Name for the projected graph
             projection_type: One of "entity", "memory", or "full"
+            user_id: User ID for legacy fallback filters
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             True if graph is ready
@@ -460,15 +538,26 @@ class GDSOperations:
                     if record["exists"]:
                         return True
 
-                # Project the graph
-                if projection_type == "entity":
-                    query = GDSCypherBuilder.project_entity_graph_query()
-                elif projection_type == "memory":
-                    query = GDSCypherBuilder.project_memory_graph_query()
-                else:
-                    query = GDSCypherBuilder.project_full_graph_query()
+                node_query, rel_query = self._build_projection_queries(
+                    projection_type=projection_type,
+                    user_id=user_id,
+                    access_entities=access_entities,
+                    access_entity_prefixes=access_entity_prefixes,
+                )
 
-                result = session.run(query, {"graphName": graph_name})
+                create_query = """
+                CALL gds.graph.project.cypher(
+                    $graphName,
+                    $nodeQuery,
+                    $relQuery
+                )
+                YIELD graphName, nodeCount, relationshipCount
+                RETURN graphName, nodeCount, relationshipCount
+                """
+                result = session.run(
+                    create_query,
+                    {"graphName": graph_name, "nodeQuery": node_query, "relQuery": rel_query},
+                )
                 for record in result:
                     logger.info(
                         f"Projected graph '{graph_name}': "
@@ -482,6 +571,84 @@ class GDSOperations:
         except Exception as e:
             logger.error(f"Failed to project graph '{graph_name}': {e}")
             return False
+
+    def _build_projection_queries(
+        self,
+        projection_type: str,
+        user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
+    ) -> Tuple[str, str]:
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
+        access_entities_literal = _cypher_list(access_entities)
+        access_entity_prefixes_literal = _cypher_list(access_entity_prefixes)
+        escaped_user_id = _escape_cypher(user_id)
+
+        def access_filter(alias: str) -> str:
+            return _access_filter_clause(
+                alias,
+                access_entities_literal,
+                access_entity_prefixes_literal,
+                escaped_user_id,
+            )
+
+        if projection_type == "entity":
+            node_query = f"""
+            MATCH (e:OM_Entity)
+            WHERE {access_filter("e")}
+            RETURN id(e) AS id, ['OM_Entity'] AS labels
+            """
+            rel_query = f"""
+            MATCH (e1:OM_Entity)-[r:OM_CO_MENTIONED]-(e2:OM_Entity)
+            WHERE {access_filter("r")}
+              AND {access_filter("e1")}
+              AND {access_filter("e2")}
+            RETURN id(e1) AS source, id(e2) AS target, coalesce(r.count, 1.0) AS weight
+            """
+        elif projection_type == "memory":
+            node_query = f"""
+            MATCH (m:OM_Memory)
+            WHERE {access_filter("m")}
+            RETURN id(m) AS id, ['OM_Memory'] AS labels
+            """
+            rel_query = f"""
+            MATCH (m1:OM_Memory)-[r:OM_SIMILAR]-(m2:OM_Memory)
+            WHERE {access_filter("r")}
+              AND {access_filter("m1")}
+              AND {access_filter("m2")}
+            RETURN id(m1) AS source, id(m2) AS target, coalesce(r.score, 0.5) AS weight
+            """
+        else:
+            node_query = f"""
+            MATCH (n)
+            WHERE (n:OM_Entity OR n:OM_Memory)
+              AND {access_filter("n")}
+            RETURN id(n) AS id, labels(n) AS labels
+            """
+            rel_query = f"""
+            MATCH (m:OM_Memory)-[:OM_ABOUT]->(e:OM_Entity)
+            WHERE {access_filter("m")}
+              AND {access_filter("e")}
+            RETURN id(m) AS source, id(e) AS target, 1.0 AS weight
+            UNION
+            MATCH (m1:OM_Memory)-[r:OM_SIMILAR]-(m2:OM_Memory)
+            WHERE {access_filter("r")}
+              AND {access_filter("m1")}
+              AND {access_filter("m2")}
+            RETURN id(m1) AS source, id(m2) AS target, coalesce(r.score, 0.5) AS weight
+            UNION
+            MATCH (e1:OM_Entity)-[r:OM_CO_MENTIONED]-(e2:OM_Entity)
+            WHERE {access_filter("r")}
+              AND {access_filter("e1")}
+              AND {access_filter("e2")}
+            RETURN id(e1) AS source, id(e2) AS target, coalesce(r.count, 1.0) AS weight
+            """
+
+        return node_query, rel_query
 
     def _drop_graph(self, graph_name: str) -> bool:
         """Drop an in-memory graph."""
@@ -505,6 +672,8 @@ class GDSOperations:
         user_id: str,
         limit: int = 50,
         write_to_nodes: bool = False,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Run PageRank on entity co-mention network.
@@ -513,9 +682,11 @@ class GDSOperations:
         connected through shared memories.
 
         Args:
-            user_id: String user ID
+            user_id: String user ID (legacy fallback)
             limit: Maximum results to return
             write_to_nodes: Whether to write pageRank property to nodes
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of entities with pageRankScore
@@ -524,10 +695,21 @@ class GDSOperations:
             logger.warning("GDS not available for PageRank")
             return []
 
-        graph_name = f"om_entity_graph_{user_id}"
+        graph_name = _graph_name_for_scope(
+            "om_entity_graph",
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
         try:
-            if not self._ensure_graph_projected(graph_name, "entity"):
+            if not self._ensure_graph_projected(
+                graph_name,
+                "entity",
+                user_id=user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            ):
                 return []
 
             with self.session_factory() as session:
@@ -557,6 +739,7 @@ class GDSOperations:
                 for record in result:
                     rankings.append({
                         "name": record["name"],
+                        "displayName": record.get("displayName") or record["name"],
                         "label": record["label"],
                         "pageRankScore": record["pageRankScore"],
                     })
@@ -577,6 +760,8 @@ class GDSOperations:
     def detect_entity_communities(
         self,
         user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Detect communities in the entity co-mention network using Louvain.
@@ -584,7 +769,9 @@ class GDSOperations:
         Groups entities that frequently appear together in memories.
 
         Args:
-            user_id: String user ID
+            user_id: String user ID (legacy fallback)
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             Dict with communities list and statistics
@@ -593,10 +780,21 @@ class GDSOperations:
             logger.warning("GDS not available for community detection")
             return {"communities": [], "stats": {}}
 
-        graph_name = f"om_entity_graph_{user_id}"
+        graph_name = _graph_name_for_scope(
+            "om_entity_graph",
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
         try:
-            if not self._ensure_graph_projected(graph_name, "entity"):
+            if not self._ensure_graph_projected(
+                graph_name,
+                "entity",
+                user_id=user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            ):
                 return {"communities": [], "stats": {}}
 
             with self.session_factory() as session:
@@ -637,6 +835,7 @@ class GDSOperations:
                     communities_map[community_id].append({
                         "id": record["id"],
                         "name": record["name"],
+                        "displayName": record.get("displayName") or record["name"],
                         "label": record["label"],
                     })
 
@@ -667,6 +866,8 @@ class GDSOperations:
     def detect_memory_communities(
         self,
         user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Detect communities in the memory similarity network.
@@ -674,7 +875,9 @@ class GDSOperations:
         Groups memories that are semantically similar to each other.
 
         Args:
-            user_id: String user ID
+            user_id: String user ID (legacy fallback)
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             Dict with communities list and statistics
@@ -682,10 +885,21 @@ class GDSOperations:
         if not self.is_gds_available():
             return {"communities": [], "stats": {}}
 
-        graph_name = f"om_memory_graph_{user_id}"
+        graph_name = _graph_name_for_scope(
+            "om_memory_graph",
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
         try:
-            if not self._ensure_graph_projected(graph_name, "memory"):
+            if not self._ensure_graph_projected(
+                graph_name,
+                "memory",
+                user_id=user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            ):
                 return {"communities": [], "stats": {}}
 
             with self.session_factory() as session:
@@ -704,6 +918,7 @@ class GDSOperations:
                     communities_map[component_id].append({
                         "id": record["id"],
                         "name": record["name"],
+                        "displayName": record.get("displayName") or record["name"],
                         "label": record["label"],
                     })
 
@@ -739,6 +954,8 @@ class GDSOperations:
         user_id: str,
         entity_name: Optional[str] = None,
         limit: int = 50,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Find similar entities based on shared memory connections.
@@ -746,9 +963,11 @@ class GDSOperations:
         Uses Jaccard similarity on shared neighbors (memories).
 
         Args:
-            user_id: String user ID
+            user_id: String user ID (legacy fallback)
             entity_name: Optional specific entity to find similar to
             limit: Maximum results to return
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of entity pairs with similarity scores
@@ -756,10 +975,21 @@ class GDSOperations:
         if not self.is_gds_available():
             return []
 
-        graph_name = f"om_full_graph_{user_id}"
+        graph_name = _graph_name_for_scope(
+            "om_full_graph",
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
         try:
-            if not self._ensure_graph_projected(graph_name, "full"):
+            if not self._ensure_graph_projected(
+                graph_name,
+                "full",
+                user_id=user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            ):
                 return []
 
             with self.session_factory() as session:
@@ -784,7 +1014,9 @@ class GDSOperations:
 
                         similarities.append({
                             "entity1": record["entity1"],
+                            "entity1DisplayName": record.get("entity1DisplayName") or record["entity1"],
                             "entity2": record["entity2"],
+                            "entity2DisplayName": record.get("entity2DisplayName") or record["entity2"],
                             "similarity": record["similarity"],
                         })
 
@@ -805,6 +1037,8 @@ class GDSOperations:
         self,
         user_id: str,
         limit: int = 50,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Calculate betweenness centrality for entities.
@@ -813,8 +1047,10 @@ class GDSOperations:
         different clusters of memories.
 
         Args:
-            user_id: String user ID
+            user_id: String user ID (legacy fallback)
             limit: Maximum results to return
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of entities with betweenness scores
@@ -822,10 +1058,21 @@ class GDSOperations:
         if not self.is_gds_available():
             return []
 
-        graph_name = f"om_entity_graph_{user_id}"
+        graph_name = _graph_name_for_scope(
+            "om_entity_graph",
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
         try:
-            if not self._ensure_graph_projected(graph_name, "entity"):
+            if not self._ensure_graph_projected(
+                graph_name,
+                "entity",
+                user_id=user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            ):
                 return []
 
             with self.session_factory() as session:
@@ -841,6 +1088,7 @@ class GDSOperations:
                 for record in result:
                     centralities.append({
                         "name": record["name"],
+                        "displayName": record.get("displayName") or record["name"],
                         "label": record["label"],
                         "betweenness": record["betweenness"],
                     })
@@ -863,6 +1111,8 @@ class GDSOperations:
         user_id: str,
         write_to_nodes: bool = False,
         limit: int = 100,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Generate FastRP graph embeddings for entities.
@@ -871,9 +1121,11 @@ class GDSOperations:
         in the co-mention graph and can be used for ML tasks.
 
         Args:
-            user_id: String user ID
+            user_id: String user ID (legacy fallback)
             write_to_nodes: Whether to write embeddings to node properties
             limit: Maximum results to return
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of entities with embeddings
@@ -881,10 +1133,21 @@ class GDSOperations:
         if not self.is_gds_available():
             return []
 
-        graph_name = f"om_entity_graph_{user_id}"
+        graph_name = _graph_name_for_scope(
+            "om_entity_graph",
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
         try:
-            if not self._ensure_graph_projected(graph_name, "entity"):
+            if not self._ensure_graph_projected(
+                graph_name,
+                "entity",
+                user_id=user_id,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            ):
                 return []
 
             with self.session_factory() as session:
@@ -913,6 +1176,7 @@ class GDSOperations:
                     embeddings.append({
                         "id": record["id"],
                         "name": record["name"],
+                        "displayName": record.get("displayName") or record["name"],
                         "label": record["label"],
                         "embedding": list(record["embedding"]),
                     })

@@ -23,6 +23,33 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def _resolve_access_entity(user_id: str, access_entity: Optional[str]) -> str:
+    return access_entity or f"user:{user_id}"
+
+
+def _normalize_access_filters(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Tuple[List[str], List[str]]:
+    return (
+        access_entities or [f"user:{user_id}"],
+        access_entity_prefixes or [],
+    )
+
+
+def _access_filter_clause(alias: str) -> str:
+    return (
+        "("
+        f"({alias}.accessEntity IS NOT NULL AND ("
+        f"{alias}.accessEntity IN $accessEntities "
+        f"OR any(prefix IN $accessEntityPrefixes WHERE {alias}.accessEntity STARTS WITH prefix)"
+        ")) "
+        f"OR ({alias}.accessEntity IS NULL AND {alias}.userId = $userId)"
+        ")"
+    )
+
+
 # Valid concept types (from BusinessConcept schema)
 CONCEPT_TYPES = frozenset([
     "causal",
@@ -82,21 +109,24 @@ class ConceptCypherBuilder:
         return [
             # OM_Concept constraints
             "CREATE CONSTRAINT om_concept_id IF NOT EXISTS FOR (c:OM_Concept) REQUIRE c.id IS UNIQUE",
-            "CREATE CONSTRAINT om_concept_user_name IF NOT EXISTS FOR (c:OM_Concept) REQUIRE (c.userId, c.name) IS UNIQUE",
+            "CREATE CONSTRAINT om_concept_access_name IF NOT EXISTS FOR (c:OM_Concept) REQUIRE (c.accessEntity, c.name) IS UNIQUE",
             # OM_BizEntity constraints
             "CREATE CONSTRAINT om_bizentity_id IF NOT EXISTS FOR (e:OM_BizEntity) REQUIRE e.id IS UNIQUE",
-            "CREATE CONSTRAINT om_bizentity_user_name IF NOT EXISTS FOR (e:OM_BizEntity) REQUIRE (e.userId, e.name) IS UNIQUE",
+            "CREATE CONSTRAINT om_bizentity_access_name IF NOT EXISTS FOR (e:OM_BizEntity) REQUIRE (e.accessEntity, e.name) IS UNIQUE",
             # Indexes for efficient querying
+            "CREATE INDEX om_concept_access_entity IF NOT EXISTS FOR (c:OM_Concept) ON (c.accessEntity)",
             "CREATE INDEX om_concept_user_id IF NOT EXISTS FOR (c:OM_Concept) ON (c.userId)",
             "CREATE INDEX om_concept_category IF NOT EXISTS FOR (c:OM_Concept) ON (c.category)",
             "CREATE INDEX om_concept_type IF NOT EXISTS FOR (c:OM_Concept) ON (c.type)",
             "CREATE INDEX om_concept_confidence IF NOT EXISTS FOR (c:OM_Concept) ON (c.confidence)",
             "CREATE INDEX om_concept_created IF NOT EXISTS FOR (c:OM_Concept) ON (c.createdAt)",
+            "CREATE INDEX om_bizentity_access_entity IF NOT EXISTS FOR (e:OM_BizEntity) ON (e.accessEntity)",
             "CREATE INDEX om_bizentity_user_id IF NOT EXISTS FOR (e:OM_BizEntity) ON (e.userId)",
             "CREATE INDEX om_bizentity_type IF NOT EXISTS FOR (e:OM_BizEntity) ON (e.type)",
             "CREATE INDEX om_bizentity_importance IF NOT EXISTS FOR (e:OM_BizEntity) ON (e.importance)",
             # Relationship indexes
             "CREATE INDEX om_supports_confidence IF NOT EXISTS FOR ()-[r:SUPPORTS]-() ON (r.confidence)",
+            "CREATE INDEX om_contradicts_access_entity IF NOT EXISTS FOR ()-[r:CONTRADICTS]-() ON (r.accessEntity)",
             "CREATE INDEX om_contradicts_user_id IF NOT EXISTS FOR ()-[r:CONTRADICTS]-() ON (r.userId)",
         ]
 
@@ -120,9 +150,11 @@ class ConceptCypherBuilder:
         Creates or updates an OM_Concept node.
         """
         return """
-        MERGE (c:OM_Concept {userId: $userId, name: $name})
+        MERGE (c:OM_Concept {accessEntity: $accessEntity, name: $name})
         ON CREATE SET
             c.id = $id,
+            c.userId = $userId,
+            c.accessEntity = $accessEntity,
             c.type = $type,
             c.confidence = $confidence,
             c.category = $category,
@@ -133,6 +165,8 @@ class ConceptCypherBuilder:
             c.updatedAt = datetime(),
             c.projectedAt = datetime()
         ON MATCH SET
+            c.userId = coalesce(c.userId, $userId),
+            c.accessEntity = coalesce(c.accessEntity, $accessEntity),
             c.type = COALESCE($type, c.type),
             c.confidence = CASE WHEN $confidence > c.confidence THEN $confidence ELSE c.confidence END,
             c.category = COALESCE($category, c.category),
@@ -152,9 +186,11 @@ class ConceptCypherBuilder:
         Creates or updates an OM_BizEntity node.
         """
         return """
-        MERGE (e:OM_BizEntity {userId: $userId, name: $name})
+        MERGE (e:OM_BizEntity {accessEntity: $accessEntity, name: $name})
         ON CREATE SET
             e.id = $id,
+            e.userId = $userId,
+            e.accessEntity = $accessEntity,
             e.type = $type,
             e.importance = $importance,
             e.context = $context,
@@ -163,6 +199,8 @@ class ConceptCypherBuilder:
             e.updatedAt = datetime(),
             e.projectedAt = datetime()
         ON MATCH SET
+            e.userId = coalesce(e.userId, $userId),
+            e.accessEntity = coalesce(e.accessEntity, $accessEntity),
             e.type = COALESCE($type, e.type),
             e.importance = CASE WHEN $importance > e.importance THEN $importance ELSE e.importance END,
             e.context = COALESCE($context, e.context),
@@ -179,14 +217,18 @@ class ConceptCypherBuilder:
         """
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MATCH (c:OM_Concept {userId: $userId, name: $conceptName})
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+        MATCH (c:OM_Concept {accessEntity: $accessEntity, name: $conceptName})
         MERGE (m)-[r:SUPPORTS]->(c)
         ON CREATE SET
             r.confidence = $confidence,
-            r.createdAt = datetime()
+            r.createdAt = datetime(),
+            r.userId = $userId,
+            r.accessEntity = $accessEntity
         ON MATCH SET
             r.confidence = CASE WHEN $confidence > r.confidence THEN $confidence ELSE r.confidence END,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.accessEntity = coalesce(r.accessEntity, $accessEntity)
         RETURN type(r) AS relType
         """
 
@@ -197,14 +239,18 @@ class ConceptCypherBuilder:
         """
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MATCH (e:OM_BizEntity {userId: $userId, name: $entityName})
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+        MATCH (e:OM_BizEntity {accessEntity: $accessEntity, name: $entityName})
         MERGE (m)-[r:MENTIONS]->(e)
         ON CREATE SET
             r.importance = $importance,
-            r.createdAt = datetime()
+            r.createdAt = datetime(),
+            r.userId = $userId,
+            r.accessEntity = $accessEntity
         ON MATCH SET
             r.importance = CASE WHEN $importance > r.importance THEN $importance ELSE r.importance END,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.accessEntity = coalesce(r.accessEntity, $accessEntity)
         RETURN type(r) AS relType
         """
 
@@ -214,16 +260,19 @@ class ConceptCypherBuilder:
         Generate query to link concepts via RELATES_TO relationship.
         """
         return """
-        MATCH (c1:OM_Concept {userId: $userId, name: $conceptName1})
-        MATCH (c2:OM_Concept {userId: $userId, name: $conceptName2})
+        MATCH (c1:OM_Concept {accessEntity: $accessEntity, name: $conceptName1})
+        MATCH (c2:OM_Concept {accessEntity: $accessEntity, name: $conceptName2})
         WHERE c1 <> c2
         MERGE (c1)-[r:RELATES_TO]->(c2)
         ON CREATE SET
             r.strength = $strength,
-            r.createdAt = datetime()
+            r.createdAt = datetime(),
+            r.userId = $userId,
+            r.accessEntity = $accessEntity
         ON MATCH SET
             r.strength = CASE WHEN $strength > r.strength THEN $strength ELSE r.strength END,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.accessEntity = coalesce(r.accessEntity, $accessEntity)
         RETURN type(r) AS relType
         """
 
@@ -233,20 +282,23 @@ class ConceptCypherBuilder:
         Generate query to create CONTRADICTS relationship between concepts.
         """
         return """
-        MATCH (c1:OM_Concept {userId: $userId, name: $conceptName1})
-        MATCH (c2:OM_Concept {userId: $userId, name: $conceptName2})
+        MATCH (c1:OM_Concept {accessEntity: $accessEntity, name: $conceptName1})
+        MATCH (c2:OM_Concept {accessEntity: $accessEntity, name: $conceptName2})
         WHERE c1 <> c2
-        MERGE (c1)-[r:CONTRADICTS {userId: $userId}]->(c2)
+        MERGE (c1)-[r:CONTRADICTS]->(c2)
         ON CREATE SET
             r.detectedAt = datetime(),
             r.severity = $severity,
             r.evidence = $evidence,
             r.resolved = false,
-            r.createdAt = datetime()
+            r.createdAt = datetime(),
+            r.userId = $userId,
+            r.accessEntity = $accessEntity
         ON MATCH SET
             r.severity = CASE WHEN $severity > r.severity THEN $severity ELSE r.severity END,
             r.evidence = CASE WHEN size($evidence) > size(r.evidence) THEN $evidence ELSE r.evidence END,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.accessEntity = coalesce(r.accessEntity, $accessEntity)
         RETURN type(r) AS relType
         """
 
@@ -256,11 +308,15 @@ class ConceptCypherBuilder:
         Generate query to link a concept to a business entity.
         """
         return """
-        MATCH (c:OM_Concept {userId: $userId, name: $conceptName})
-        MATCH (e:OM_BizEntity {userId: $userId, name: $entityName})
+        MATCH (c:OM_Concept {accessEntity: $accessEntity, name: $conceptName})
+        MATCH (e:OM_BizEntity {accessEntity: $accessEntity, name: $entityName})
         MERGE (c)-[r:INVOLVES]->(e)
         ON CREATE SET
-            r.createdAt = datetime()
+            r.createdAt = datetime(),
+            r.userId = $userId,
+            r.accessEntity = $accessEntity
+        ON MATCH SET
+            r.accessEntity = coalesce(r.accessEntity, $accessEntity)
         RETURN type(r) AS relType
         """
 
@@ -269,10 +325,12 @@ class ConceptCypherBuilder:
         """
         Generate query to get a concept by name.
         """
-        return """
-        MATCH (c:OM_Concept {userId: $userId, name: $name})
+        return f"""
+        MATCH (c:OM_Concept {{name: $name}})
+        WHERE {_access_filter_clause("c")}
         OPTIONAL MATCH (m:OM_Memory)-[s:SUPPORTS]->(c)
-        WITH c, collect({id: m.id, content: m.content, confidence: s.confidence}) AS evidence
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = coalesce(c.accessEntity, $legacyAccessEntity)
+        WITH c, collect({{id: m.id, content: m.content, confidence: s.confidence}}) AS evidence
         RETURN
             c.id AS id,
             c.name AS name,
@@ -282,6 +340,7 @@ class ConceptCypherBuilder:
             c.summary AS summary,
             c.sourceType AS sourceType,
             c.evidenceCount AS evidenceCount,
+            coalesce(c.accessEntity, $legacyAccessEntity) AS accessEntity,
             c.createdAt AS createdAt,
             c.updatedAt AS updatedAt,
             evidence
@@ -292,12 +351,14 @@ class ConceptCypherBuilder:
         """
         Generate query to list concepts for a user.
         """
-        return """
-        MATCH (c:OM_Concept {userId: $userId})
-        WHERE ($category IS NULL OR c.category = $category)
+        return f"""
+        MATCH (c:OM_Concept)
+        WHERE {_access_filter_clause("c")}
+          AND ($category IS NULL OR c.category = $category)
           AND ($type IS NULL OR c.type = $type)
           AND ($minConfidence IS NULL OR c.confidence >= $minConfidence)
         OPTIONAL MATCH (m:OM_Memory)-[:SUPPORTS]->(c)
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = coalesce(c.accessEntity, $legacyAccessEntity)
         WITH c, count(m) AS supportingMemories
         RETURN
             c.id AS id,
@@ -309,6 +370,7 @@ class ConceptCypherBuilder:
             c.sourceType AS sourceType,
             c.evidenceCount AS evidenceCount,
             supportingMemories,
+            coalesce(c.accessEntity, $legacyAccessEntity) AS accessEntity,
             c.createdAt AS createdAt,
             c.updatedAt AS updatedAt
         ORDER BY c.confidence DESC, c.updatedAt DESC
@@ -321,16 +383,26 @@ class ConceptCypherBuilder:
         """
         Generate query to find contradictions for a concept.
         """
-        return """
-        MATCH (c:OM_Concept {userId: $userId, name: $conceptName})
+        return f"""
+        MATCH (c:OM_Concept {{name: $conceptName}})
+        WHERE {_access_filter_clause("c")}
         OPTIONAL MATCH (c)-[r:CONTRADICTS]-(other:OM_Concept)
         WHERE r.resolved = false
+          AND (
+            (r.accessEntity IS NOT NULL AND (
+              r.accessEntity IN $accessEntities
+              OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+            ))
+            OR (r.accessEntity IS NULL AND r.userId = $userId)
+          )
+          AND coalesce(other.accessEntity, $legacyAccessEntity) = coalesce(c.accessEntity, $legacyAccessEntity)
         RETURN
             other.name AS contradictingConcept,
             other.confidence AS otherConfidence,
             r.severity AS severity,
             r.evidence AS evidence,
-            r.detectedAt AS detectedAt
+            r.detectedAt AS detectedAt,
+            coalesce(c.accessEntity, $legacyAccessEntity) AS accessEntity
         ORDER BY r.severity DESC
         """
 
@@ -340,8 +412,8 @@ class ConceptCypherBuilder:
         Generate query to mark a contradiction as resolved.
         """
         return """
-        MATCH (c1:OM_Concept {userId: $userId, name: $conceptName1})
-        MATCH (c2:OM_Concept {userId: $userId, name: $conceptName2})
+        MATCH (c1:OM_Concept {accessEntity: $accessEntity, name: $conceptName1})
+        MATCH (c2:OM_Concept {accessEntity: $accessEntity, name: $conceptName2})
         MATCH (c1)-[r:CONTRADICTS]-(c2)
         SET r.resolved = true,
             r.resolvedAt = datetime(),
@@ -355,7 +427,7 @@ class ConceptCypherBuilder:
         Generate query to delete a concept and its relationships.
         """
         return """
-        MATCH (c:OM_Concept {userId: $userId, name: $name})
+        MATCH (c:OM_Concept {accessEntity: $accessEntity, name: $name})
         DETACH DELETE c
         RETURN count(c) AS deleted
         """
@@ -366,8 +438,9 @@ class ConceptCypherBuilder:
         Generate query to update concept confidence based on supporting memories.
         """
         return """
-        MATCH (c:OM_Concept {userId: $userId, name: $name})
+        MATCH (c:OM_Concept {accessEntity: $accessEntity, name: $name})
         OPTIONAL MATCH (m:OM_Memory)-[s:SUPPORTS]->(c)
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
         WITH c, count(m) AS memoryCount, avg(s.confidence) AS avgConfidence
         SET c.confidence = CASE
             WHEN memoryCount >= 5 THEN LEAST(1.0, avgConfidence + 0.1)
@@ -445,6 +518,7 @@ class ConceptProjector:
         source_type: Optional[str] = None,
         evidence_count: int = 0,
         concept_id: Optional[str] = None,
+        access_entity: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Create or update a concept node.
@@ -452,8 +526,8 @@ class ConceptProjector:
         Also generates and stores vector embedding if embedding is enabled.
 
         Args:
-            user_id: User ID for scoping
-            name: Concept name (unique per user)
+            user_id: User ID for legacy fallback
+            name: Concept name (unique per access_entity)
             concept_type: Type from CONCEPT_TYPES
             confidence: Confidence score 0.0-1.0
             category: Optional category for concept scoping
@@ -461,6 +535,7 @@ class ConceptProjector:
             source_type: Optional source type from SOURCE_TYPES
             evidence_count: Number of supporting evidence items
             concept_id: Optional UUID (generated if not provided)
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             Dict with id, name, and potential_duplicates (if embeddings enabled)
@@ -476,12 +551,14 @@ class ConceptProjector:
         import uuid
         concept_id = concept_id or str(uuid.uuid4())
 
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.upsert_concept_query(),
                     {
                         "userId": user_id,
+                        "accessEntity": access_entity,
                         "id": concept_id,
                         "name": name,
                         "type": concept_type,
@@ -514,6 +591,7 @@ class ConceptProjector:
                             success, duplicates = similarity_service.embed_and_store(
                                 concept_id=result_dict["id"],
                                 user_id=user_id,
+                                access_entity=access_entity,
                                 name=name,
                                 concept_type=concept_type,
                                 summary=summary,
@@ -546,18 +624,20 @@ class ConceptProjector:
         context: Optional[str] = None,
         mention_count: int = 1,
         entity_id: Optional[str] = None,
+        access_entity: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Create or update a business entity node.
 
         Args:
-            user_id: User ID for scoping
-            name: Entity name (unique per user)
+            user_id: User ID for legacy fallback
+            name: Entity name (unique per access_entity)
             entity_type: Type from ENTITY_TYPES
             importance: Importance score 0.0-1.0
             context: Optional context text
             mention_count: Number of mentions
             entity_id: Optional UUID (generated if not provided)
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             Dict with id and name, or None on error
@@ -569,12 +649,14 @@ class ConceptProjector:
         import uuid
         entity_id = entity_id or str(uuid.uuid4())
 
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.upsert_bizentity_query(),
                     {
                         "userId": user_id,
+                        "accessEntity": access_entity,
                         "id": entity_id,
                         "name": name,
                         "type": entity_type,
@@ -597,19 +679,22 @@ class ConceptProjector:
         user_id: str,
         concept_name: str,
         confidence: float = 0.5,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Link a memory to a concept via SUPPORTS relationship.
 
         Args:
             memory_id: UUID of the memory
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             concept_name: Name of the concept
             confidence: Confidence score for the support relationship
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
@@ -617,6 +702,8 @@ class ConceptProjector:
                     {
                         "memoryId": memory_id,
                         "userId": user_id,
+                        "accessEntity": access_entity,
+                        "legacyAccessEntity": f"user:{user_id}",
                         "conceptName": concept_name,
                         "confidence": min(1.0, max(0.0, confidence)),
                     }
@@ -635,19 +722,22 @@ class ConceptProjector:
         user_id: str,
         entity_name: str,
         importance: float = 0.5,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Link a memory to a business entity via MENTIONS relationship.
 
         Args:
             memory_id: UUID of the memory
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             entity_name: Name of the business entity
             importance: Importance score for the mention
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
@@ -655,6 +745,8 @@ class ConceptProjector:
                     {
                         "memoryId": memory_id,
                         "userId": user_id,
+                        "accessEntity": access_entity,
+                        "legacyAccessEntity": f"user:{user_id}",
                         "entityName": entity_name,
                         "importance": min(1.0, max(0.0, importance)),
                     }
@@ -673,25 +765,29 @@ class ConceptProjector:
         concept_name1: str,
         concept_name2: str,
         strength: float = 0.5,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Link two concepts via RELATES_TO relationship.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             concept_name1: Name of the first concept
             concept_name2: Name of the second concept
             strength: Relationship strength 0.0-1.0
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.link_concept_to_concept_query(),
                     {
                         "userId": user_id,
+                        "accessEntity": access_entity,
                         "conceptName1": concept_name1,
                         "conceptName2": concept_name2,
                         "strength": min(1.0, max(0.0, strength)),
@@ -712,26 +808,30 @@ class ConceptProjector:
         concept_name2: str,
         severity: float = 0.5,
         evidence: Optional[List[str]] = None,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Create a CONTRADICTS relationship between two concepts.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             concept_name1: Name of the first concept
             concept_name2: Name of the second concept
             severity: Severity of the contradiction 0.0-1.0
             evidence: List of evidence strings
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.create_contradiction_query(),
                     {
                         "userId": user_id,
+                        "accessEntity": access_entity,
                         "conceptName1": concept_name1,
                         "conceptName2": concept_name2,
                         "severity": min(1.0, max(0.0, severity)),
@@ -751,24 +851,28 @@ class ConceptProjector:
         user_id: str,
         concept_name: str,
         entity_name: str,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Link a concept to a business entity via INVOLVES relationship.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             concept_name: Name of the concept
             entity_name: Name of the business entity
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.link_concept_to_entity_query(),
                     {
                         "userId": user_id,
+                        "accessEntity": access_entity,
                         "conceptName": concept_name,
                         "entityName": entity_name,
                     }
@@ -785,25 +889,41 @@ class ConceptProjector:
         self,
         user_id: str,
         name: str,
-    ) -> Optional[Dict[str, Any]]:
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]] | List[Dict[str, Any]]:
         """
         Get a concept by name with its evidence.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             name: Concept name
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             Dict with concept data and evidence, or None if not found
         """
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.get_concept_query(),
-                    {"userId": user_id, "name": name}
+                    {
+                        "userId": user_id,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
+                        "legacyAccessEntity": f"user:{user_id}",
+                        "name": name,
+                    },
                 )
+                concepts = []
                 for record in result:
-                    return {
+                    concepts.append({
                         "id": record["id"],
                         "name": record["name"],
                         "type": record["type"],
@@ -812,11 +932,14 @@ class ConceptProjector:
                         "summary": record["summary"],
                         "sourceType": record["sourceType"],
                         "evidenceCount": record["evidenceCount"],
+                        "accessEntity": record["accessEntity"],
                         "createdAt": record["createdAt"],
                         "updatedAt": record["updatedAt"],
                         "evidence": record["evidence"],
-                    }
-                return None
+                    })
+                if not concepts:
+                    return None
+                return concepts[0] if len(concepts) == 1 else concepts
         except Exception as e:
             logger.error(f"Failed to get concept {name}: {e}")
             return None
@@ -829,27 +952,39 @@ class ConceptProjector:
         min_confidence: Optional[float] = None,
         limit: int = 50,
         offset: int = 0,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         List concepts for a user with optional filters.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             category: Optional category filter
             concept_type: Optional type filter
             min_confidence: Optional minimum confidence filter
             limit: Maximum results (default 50)
             offset: Pagination offset
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of concept dicts
         """
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.list_concepts_query(),
                     {
                         "userId": user_id,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
+                        "legacyAccessEntity": f"user:{user_id}",
                         "category": category,
                         "type": concept_type,
                         "minConfidence": min_confidence,
@@ -869,6 +1004,7 @@ class ConceptProjector:
                         "sourceType": record["sourceType"],
                         "evidenceCount": record["evidenceCount"],
                         "supportingMemories": record["supportingMemories"],
+                        "accessEntity": record["accessEntity"],
                         "createdAt": record["createdAt"],
                         "updatedAt": record["updatedAt"],
                     })
@@ -881,22 +1017,37 @@ class ConceptProjector:
         self,
         user_id: str,
         concept_name: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Find unresolved contradictions for a concept.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             concept_name: Name of the concept
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of contradiction dicts
         """
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.find_contradictions_query(),
-                    {"userId": user_id, "conceptName": concept_name}
+                    {
+                        "userId": user_id,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
+                        "legacyAccessEntity": f"user:{user_id}",
+                        "conceptName": concept_name,
+                    },
                 )
                 contradictions = []
                 for record in result:
@@ -907,6 +1058,7 @@ class ConceptProjector:
                             "severity": record["severity"],
                             "evidence": record["evidence"],
                             "detectedAt": record["detectedAt"],
+                            "accessEntity": record["accessEntity"],
                         })
                 return contradictions
         except Exception as e:
@@ -919,25 +1071,29 @@ class ConceptProjector:
         concept_name1: str,
         concept_name2: str,
         resolution: str,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Mark a contradiction as resolved.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             concept_name1: Name of the first concept
             concept_name2: Name of the second concept
             resolution: Resolution explanation
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.resolve_contradiction_query(),
                     {
                         "userId": user_id,
+                        "accessEntity": access_entity,
                         "conceptName1": concept_name1,
                         "conceptName2": concept_name2,
                         "resolution": resolution,
@@ -955,6 +1111,7 @@ class ConceptProjector:
         self,
         user_id: str,
         name: str,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Delete a concept and its relationships.
@@ -962,19 +1119,21 @@ class ConceptProjector:
         Also deletes the vector embedding if embeddings are enabled.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             name: Concept name
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if deleted, False otherwise
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             # First, get the concept ID for embedding deletion
             concept_id = None
             with self.session_factory() as session:
                 id_result = session.run(
-                    "MATCH (c:OM_Concept {userId: $userId, name: $name}) RETURN c.id AS id",
-                    {"userId": user_id, "name": name}
+                    "MATCH (c:OM_Concept {accessEntity: $accessEntity, name: $name}) RETURN c.id AS id",
+                    {"accessEntity": access_entity, "name": name}
                 )
                 for record in id_result:
                     concept_id = record["id"]
@@ -983,7 +1142,7 @@ class ConceptProjector:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.delete_concept_query(),
-                    {"userId": user_id, "name": name}
+                    {"userId": user_id, "accessEntity": access_entity, "name": name}
                 )
                 deleted = False
                 for record in result:
@@ -1017,22 +1176,30 @@ class ConceptProjector:
         self,
         user_id: str,
         name: str,
+        access_entity: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Recalculate concept confidence based on supporting memories.
 
         Args:
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             name: Concept name
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             Dict with new confidence and evidence count, or None on error
         """
+        access_entity = _resolve_access_entity(user_id, access_entity)
         try:
             with self.session_factory() as session:
                 result = session.run(
                     ConceptCypherBuilder.update_concept_confidence_query(),
-                    {"userId": user_id, "name": name}
+                    {
+                        "userId": user_id,
+                        "accessEntity": access_entity,
+                        "legacyAccessEntity": f"user:{user_id}",
+                        "name": name,
+                    }
                 )
                 for record in result:
                     return {

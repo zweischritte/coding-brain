@@ -24,6 +24,10 @@ from app.graph.neo4j_client import get_neo4j_session, is_neo4j_configured
 logger = logging.getLogger(__name__)
 
 
+def _resolve_access_entity(user_id: str, access_entity: Optional[str]) -> str:
+    return access_entity or f"user:{user_id}"
+
+
 @dataclass
 class EdgeMigrationStats:
     """Statistics from edge migration."""
@@ -50,6 +54,7 @@ async def migrate_entity_edges(
     variants: List[str],
     allowed_memory_ids: Optional[List[str]] = None,
     dry_run: bool = False,
+    access_entity: Optional[str] = None,
 ) -> EdgeMigrationStats:
     """
     Migrate all edges from variant entities to canonical.
@@ -75,17 +80,24 @@ async def migrate_entity_edges(
         return stats
 
     try:
+        access_entity = _resolve_access_entity(user_id, access_entity)
         with get_neo4j_session() as session:
             # Ensure canonical entity exists
             ensure_canonical_query = """
-            MERGE (e:OM_Entity {userId: $userId, name: $canonical})
-            ON CREATE SET e.createdAt = datetime(), e.source = 'normalization'
+            MERGE (e:OM_Entity {accessEntity: $accessEntity, name: $canonical})
+            ON CREATE SET e.createdAt = datetime(),
+                          e.source = 'normalization',
+                          e.userId = $userId,
+                          e.displayName = $displayName
+            ON MATCH SET e.displayName = coalesce(e.displayName, $displayName)
             RETURN e.name AS name
             """
             session.run(
                 ensure_canonical_query,
                 userId=user_id,
-                canonical=canonical
+                canonical=canonical,
+                accessEntity=access_entity,
+                displayName=canonical,
             )
 
             for variant in variants:
@@ -94,33 +106,38 @@ async def migrate_entity_edges(
 
                 # 1. Migrate OM_ABOUT edges
                 om_about_count = await _migrate_om_about(
-                    session, user_id, canonical, variant,
-                    allowed_memory_ids, dry_run
+                    session,
+                    user_id,
+                    canonical,
+                    variant,
+                    allowed_memory_ids,
+                    dry_run,
+                    access_entity,
                 )
                 stats.om_about_migrated += om_about_count
 
                 # 2. Migrate OM_CO_MENTIONED edges
                 co_mentioned_count = await _migrate_om_co_mentioned(
-                    session, user_id, canonical, variant, dry_run
+                    session, user_id, canonical, variant, dry_run, access_entity
                 )
                 stats.om_co_mentioned_migrated += co_mentioned_count
 
                 # 3. Migrate OM_RELATION edges
                 relation_count = await _migrate_om_relation(
-                    session, user_id, canonical, variant, dry_run
+                    session, user_id, canonical, variant, dry_run, access_entity
                 )
                 stats.om_relation_migrated += relation_count
 
                 # 4. Migrate OM_TEMPORAL edges
                 temporal_count = await _migrate_om_temporal(
-                    session, user_id, canonical, variant, dry_run
+                    session, user_id, canonical, variant, dry_run, access_entity
                 )
                 stats.om_temporal_migrated += temporal_count
 
                 # 5. Delete orphaned variant nodes
                 if not dry_run:
                     deleted = await _delete_orphan_variant(
-                        session, user_id, variant
+                        session, user_id, variant, access_entity
                     )
                     stats.variant_nodes_deleted += deleted
 
@@ -138,6 +155,7 @@ async def _migrate_om_about(
     variant: str,
     allowed_memory_ids: Optional[List[str]],
     dry_run: bool,
+    access_entity: str,
 ) -> int:
     """
     Migrate OM_ABOUT edges from variant to canonical.
@@ -150,19 +168,25 @@ async def _migrate_om_about(
         # With ACL filter
         if dry_run:
             query = """
-            MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-            MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+            MATCH (canonical:OM_Entity {name: $canonical})
+            WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+            MATCH (variant:OM_Entity {name: $variant})
+            WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
             MATCH (m:OM_Memory)-[r:OM_ABOUT]->(variant)
             WHERE m.id IN $allowedIds
+              AND coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
               AND NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
             RETURN count(r) AS count
             """
         else:
             query = """
-            MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-            MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+            MATCH (canonical:OM_Entity {name: $canonical})
+            WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+            MATCH (variant:OM_Entity {name: $variant})
+            WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
             MATCH (m:OM_Memory)-[r:OM_ABOUT]->(variant)
             WHERE m.id IN $allowedIds
+              AND coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
               AND NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
             MERGE (m)-[:OM_ABOUT]->(canonical)
             DELETE r
@@ -174,24 +198,32 @@ async def _migrate_om_about(
             userId=user_id,
             canonical=canonical,
             variant=variant,
-            allowedIds=allowed_memory_ids
+            allowedIds=allowed_memory_ids,
+            accessEntity=access_entity,
+            legacyAccessEntity=f"user:{user_id}",
         )
     else:
         # No ACL filter
         if dry_run:
             query = """
-            MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-            MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+            MATCH (canonical:OM_Entity {name: $canonical})
+            WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+            MATCH (variant:OM_Entity {name: $variant})
+            WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
             MATCH (m:OM_Memory)-[r:OM_ABOUT]->(variant)
-            WHERE NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
+            WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+              AND NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
             RETURN count(r) AS count
             """
         else:
             query = """
-            MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-            MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+            MATCH (canonical:OM_Entity {name: $canonical})
+            WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+            MATCH (variant:OM_Entity {name: $variant})
+            WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
             MATCH (m:OM_Memory)-[r:OM_ABOUT]->(variant)
-            WHERE NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
+            WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+              AND NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
             MERGE (m)-[:OM_ABOUT]->(canonical)
             DELETE r
             RETURN count(r) AS count
@@ -201,7 +233,9 @@ async def _migrate_om_about(
             query,
             userId=user_id,
             canonical=canonical,
-            variant=variant
+            variant=variant,
+            accessEntity=access_entity,
+            legacyAccessEntity=f"user:{user_id}",
         )
 
     record = result.single()
@@ -214,6 +248,7 @@ async def _migrate_om_co_mentioned(
     canonical: str,
     variant: str,
     dry_run: bool,
+    access_entity: str,
 ) -> int:
     """
     Migrate OM_CO_MENTIONED edges from variant to canonical.
@@ -223,14 +258,25 @@ async def _migrate_om_co_mentioned(
     """
     # Count query
     count_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (variant)-[r:OM_CO_MENTIONED]-(other:OM_Entity)
     WHERE other <> canonical AND other <> variant
+      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
     RETURN count(r) AS count
     """
 
-    result = session.run(count_query, userId=user_id, canonical=canonical, variant=variant)
+    result = session.run(
+        count_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
     record = result.single()
     count = record["count"] if record else 0
 
@@ -239,18 +285,23 @@ async def _migrate_om_co_mentioned(
 
     # Migration query with count aggregation
     migrate_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (variant)-[r:OM_CO_MENTIONED]-(other:OM_Entity)
     WHERE other <> canonical AND other <> variant
+      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
     WITH canonical, other, r,
          coalesce(r.count, 1) AS oldCount,
          r.memoryIds AS oldMemIds
-    MERGE (canonical)-[newR:OM_CO_MENTIONED {userId: $userId}]-(other)
+    MERGE (canonical)-[newR:OM_CO_MENTIONED {accessEntity: $accessEntity}]-(other)
     ON CREATE SET
         newR.count = oldCount,
         newR.memoryIds = coalesce(oldMemIds, []),
-        newR.createdAt = datetime()
+        newR.createdAt = datetime(),
+        newR.userId = $userId
     ON MATCH SET
         newR.count = coalesce(newR.count, 0) + oldCount,
         newR.memoryIds = CASE
@@ -262,7 +313,14 @@ async def _migrate_om_co_mentioned(
     DELETE r
     """
 
-    session.run(migrate_query, userId=user_id, canonical=canonical, variant=variant)
+    session.run(
+        migrate_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
     return count
 
 
@@ -272,6 +330,7 @@ async def _migrate_om_relation(
     canonical: str,
     variant: str,
     dry_run: bool,
+    access_entity: str,
 ) -> int:
     """
     Migrate OM_RELATION edges from variant to canonical.
@@ -281,14 +340,25 @@ async def _migrate_om_relation(
     """
     # Count query (both directions)
     count_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (variant)-[r:OM_RELATION]-(other)
     WHERE other <> canonical AND other <> variant
+      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
     RETURN count(r) AS count
     """
 
-    result = session.run(count_query, userId=user_id, canonical=canonical, variant=variant)
+    result = session.run(
+        count_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
     record = result.single()
     count = record["count"] if record else 0
 
@@ -297,41 +367,65 @@ async def _migrate_om_relation(
 
     # Migrate outgoing relations
     migrate_outgoing_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (variant)-[r:OM_RELATION]->(other)
     WHERE other <> canonical AND other <> variant
+      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
     WITH canonical, other, r, r.type AS relType, r.memoryId AS memId
-    MERGE (canonical)-[newR:OM_RELATION {type: relType, userId: $userId}]->(other)
+    MERGE (canonical)-[newR:OM_RELATION {type: relType, accessEntity: $accessEntity}]->(other)
     ON CREATE SET
         newR.memoryId = memId,
         newR.count = 1,
-        newR.createdAt = datetime()
+        newR.createdAt = datetime(),
+        newR.userId = $userId
     ON MATCH SET
         newR.count = coalesce(newR.count, 0) + 1,
         newR.updatedAt = datetime()
     DELETE r
     """
-    session.run(migrate_outgoing_query, userId=user_id, canonical=canonical, variant=variant)
+    session.run(
+        migrate_outgoing_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
 
     # Migrate incoming relations
     migrate_incoming_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (other)-[r:OM_RELATION]->(variant)
     WHERE other <> canonical AND other <> variant
+      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
     WITH canonical, other, r, r.type AS relType, r.memoryId AS memId
-    MERGE (other)-[newR:OM_RELATION {type: relType, userId: $userId}]->(canonical)
+    MERGE (other)-[newR:OM_RELATION {type: relType, accessEntity: $accessEntity}]->(canonical)
     ON CREATE SET
         newR.memoryId = memId,
         newR.count = 1,
-        newR.createdAt = datetime()
+        newR.createdAt = datetime(),
+        newR.userId = $userId
     ON MATCH SET
         newR.count = coalesce(newR.count, 0) + 1,
         newR.updatedAt = datetime()
     DELETE r
     """
-    session.run(migrate_incoming_query, userId=user_id, canonical=canonical, variant=variant)
+    session.run(
+        migrate_incoming_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
 
     return count
 
@@ -342,6 +436,7 @@ async def _migrate_om_temporal(
     canonical: str,
     variant: str,
     dry_run: bool,
+    access_entity: str,
 ) -> int:
     """
     Migrate OM_TEMPORAL edges from variant to canonical.
@@ -350,14 +445,24 @@ async def _migrate_om_temporal(
     """
     # Count query
     count_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (variant)-[r:OM_TEMPORAL]->(event:OM_TemporalEvent)
-    WHERE NOT EXISTS((canonical)-[:OM_TEMPORAL]->(event))
+    WHERE coalesce(event.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND NOT EXISTS((canonical)-[:OM_TEMPORAL]->(event))
     RETURN count(r) AS count
     """
 
-    result = session.run(count_query, userId=user_id, canonical=canonical, variant=variant)
+    result = session.run(
+        count_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
     record = result.single()
     count = record["count"] if record else 0
 
@@ -366,15 +471,25 @@ async def _migrate_om_temporal(
 
     # Migrate query
     migrate_query = """
-    MATCH (canonical:OM_Entity {userId: $userId, name: $canonical})
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
+    MATCH (canonical:OM_Entity {name: $canonical})
+    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
     MATCH (variant)-[r:OM_TEMPORAL]->(event:OM_TemporalEvent)
-    WHERE NOT EXISTS((canonical)-[:OM_TEMPORAL]->(event))
+    WHERE coalesce(event.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND NOT EXISTS((canonical)-[:OM_TEMPORAL]->(event))
     MERGE (canonical)-[:OM_TEMPORAL]->(event)
     DELETE r
     """
 
-    session.run(migrate_query, userId=user_id, canonical=canonical, variant=variant)
+    session.run(
+        migrate_query,
+        userId=user_id,
+        canonical=canonical,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
     return count
 
 
@@ -382,13 +497,15 @@ async def _delete_orphan_variant(
     session,
     user_id: str,
     variant: str,
+    access_entity: str,
 ) -> int:
     """
     Delete variant entity node if it has no remaining edges.
     """
     delete_query = """
-    MATCH (variant:OM_Entity {userId: $userId, name: $variant})
-    WHERE NOT EXISTS((variant)<-[:OM_ABOUT]-())
+    MATCH (variant:OM_Entity {name: $variant})
+    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND NOT EXISTS((variant)<-[:OM_ABOUT]-())
       AND NOT EXISTS((variant)-[:OM_CO_MENTIONED]-())
       AND NOT EXISTS((variant)-[:OM_RELATION]-())
       AND NOT EXISTS(()-[:OM_RELATION]->(variant))
@@ -397,7 +514,13 @@ async def _delete_orphan_variant(
     RETURN count(variant) AS count
     """
 
-    result = session.run(delete_query, userId=user_id, variant=variant)
+    result = session.run(
+        delete_query,
+        userId=user_id,
+        variant=variant,
+        accessEntity=access_entity,
+        legacyAccessEntity=f"user:{user_id}",
+    )
     record = result.single()
     return record["count"] if record else 0
 
@@ -407,6 +530,7 @@ async def estimate_migration_impact(
     canonical: str,
     variants: List[str],
     allowed_memory_ids: Optional[List[str]] = None,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Estimate the impact of a migration without executing it.
@@ -419,6 +543,7 @@ async def estimate_migration_impact(
         variants=variants,
         allowed_memory_ids=allowed_memory_ids,
         dry_run=True,
+        access_entity=access_entity,
     )
 
     return {

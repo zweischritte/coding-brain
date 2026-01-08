@@ -138,35 +138,60 @@ def bridge_entities_to_om_graph(
         logger.debug("Neo4j not configured, skipping entity bridge")
         return result
 
+    from app.graph.entity_normalizer import normalize_entity_name
+
     # Extract entities and relations from content
     entities, relations = extract_entities_from_content(content, user_id)
 
-    # Include existing entity from metadata if provided
+    # Include existing entity from metadata if provided (keep raw casing for displayName)
     if existing_entity:
-        existing_name = existing_entity.lower().replace(" ", "_")
-        if not any(e.name == existing_name for e in entities):
-            entities.append(ExtractedEntity(name=existing_name, entity_type="metadata_entity"))
+        existing_name = existing_entity.strip()
+        existing_normalized = normalize_entity_name(existing_name) if existing_name else ""
+        if existing_normalized:
+            if not any(
+                normalize_entity_name(e.name) == existing_normalized
+                for e in entities
+            ):
+                entities.append(ExtractedEntity(name=existing_name, entity_type="metadata_entity"))
 
     if not entities:
         logger.debug(f"No entities to bridge for memory {memory_id}")
         return result
 
-    result["entities"] = [e.name for e in entities]
+    normalized_entities: Dict[str, str] = {}
+    for entity in entities:
+        normalized = normalize_entity_name(entity.name)
+        if not normalized:
+            continue
+        display_name = entity.name.strip() if entity.name else normalized
+        if normalized not in normalized_entities:
+            normalized_entities[normalized] = display_name
+
+    result["entities"] = list(normalized_entities.keys())
 
     try:
         with get_neo4j_session() as session:
             # Step 1: Create OM_Entity nodes and OM_ABOUT edges for each entity
-            for entity in entities:
+            for normalized_name, display_name in normalized_entities.items():
                 entity_created = _create_entity_and_link(
-                    session, memory_id, user_id, entity.name
+                    session, memory_id, user_id, normalized_name, display_name
                 )
                 if entity_created:
                     result["entities_bridged"] += 1
 
             # Step 2: Create OM_RELATION edges between entities (with typed relationships)
             for relation in relations:
+                source_normalized = normalize_entity_name(relation.source)
+                destination_normalized = normalize_entity_name(relation.destination)
+                if not source_normalized or not destination_normalized:
+                    continue
                 relation_created = _create_typed_relation(
-                    session, memory_id, user_id, relation
+                    session,
+                    memory_id,
+                    user_id,
+                    source_normalized,
+                    destination_normalized,
+                    relation.relationship,
                 )
                 if relation_created:
                     result["relations_created"] += 1
@@ -197,6 +222,7 @@ def _create_entity_and_link(
     memory_id: str,
     user_id: str,
     entity_name: str,
+    display_name: Optional[str] = None,
 ) -> bool:
     """
     Create an OM_Entity node (if not exists) and link it to the OM_Memory.
@@ -207,8 +233,13 @@ def _create_entity_and_link(
 
     query = """
     MATCH (m:OM_Memory {id: $memoryId})
-    MERGE (e:OM_Entity {userId: m.userId, name: $entityName})
-    ON CREATE SET e.createdAt = $now
+    WITH m, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
+    MERGE (e:OM_Entity {accessEntity: accessEntity, name: $entityName})
+    ON CREATE SET e.createdAt = $now,
+                  e.userId = $userId,
+                  e.displayName = $displayName
+    ON MATCH SET e.updatedAt = $now,
+                 e.displayName = coalesce(e.displayName, $displayName)
     MERGE (m)-[r:OM_ABOUT]->(e)
     ON CREATE SET r.createdAt = $now
     ON MATCH SET r.updatedAt = $now
@@ -221,7 +252,9 @@ def _create_entity_and_link(
             memoryId=memory_id,
             userId=user_id,
             entityName=entity_name,
+            displayName=display_name,
             now=now,
+            legacyAccessEntity=f"user:{user_id}",
         )
         record = result.single()
         return record is not None
@@ -234,7 +267,9 @@ def _create_typed_relation(
     session,
     memory_id: str,
     user_id: str,
-    relation: ExtractedRelation,
+    source_name: str,
+    destination_name: str,
+    relation_type: str,
 ) -> bool:
     """
     Create an OM_RELATION edge between two entities with the relationship type as property.
@@ -248,14 +283,15 @@ def _create_typed_relation(
 
     query = """
     MATCH (m:OM_Memory {id: $memoryId})
-    WITH m.userId AS uid
-    MATCH (e1:OM_Entity {userId: uid, name: $source})
-    MATCH (e2:OM_Entity {userId: uid, name: $destination})
-    MERGE (e1)-[r:OM_RELATION {type: $relationType, userId: uid}]->(e2)
+    WITH m.userId AS uid, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
+    MATCH (e1:OM_Entity {accessEntity: accessEntity, name: $source})
+    MATCH (e2:OM_Entity {accessEntity: accessEntity, name: $destination})
+    MERGE (e1)-[r:OM_RELATION {type: $relationType, accessEntity: accessEntity}]->(e2)
     ON CREATE SET
         r.memoryId = $memoryId,
         r.createdAt = $now,
-        r.count = 1
+        r.count = 1,
+        r.userId = uid
     ON MATCH SET
         r.updatedAt = $now,
         r.count = coalesce(r.count, 0) + 1
@@ -266,17 +302,18 @@ def _create_typed_relation(
         result = session.run(
             query,
             userId=user_id,
-            source=relation.source,
-            destination=relation.destination,
-            relationType=relation.relationship,
+            source=source_name,
+            destination=destination_name,
+            relationType=relation_type,
             memoryId=memory_id,
             now=now,
+            legacyAccessEntity=f"user:{user_id}",
         )
         record = result.single()
         return record is not None
     except Exception as e:
         logger.warning(
-            f"Failed to create relation {relation.source}-[{relation.relationship}]->{relation.destination}: {e}"
+            f"Failed to create relation {source_name}-[{relation_type}]->{destination_name}: {e}"
         )
         return False
 

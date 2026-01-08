@@ -64,12 +64,14 @@ class ImpactAnalysisConfig:
         confidence_threshold: Minimum confidence level ("definite", "probable", "possible")
         include_cross_language: Include cross-language dependencies
         max_affected_files: Maximum affected files to return
+        include_inferred_edges: Include edges inferred heuristically
     """
 
     max_depth: int = 3
     confidence_threshold: str = "probable"  # "definite", "probable", "possible"
     include_cross_language: bool = False
     max_affected_files: int = 100
+    include_inferred_edges: bool = True
 
 
 # =============================================================================
@@ -90,6 +92,7 @@ class ImpactInput:
         include_cross_language: Override config for cross-language
         max_depth: Override config for max depth
         confidence_threshold: Override config for confidence
+        include_inferred_edges: Override config for inferred edge usage
     """
 
     repo_id: str = ""
@@ -98,6 +101,7 @@ class ImpactInput:
     include_cross_language: Optional[bool] = None
     max_depth: Optional[int] = None
     confidence_threshold: Optional[str] = None
+    include_inferred_edges: Optional[bool] = None
 
 
 # =============================================================================
@@ -194,9 +198,15 @@ class ImpactAnalysisTool:
         max_depth = input_data.max_depth or cfg.max_depth
         confidence_threshold = input_data.confidence_threshold or cfg.confidence_threshold
         min_confidence = CONFIDENCE_THRESHOLDS.get(confidence_threshold, 0.5)
+        include_inferred_edges = (
+            input_data.include_inferred_edges
+            if input_data.include_inferred_edges is not None
+            else cfg.include_inferred_edges
+        )
 
         # Collect affected files
         affected_map: dict[str, AffectedFile] = {}
+        traversal_state = {"used_inferred_edges": False}
 
         try:
             if input_data.symbol_id:
@@ -206,6 +216,8 @@ class ImpactAnalysisTool:
                     depth=max_depth,
                     affected_map=affected_map,
                     max_files=cfg.max_affected_files,
+                    include_inferred_edges=include_inferred_edges,
+                    traversal_state=traversal_state,
                 )
             elif input_data.changed_files:
                 # Analyze file changes
@@ -215,6 +227,8 @@ class ImpactAnalysisTool:
                     depth=max_depth,
                     affected_map=affected_map,
                     max_files=cfg.max_affected_files,
+                    include_inferred_edges=include_inferred_edges,
+                    traversal_state=traversal_state,
                 )
         except Exception as e:
             logger.error(f"Impact analysis failed: {e}")
@@ -232,10 +246,12 @@ class ImpactAnalysisTool:
         # Limit results
         affected_files = affected_files[: cfg.max_affected_files]
 
-        return ImpactOutput(
-            affected_files=affected_files,
-            meta=ResponseMeta(request_id=request_id),
-        )
+        meta = ResponseMeta(request_id=request_id)
+        if traversal_state["used_inferred_edges"]:
+            meta.degraded_mode = True
+            meta.missing_sources.append("inferred_call_edges")
+
+        return ImpactOutput(affected_files=affected_files, meta=meta)
 
     def _validate_input(self, input_data: ImpactInput) -> None:
         """Validate input parameters."""
@@ -253,6 +269,8 @@ class ImpactAnalysisTool:
         depth: int,
         affected_map: dict[str, AffectedFile],
         max_files: int,
+        include_inferred_edges: bool,
+        traversal_state: dict[str, bool],
     ) -> None:
         """Analyze impact of changes to a symbol.
 
@@ -281,6 +299,8 @@ class ImpactAnalysisTool:
             affected_map=affected_map,
             visited=visited,
             max_files=max_files,
+            include_inferred_edges=include_inferred_edges,
+            traversal_state=traversal_state,
         )
 
     def _traverse_callers(
@@ -291,6 +311,8 @@ class ImpactAnalysisTool:
         affected_map: dict[str, AffectedFile],
         visited: set[str],
         max_files: int,
+        include_inferred_edges: bool,
+        traversal_state: dict[str, bool],
     ) -> None:
         """Recursively traverse callers to find affected files."""
         if current_depth > depth or symbol_id in visited:
@@ -317,6 +339,9 @@ class ImpactAnalysisTool:
             if edge_type_value != "CALLS":
                 continue
 
+            if not include_inferred_edges and edge.properties and edge.properties.get("inferred"):
+                continue
+
             caller_id = edge.source_id
 
             if caller_id in visited:
@@ -325,6 +350,9 @@ class ImpactAnalysisTool:
             # Get caller node
             caller_node = self.graph_driver.get_node(caller_id)
             if caller_node:
+                if edge.properties and edge.properties.get("inferred"):
+                    traversal_state["used_inferred_edges"] = True
+
                 file_path = caller_node.properties.get("file_path")
                 if file_path and file_path not in affected_map:
                     # Calculate confidence based on depth
@@ -345,6 +373,8 @@ class ImpactAnalysisTool:
                     affected_map=affected_map,
                     visited=visited,
                     max_files=max_files,
+                    include_inferred_edges=include_inferred_edges,
+                    traversal_state=traversal_state,
                 )
 
     def _analyze_file_changes(
@@ -354,6 +384,8 @@ class ImpactAnalysisTool:
         depth: int,
         affected_map: dict[str, AffectedFile],
         max_files: int,
+        include_inferred_edges: bool,
+        traversal_state: dict[str, bool],
     ) -> None:
         """Analyze impact of file changes.
 
@@ -402,6 +434,8 @@ class ImpactAnalysisTool:
                             affected_map=affected_map,
                             visited=visited,
                             max_files=max_files,
+                            include_inferred_edges=include_inferred_edges,
+                            traversal_state=traversal_state,
                         )
             except Exception as e:
                 logger.warning(f"Failed to analyze file {file_path}: {e}")

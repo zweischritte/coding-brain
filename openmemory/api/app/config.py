@@ -143,3 +143,24 @@ class BusinessConceptsConfig:
 
 # Convenience alias
 business_concepts_config = BusinessConceptsConfig()
+
+
+# =============================================================================
+# Code Intelligence Configuration
+# =============================================================================
+
+class CodeIntelConfig:
+    """Configuration for code intelligence tooling.
+
+    Environment variables:
+    - CODE_INTEL_INCLUDE_INFERRED_EDGES: Include heuristically inferred edges (default: true)
+    """
+
+    @staticmethod
+    def include_inferred_edges() -> bool:
+        """Check if inferred edges should be included by default."""
+        return os.getenv("CODE_INTEL_INCLUDE_INFERRED_EDGES", "true").lower() == "true"
+
+
+# Convenience alias
+code_intel_config = CodeIntelConfig()

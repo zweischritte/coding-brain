@@ -19,6 +19,10 @@ from app.graph.neo4j_client import get_neo4j_session, is_neo4j_configured
 logger = logging.getLogger(__name__)
 
 
+def _resolve_access_entity(user_id: str, access_entity: Optional[str]) -> str:
+    return access_entity or f"user:{user_id}"
+
+
 @dataclass
 class EntityVariant:
     """Eine Entity-Variante mit Statistiken."""
@@ -56,7 +60,10 @@ def normalize_entity_name(name: str) -> str:
     return normalized
 
 
-def find_entity_variants(user_id: str) -> Dict[str, List[EntityVariant]]:
+def find_entity_variants(
+    user_id: str,
+    access_entity: Optional[str] = None,
+) -> Dict[str, List[EntityVariant]]:
     """
     Findet alle Entity-Varianten für einen User gruppiert nach normalisiertem Namen.
 
@@ -66,14 +73,19 @@ def find_entity_variants(user_id: str) -> Dict[str, List[EntityVariant]]:
     if not is_neo4j_configured():
         return {}
 
+    access_entity = _resolve_access_entity(user_id, access_entity)
     query = """
-    MATCH (e:OM_Entity {userId: $userId})
+    MATCH (e:OM_Entity)
+    WHERE coalesce(e.accessEntity, $legacyAccessEntity) = $accessEntity
     OPTIONAL MATCH (e)<-[:OM_ABOUT]-(m:OM_Memory)
-    WITH e.name AS name, count(DISTINCT m) AS memoryCount
-    OPTIONAL MATCH (e2:OM_Entity {userId: $userId, name: name})-[:OM_CO_MENTIONED]-()
-    WITH name, memoryCount, count(*) AS coMentionCount
-    OPTIONAL MATCH (e3:OM_Entity {userId: $userId, name: name})-[:OM_RELATION]-()
-    RETURN name, memoryCount, coMentionCount, count(*) AS relationCount
+    WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+    WITH e, e.name AS name, count(DISTINCT m) AS memoryCount
+    OPTIONAL MATCH (e)-[co:OM_CO_MENTIONED]-()
+    WHERE coalesce(co.accessEntity, $legacyAccessEntity) = $accessEntity
+    WITH e, name, memoryCount, count(co) AS coMentionCount
+    OPTIONAL MATCH (e)-[rel:OM_RELATION]-()
+    WHERE coalesce(rel.accessEntity, $legacyAccessEntity) = $accessEntity
+    RETURN name, memoryCount, coMentionCount, count(rel) AS relationCount
     ORDER BY memoryCount DESC
     """
 
@@ -81,7 +93,12 @@ def find_entity_variants(user_id: str) -> Dict[str, List[EntityVariant]]:
 
     try:
         with get_neo4j_session() as session:
-            result = session.run(query, userId=user_id)
+            result = session.run(
+                query,
+                userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}",
+            )
             for record in result:
                 name = record["name"]
                 if not name:
@@ -100,7 +117,11 @@ def find_entity_variants(user_id: str) -> Dict[str, List[EntityVariant]]:
     return variants_by_normalized
 
 
-def identify_duplicates(user_id: str, min_variants: int = 2) -> List[CanonicalEntity]:
+def identify_duplicates(
+    user_id: str,
+    min_variants: int = 2,
+    access_entity: Optional[str] = None,
+) -> List[CanonicalEntity]:
     """
     Identifiziert Entity-Duplikate die zusammengeführt werden sollten.
 
@@ -111,7 +132,7 @@ def identify_duplicates(user_id: str, min_variants: int = 2) -> List[CanonicalEn
     Returns:
         Liste von CanonicalEntity mit Merge-Kandidaten
     """
-    variants_by_normalized = find_entity_variants(user_id)
+    variants_by_normalized = find_entity_variants(user_id, access_entity=access_entity)
 
     duplicates = []
     for normalized, variants in variants_by_normalized.items():
@@ -134,6 +155,7 @@ def merge_entity_variants(
     canonical_name: str,
     variant_names: List[str],
     dry_run: bool = True,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Führt Entity-Varianten zu einer kanonischen Entity zusammen.
@@ -156,6 +178,7 @@ def merge_entity_variants(
     if not is_neo4j_configured():
         return {"error": "Neo4j not configured"}
 
+    access_entity = _resolve_access_entity(user_id, access_entity)
     stats = {
         "canonical": canonical_name,
         "variants_merged": [],
@@ -164,6 +187,7 @@ def merge_entity_variants(
         "relation_edges_migrated": 0,
         "nodes_deleted": 0,
         "dry_run": dry_run,
+        "access_entity": access_entity,
     }
 
     # Filtere canonical aus variants
@@ -177,10 +201,13 @@ def merge_entity_variants(
             for variant in variants_to_merge:
                 # 1. Count OM_ABOUT edges to migrate
                 count_about_query = """
-                MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                MATCH (canonical:OM_Entity {name: $canonicalName})
+                WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                MATCH (variant:OM_Entity {name: $variantName})
+                WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                 MATCH (m:OM_Memory)-[r:OM_ABOUT]->(variant)
-                WHERE NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
+                WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+                  AND NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
                 RETURN count(r) AS count
                 """
 
@@ -189,6 +216,8 @@ def merge_entity_variants(
                     userId=user_id,
                     canonicalName=canonical_name,
                     variantName=variant,
+                    accessEntity=access_entity,
+                    legacyAccessEntity=f"user:{user_id}",
                 )
                 record = result.single()
                 about_count = record["count"] if record else 0
@@ -196,10 +225,14 @@ def merge_entity_variants(
 
                 # 2. Count OM_CO_MENTIONED edges to migrate
                 count_co_mention_query = """
-                MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                MATCH (canonical:OM_Entity {name: $canonicalName})
+                WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                MATCH (variant:OM_Entity {name: $variantName})
+                WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                 MATCH (variant)-[r:OM_CO_MENTIONED]-(other:OM_Entity)
                 WHERE other <> canonical AND other <> variant
+                  AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+                  AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
                 RETURN count(r) AS count
                 """
 
@@ -208,6 +241,8 @@ def merge_entity_variants(
                     userId=user_id,
                     canonicalName=canonical_name,
                     variantName=variant,
+                    accessEntity=access_entity,
+                    legacyAccessEntity=f"user:{user_id}",
                 )
                 record = result.single()
                 co_mention_count = record["count"] if record else 0
@@ -215,10 +250,13 @@ def merge_entity_variants(
 
                 # 3. Count OM_RELATION edges to migrate
                 count_relation_query = """
-                MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                MATCH (canonical:OM_Entity {name: $canonicalName})
+                WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                MATCH (variant:OM_Entity {name: $variantName})
+                WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                 MATCH (variant)-[r:OM_RELATION]-(other)
                 WHERE other <> canonical AND other <> variant
+                  AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
                 RETURN count(r) AS count
                 """
 
@@ -227,6 +265,8 @@ def merge_entity_variants(
                     userId=user_id,
                     canonicalName=canonical_name,
                     variantName=variant,
+                    accessEntity=access_entity,
+                    legacyAccessEntity=f"user:{user_id}",
                 )
                 record = result.single()
                 relation_count = record["count"] if record else 0
@@ -236,10 +276,13 @@ def merge_entity_variants(
                 if not dry_run:
                     # Migrate OM_ABOUT edges
                     migrate_about_query = """
-                    MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                    MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                    MATCH (canonical:OM_Entity {name: $canonicalName})
+                    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                    MATCH (variant:OM_Entity {name: $variantName})
+                    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                     MATCH (m:OM_Memory)-[r:OM_ABOUT]->(variant)
-                    WHERE NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
+                    WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND NOT EXISTS((m)-[:OM_ABOUT]->(canonical))
                     MERGE (m)-[:OM_ABOUT]->(canonical)
                     DELETE r
                     """
@@ -248,17 +291,25 @@ def merge_entity_variants(
                         userId=user_id,
                         canonicalName=canonical_name,
                         variantName=variant,
+                        accessEntity=access_entity,
+                        legacyAccessEntity=f"user:{user_id}",
                     )
 
                     # Migrate OM_CO_MENTIONED edges (aggregate counts)
                     migrate_co_mention_query = """
-                    MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                    MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                    MATCH (canonical:OM_Entity {name: $canonicalName})
+                    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                    MATCH (variant:OM_Entity {name: $variantName})
+                    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                     MATCH (variant)-[r:OM_CO_MENTIONED]-(other:OM_Entity)
                     WHERE other <> canonical AND other <> variant
+                      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
                     WITH canonical, other, r, coalesce(r.count, 1) AS oldCount
-                    MERGE (canonical)-[newR:OM_CO_MENTIONED {userId: $userId}]-(other)
-                    ON CREATE SET newR.count = oldCount, newR.createdAt = datetime()
+                    MERGE (canonical)-[newR:OM_CO_MENTIONED {accessEntity: $accessEntity}]-(other)
+                    ON CREATE SET newR.count = oldCount,
+                                  newR.createdAt = datetime(),
+                                  newR.userId = $userId
                     ON MATCH SET newR.count = coalesce(newR.count, 0) + oldCount
                     DELETE r
                     """
@@ -267,17 +318,25 @@ def merge_entity_variants(
                         userId=user_id,
                         canonicalName=canonical_name,
                         variantName=variant,
+                        accessEntity=access_entity,
+                        legacyAccessEntity=f"user:{user_id}",
                     )
 
                     # Migrate OM_RELATION edges
                     migrate_relation_query = """
-                    MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                    MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                    MATCH (canonical:OM_Entity {name: $canonicalName})
+                    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                    MATCH (variant:OM_Entity {name: $variantName})
+                    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                     MATCH (variant)-[r:OM_RELATION]->(other)
                     WHERE other <> canonical AND other <> variant
+                      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
                     WITH canonical, other, r, r.type AS relType, r.memoryId AS memId
-                    MERGE (canonical)-[newR:OM_RELATION {type: relType, userId: $userId}]->(other)
-                    ON CREATE SET newR.memoryId = memId, newR.createdAt = datetime()
+                    MERGE (canonical)-[newR:OM_RELATION {type: relType, accessEntity: $accessEntity}]->(other)
+                    ON CREATE SET newR.memoryId = memId,
+                                  newR.createdAt = datetime(),
+                                  newR.userId = $userId
                     ON MATCH SET newR.count = coalesce(newR.count, 0) + 1
                     DELETE r
                     """
@@ -286,17 +345,25 @@ def merge_entity_variants(
                         userId=user_id,
                         canonicalName=canonical_name,
                         variantName=variant,
+                        accessEntity=access_entity,
+                        legacyAccessEntity=f"user:{user_id}",
                     )
 
                     # Also handle incoming OM_RELATION edges
                     migrate_relation_incoming_query = """
-                    MATCH (canonical:OM_Entity {userId: $userId, name: $canonicalName})
-                    MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
+                    MATCH (canonical:OM_Entity {name: $canonicalName})
+                    WHERE coalesce(canonical.accessEntity, $legacyAccessEntity) = $accessEntity
+                    MATCH (variant:OM_Entity {name: $variantName})
+                    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
                     MATCH (other)-[r:OM_RELATION]->(variant)
                     WHERE other <> canonical AND other <> variant
+                      AND coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND coalesce(other.accessEntity, $legacyAccessEntity) = $accessEntity
                     WITH canonical, other, r, r.type AS relType, r.memoryId AS memId
-                    MERGE (other)-[newR:OM_RELATION {type: relType, userId: $userId}]->(canonical)
-                    ON CREATE SET newR.memoryId = memId, newR.createdAt = datetime()
+                    MERGE (other)-[newR:OM_RELATION {type: relType, accessEntity: $accessEntity}]->(canonical)
+                    ON CREATE SET newR.memoryId = memId,
+                                  newR.createdAt = datetime(),
+                                  newR.userId = $userId
                     ON MATCH SET newR.count = coalesce(newR.count, 0) + 1
                     DELETE r
                     """
@@ -305,12 +372,15 @@ def merge_entity_variants(
                         userId=user_id,
                         canonicalName=canonical_name,
                         variantName=variant,
+                        accessEntity=access_entity,
+                        legacyAccessEntity=f"user:{user_id}",
                     )
 
                     # Delete variant node if it has no more edges
                     delete_query = """
-                    MATCH (variant:OM_Entity {userId: $userId, name: $variantName})
-                    WHERE NOT EXISTS((variant)<-[:OM_ABOUT]-())
+                    MATCH (variant:OM_Entity {name: $variantName})
+                    WHERE coalesce(variant.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND NOT EXISTS((variant)<-[:OM_ABOUT]-())
                       AND NOT EXISTS((variant)-[:OM_CO_MENTIONED]-())
                       AND NOT EXISTS((variant)-[:OM_RELATION]-())
                       AND NOT EXISTS(()-[:OM_RELATION]->(variant))
@@ -321,6 +391,8 @@ def merge_entity_variants(
                         delete_query,
                         userId=user_id,
                         variantName=variant,
+                        accessEntity=access_entity,
+                        legacyAccessEntity=f"user:{user_id}",
                     )
                     record = result.single()
                     if record:
@@ -339,6 +411,7 @@ def auto_normalize_entities(
     user_id: str,
     min_variants: int = 2,
     dry_run: bool = True,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Automatische Normalisierung aller Entity-Duplikate für einen User.
@@ -351,10 +424,11 @@ def auto_normalize_entities(
     Returns:
         Gesamt-Statistiken
     """
-    duplicates = identify_duplicates(user_id, min_variants)
+    duplicates = identify_duplicates(user_id, min_variants, access_entity=access_entity)
 
     total_stats = {
         "user_id": user_id,
+        "access_entity": _resolve_access_entity(user_id, access_entity),
         "duplicate_groups": len(duplicates),
         "total_about_migrated": 0,
         "total_co_mention_migrated": 0,
@@ -371,6 +445,7 @@ def auto_normalize_entities(
             canonical_name=dup.canonical,
             variant_names=variant_names,
             dry_run=dry_run,
+            access_entity=access_entity,
         )
 
         total_stats["merges"].append({

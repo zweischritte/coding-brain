@@ -288,16 +288,18 @@ class ConceptVectorStore:
         name: str,
         embedding: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Store or update a concept embedding.
 
         Args:
             concept_id: Unique concept ID (from Neo4j)
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             name: Concept name
             embedding: Embedding vector
             metadata: Optional additional metadata
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             True if successful
@@ -311,9 +313,11 @@ class ConceptVectorStore:
             client = self._get_qdrant_client()
 
             # Build payload
+            access_entity = access_entity or f"user:{user_id}"
             payload = {
                 "concept_id": concept_id,
                 "user_id": user_id,
+                "access_entity": access_entity,
                 "name": name,
                 **(metadata or {}),
             }
@@ -347,16 +351,20 @@ class ConceptVectorStore:
         top_k: Optional[int] = None,
         min_score: Optional[float] = None,
         exclude_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search for similar concepts by embedding.
 
         Args:
             query_embedding: Query vector
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             top_k: Number of results (default from config)
             min_score: Minimum similarity score (0-1)
             exclude_ids: Concept IDs to exclude
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of dicts with concept_id, name, score, and metadata
@@ -365,25 +373,36 @@ class ConceptVectorStore:
             return []
 
         try:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.models import Filter, FieldCondition, MatchAny, MatchValue
 
             client = self._get_qdrant_client()
             top_k = top_k or self.config.default_top_k
 
-            # Build filter for user_id
-            filters = [
-                FieldCondition(
-                    key="user_id",
-                    match=MatchValue(value=user_id),
+            access_entities = access_entities or [f"user:{user_id}"]
+            access_entity_prefixes = access_entity_prefixes or []
+            include_prefixes = bool(access_entity_prefixes)
+
+            # Build filter for exact access_entity matches when possible.
+            filters = []
+            if not include_prefixes:
+                filters.append(
+                    FieldCondition(
+                        key="access_entity",
+                        match=MatchAny(any=access_entities),
+                    )
                 )
-            ]
+            else:
+                # Prefix matches require post-filtering; avoid pre-filtering to keep scoped results.
+                filters = []
 
             # Search with filter using query_points (qdrant-client >= 1.7)
+            fetch_limit = max(top_k or self.config.default_top_k, 1)
+            fetch_limit = min(200, fetch_limit * (5 if include_prefixes else 2))
             results = client.query_points(
                 collection_name=self.config.collection_name,
                 query=query_embedding,
-                query_filter=Filter(must=filters),
-                limit=top_k + len(exclude_ids or []),  # Request more to account for exclusions
+                query_filter=Filter(must=filters) if filters else None,
+                limit=fetch_limit + len(exclude_ids or []),  # Request more to account for exclusions
                 with_payload=True,
             )
 
@@ -391,6 +410,18 @@ class ConceptVectorStore:
             concepts = []
             for hit in results.points:
                 concept_id = hit.payload.get("concept_id")
+                access_entity = hit.payload.get("access_entity")
+                legacy_user_id = hit.payload.get("user_id")
+
+                # Enforce access_entity visibility (including legacy fallback)
+                if access_entity:
+                    if access_entity not in access_entities and not any(
+                        access_entity.startswith(prefix) for prefix in access_entity_prefixes
+                    ):
+                        continue
+                else:
+                    if legacy_user_id != user_id:
+                        continue
 
                 # Skip excluded IDs
                 if exclude_ids and concept_id in exclude_ids:
@@ -403,11 +434,16 @@ class ConceptVectorStore:
                 concepts.append({
                     "concept_id": concept_id,
                     "name": hit.payload.get("name"),
+                    "access_entity": access_entity,
                     "score": hit.score,
-                    **{k: v for k, v in hit.payload.items() if k not in ("concept_id", "name", "user_id")},
+                    **{
+                        k: v
+                        for k, v in hit.payload.items()
+                        if k not in ("concept_id", "name", "user_id", "access_entity")
+                    },
                 })
 
-                if len(concepts) >= top_k:
+                if len(concepts) >= (top_k or self.config.default_top_k):
                     break
 
             return concepts
@@ -422,6 +458,8 @@ class ConceptVectorStore:
         embedding: List[float],
         user_id: str,
         threshold: Optional[float] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Find potential duplicate concepts by similarity.
@@ -429,8 +467,10 @@ class ConceptVectorStore:
         Args:
             concept_id: ID of the concept to check
             embedding: Embedding of the concept
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             threshold: Similarity threshold (default from config)
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of potential duplicates with scores
@@ -443,6 +483,8 @@ class ConceptVectorStore:
             top_k=5,
             min_score=threshold,
             exclude_ids=[concept_id],
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
     def delete_concept(self, concept_id: str) -> bool:
@@ -544,6 +586,7 @@ class ConceptSimilarityService:
         summary: Optional[str] = None,
         category: Optional[str] = None,
         source_type: Optional[str] = None,
+        access_entity: Optional[str] = None,
     ) -> Tuple[bool, Optional[List[Dict[str, Any]]]]:
         """
         Generate embedding for a concept and store it.
@@ -552,12 +595,13 @@ class ConceptSimilarityService:
 
         Args:
             concept_id: Unique concept ID
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             name: Concept name
             concept_type: Optional type
             summary: Optional summary
             category: Optional category
             source_type: Optional source type
+            access_entity: Access entity scope (defaults to user)
 
         Returns:
             Tuple of (success, potential_duplicates)
@@ -578,6 +622,7 @@ class ConceptSimilarityService:
                 concept_id=concept_id,
                 embedding=embedding,
                 user_id=user_id,
+                access_entities=[access_entity] if access_entity else None,
             )
 
             # Store the embedding
@@ -593,6 +638,7 @@ class ConceptSimilarityService:
                 name=name,
                 embedding=embedding,
                 metadata=metadata,
+                access_entity=access_entity,
             )
 
             return success, duplicates if duplicates else None
@@ -607,15 +653,19 @@ class ConceptSimilarityService:
         user_id: str,
         top_k: int = 10,
         min_score: float = 0.5,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Semantic search for concepts by text query.
 
         Args:
             query: Search query text
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             top_k: Number of results
             min_score: Minimum similarity score
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of matching concepts with scores
@@ -630,6 +680,8 @@ class ConceptSimilarityService:
                 user_id=user_id,
                 top_k=top_k,
                 min_score=min_score,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
         except Exception as e:
@@ -641,14 +693,18 @@ class ConceptSimilarityService:
         concept_name: str,
         user_id: str,
         top_k: int = 5,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Find concepts similar to a given concept by name.
 
         Args:
             concept_name: Name of the concept to find similar to
-            user_id: User ID for scoping
+            user_id: User ID for legacy fallback
             top_k: Number of results
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
         Returns:
             List of similar concepts with scores
@@ -663,6 +719,8 @@ class ConceptSimilarityService:
                 user_id=user_id,
                 top_k=top_k + 1,  # +1 to account for self-match
                 min_score=0.5,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
             # Filter out the exact match

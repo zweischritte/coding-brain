@@ -116,11 +116,13 @@ class CallGraphConfig:
         depth: Maximum traversal depth (1-5)
         max_nodes: Maximum nodes to return
         include_properties: Include node properties in output
+        include_inferred_edges: Include edges inferred heuristically
     """
 
     depth: int = 1
     max_nodes: int = 100
     include_properties: bool = True
+    include_inferred_edges: bool = True
 
 
 # =============================================================================
@@ -137,12 +139,14 @@ class CallGraphInput:
         symbol_name: Alternative: symbol name for lookup
         repo_id: Repository ID (required)
         depth: Traversal depth override
+        include_inferred_edges: Override config for inferred edge usage
     """
 
     repo_id: str = ""
     symbol_id: Optional[str] = None
     symbol_name: Optional[str] = None
     depth: Optional[int] = None
+    include_inferred_edges: Optional[bool] = None
 
 
 # =============================================================================
@@ -268,9 +272,15 @@ class FindCallersTool:
 
         # Traverse callers
         depth = input_data.depth or cfg.depth
+        include_inferred_edges = (
+            input_data.include_inferred_edges
+            if input_data.include_inferred_edges is not None
+            else cfg.include_inferred_edges
+        )
         nodes: list[GraphNode] = []
         edges: list[GraphEdge] = []
         visited: set[str] = set()
+        traversal_state = {"used_inferred_edges": False}
 
         try:
             self._traverse_callers(
@@ -281,6 +291,8 @@ class FindCallersTool:
                 visited=visited,
                 max_nodes=cfg.max_nodes,
                 include_properties=cfg.include_properties,
+                include_inferred_edges=include_inferred_edges,
+                traversal_state=traversal_state,
             )
         except Exception as e:
             logger.error(f"Failed to traverse callers: {e}")
@@ -301,11 +313,13 @@ class FindCallersTool:
             ),
         )
 
-        return GraphOutput(
-            nodes=nodes,
-            edges=edges,
-            meta=ResponseMeta(request_id=request_id),
-        )
+        meta = ResponseMeta(request_id=request_id)
+        if traversal_state["used_inferred_edges"]:
+            meta.degraded_mode = True
+            meta.missing_sources.append("inferred_call_edges")
+            meta.warning = "Call graph includes inferred edges; results may be incomplete."
+
+        return GraphOutput(nodes=nodes, edges=edges, meta=meta)
 
     def _validate_input(self, input_data: CallGraphInput) -> None:
         """Validate input parameters."""
@@ -354,6 +368,8 @@ class FindCallersTool:
         visited: set[str],
         max_nodes: int,
         include_properties: bool,
+        include_inferred_edges: bool,
+        traversal_state: dict[str, bool],
     ) -> None:
         """Recursively traverse caller graph."""
         if depth <= 0 or symbol_id in visited:
@@ -381,10 +397,16 @@ class FindCallersTool:
             if edge_type_value != "CALLS":
                 continue
 
+            if not include_inferred_edges and edge.properties and edge.properties.get("inferred"):
+                continue
+
             caller_id = edge.source_id
 
             if caller_id in visited:
                 continue
+
+            if edge.properties and edge.properties.get("inferred"):
+                traversal_state["used_inferred_edges"] = True
 
             # Add edge
             edge_props = dict(edge.properties) if edge.properties else {}
@@ -423,6 +445,8 @@ class FindCallersTool:
                     visited=visited,
                     max_nodes=max_nodes,
                     include_properties=include_properties,
+                    include_inferred_edges=include_inferred_edges,
+                    traversal_state=traversal_state,
                 )
 
 
@@ -486,9 +510,15 @@ class FindCalleesTool:
 
         # Traverse callees
         depth = input_data.depth or cfg.depth
+        include_inferred_edges = (
+            input_data.include_inferred_edges
+            if input_data.include_inferred_edges is not None
+            else cfg.include_inferred_edges
+        )
         nodes: list[GraphNode] = []
         edges: list[GraphEdge] = []
         visited: set[str] = set()
+        traversal_state = {"used_inferred_edges": False}
 
         try:
             self._traverse_callees(
@@ -499,6 +529,8 @@ class FindCalleesTool:
                 visited=visited,
                 max_nodes=cfg.max_nodes,
                 include_properties=cfg.include_properties,
+                include_inferred_edges=include_inferred_edges,
+                traversal_state=traversal_state,
             )
         except Exception as e:
             logger.error(f"Failed to traverse callees: {e}")
@@ -519,11 +551,13 @@ class FindCalleesTool:
             ),
         )
 
-        return GraphOutput(
-            nodes=nodes,
-            edges=edges,
-            meta=ResponseMeta(request_id=request_id),
-        )
+        meta = ResponseMeta(request_id=request_id)
+        if traversal_state["used_inferred_edges"]:
+            meta.degraded_mode = True
+            meta.missing_sources.append("inferred_call_edges")
+            meta.warning = "Call graph includes inferred edges; results may be incomplete."
+
+        return GraphOutput(nodes=nodes, edges=edges, meta=meta)
 
     def _validate_input(self, input_data: CallGraphInput) -> None:
         """Validate input parameters."""
@@ -572,6 +606,8 @@ class FindCalleesTool:
         visited: set[str],
         max_nodes: int,
         include_properties: bool,
+        include_inferred_edges: bool,
+        traversal_state: dict[str, bool],
     ) -> None:
         """Recursively traverse callee graph."""
         if depth <= 0 or symbol_id in visited:
@@ -596,10 +632,16 @@ class FindCalleesTool:
             if edge_type_value != "CALLS":
                 continue
 
+            if not include_inferred_edges and edge.properties and edge.properties.get("inferred"):
+                continue
+
             callee_id = edge.target_id
 
             if callee_id in visited:
                 continue
+
+            if edge.properties and edge.properties.get("inferred"):
+                traversal_state["used_inferred_edges"] = True
 
             # Add edge
             edge_props = dict(edge.properties) if edge.properties else {}
@@ -638,6 +680,8 @@ class FindCalleesTool:
                     visited=visited,
                     max_nodes=max_nodes,
                     include_properties=include_properties,
+                    include_inferred_edges=include_inferred_edges,
+                    traversal_state=traversal_state,
                 )
 
 

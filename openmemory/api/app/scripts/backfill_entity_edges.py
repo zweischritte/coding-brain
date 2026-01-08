@@ -65,6 +65,7 @@ def backfill_entity_edges(
     user_id: str,
     min_count: int = 1,
     dry_run: bool = False,
+    access_entity: str | None = None,
     log_file: str | None = None,
     verbose: bool = False,
 ) -> tuple[BackfillStats, str]:
@@ -88,7 +89,8 @@ def backfill_entity_edges(
     _configure_logging(log_file=chosen_log_file, verbose=verbose)
 
     logger.info("Starting entity edge backfill")
-    logger.info(f"user_id={user_id} min_count={min_count} dry_run={dry_run}")
+    access_entity = access_entity or f"user:{user_id}"
+    logger.info(f"user_id={user_id} access_entity={access_entity} min_count={min_count} dry_run={dry_run}")
     logger.info(f"log_file={chosen_log_file}")
 
     if not is_neo4j_configured():
@@ -107,12 +109,20 @@ def backfill_entity_edges(
         try:
             with get_neo4j_session() as session:
                 result = session.run("""
-                    MATCH (e1:OM_Entity {userId: $userId})<-[:OM_ABOUT]-(m:OM_Memory)-[:OM_ABOUT]->(e2:OM_Entity {userId: $userId})
-                    WHERE e1.name < e2.name
+                    MATCH (e1:OM_Entity)<-[:OM_ABOUT]-(m:OM_Memory)-[:OM_ABOUT]->(e2:OM_Entity)
+                    WHERE coalesce(e1.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND coalesce(e2.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND e1.name < e2.name
                     WITH e1, e2, count(m) AS cnt
                     WHERE cnt >= $minCount
                     RETURN count(*) AS pairCount, sum(cnt) AS totalMentions
-                """, {"userId": user_id, "minCount": min_count})
+                """, {
+                    "userId": user_id,
+                    "accessEntity": access_entity,
+                    "legacyAccessEntity": f"user:{user_id}",
+                    "minCount": min_count,
+                })
                 record = result.single()
                 if record:
                     stats.entity_pairs = record["pairCount"]
@@ -123,7 +133,7 @@ def backfill_entity_edges(
     else:
         # Actually create the edges
         try:
-            edges_created = projector.backfill_entity_edges(user_id, min_count)
+            edges_created = projector.backfill_entity_edges(user_id, min_count, access_entity=access_entity)
             stats.edges_created = edges_created
             logger.info(f"Created {edges_created} OM_CO_MENTIONED edges")
         except Exception as e:
@@ -138,6 +148,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill entity co-mention edges")
     parser.add_argument("--user-id", required=True, help="User ID to backfill")
     parser.add_argument("--min-count", type=int, default=1, help="Min co-mentions for edge")
+    parser.add_argument("--access-entity", default=None, help="Access entity scope (default: user scope)")
     parser.add_argument("--dry-run", action="store_true", help="Do not write to Neo4j")
     parser.add_argument("--log-file", default=None, help="Log file path")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -147,6 +158,7 @@ def main() -> None:
         user_id=args.user_id,
         min_count=args.min_count,
         dry_run=args.dry_run,
+        access_entity=args.access_entity,
         log_file=args.log_file,
         verbose=args.verbose,
     )

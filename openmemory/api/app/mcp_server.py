@@ -416,6 +416,18 @@ def _apply_access_entity_filter(query, principal: "Principal", user):
     return query.filter(or_(*access_clauses))
 
 
+def _build_graph_access_filters(principal: "Principal | None", user_id: str) -> tuple[list[str], list[str]]:
+    """Build access_entity filters for Neo4j graph queries."""
+    if not principal:
+        return [f"user:{user_id}"], []
+
+    from app.security.access import build_access_entity_patterns
+
+    exact_matches, like_patterns = build_access_entity_patterns(principal)
+    prefixes = [p[:-1] for p in like_patterns if p.endswith("%")]
+    return exact_matches, prefixes
+
+
 def _get_accessible_memories(db, principal: "Principal | None", user, app, include_archived: bool = True):
     query = db.query(Memory).filter(Memory.state != MemoryState.deleted)
     if not include_archived:
@@ -1042,6 +1054,8 @@ async def search_memory(
             route = None
             query_analysis = None
             rrf_alpha = 0.6  # Default RRF alpha
+            principal = principal_var.get(None)
+            access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
             if auto_route and use_rrf:
                 try:
@@ -1051,7 +1065,13 @@ async def search_memory(
                     routing_config = get_routing_config()
 
                     if routing_config.enabled:
-                        query_analysis = analyze_query(query, uid, routing_config)
+                        query_analysis = analyze_query(
+                            query,
+                            uid,
+                            routing_config,
+                            access_entities=access_entities,
+                            access_entity_prefixes=access_entity_prefixes,
+                        )
                         route = query_analysis.route
                         rrf_alpha = get_rrf_alpha_for_route(route)
 
@@ -1160,7 +1180,6 @@ async def search_memory(
                     )
 
                     entity_names = [e[0] for e in query_analysis.detected_entities]
-
                     # Find bridge entities (3-hop max for transitive paths like A→B→C→D)
                     bridge_entities = find_bridge_entities(
                         user_id=uid,
@@ -1168,6 +1187,8 @@ async def search_memory(
                         max_bridges=5,
                         min_count=2,
                         max_hops=3,
+                        access_entities=access_entities,
+                        access_entity_prefixes=access_entity_prefixes,
                     )
 
                     # Expand entity list with bridges
@@ -1182,6 +1203,8 @@ async def search_memory(
                         entity_names=expanded_names,
                         allowed_memory_ids=allowed,
                         limit=search_limit,
+                        access_entities=access_entities,
+                        access_entity_prefixes=access_entity_prefixes,
                     )
 
                     # Convert to RetrievalResult for RRF fusion
@@ -1220,10 +1243,13 @@ async def search_memory(
                 try:
                     from app.graph.graph_cache import fetch_graph_context
                     memory_ids_in_pool = [str(h.id) for h in hits if h.id and str(h.id) in allowed]
+                    access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
                     graph_context = fetch_graph_context(
                         memory_ids=memory_ids_in_pool,
                         user_id=uid,
                         context_tags=boost_tags,
+                        access_entities=access_entities,
+                        access_entity_prefixes=access_entity_prefixes,
                     )
                 except Exception as cache_error:
                     logging.warning(f"Graph context fetch failed: {cache_error}")
@@ -1624,10 +1650,13 @@ async def graph_related_memories(
             if memory_id not in allowed:
                 return json.dumps({"error": f"Memory '{memory_id}' not found or not accessible"})
 
+            access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
             related = find_related_memories_in_graph(
                 memory_id=memory_id,
                 user_id=uid,
                 allowed_memory_ids=list(allowed),
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
                 via=via,
                 limit=limit,
             )
@@ -1715,10 +1744,13 @@ async def graph_subgraph(
             if memory_id not in allowed:
                 return json.dumps({"error": f"Memory '{memory_id}' not found or not accessible"})
 
+            access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
             subgraph = get_memory_subgraph_from_graph(
                 memory_id=memory_id,
                 user_id=uid,
                 allowed_memory_ids=list(allowed),
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
                 depth=depth,
                 via=via,
                 related_limit=related_limit,
@@ -1782,12 +1814,15 @@ async def graph_aggregate(group_by: str, limit: int = 20) -> str:
             principal = principal_var.get(None)
             accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
             allowed = [str(memory.id) for memory in accessible_memories]
+            access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
             buckets = aggregate_memories_in_graph(
                 user_id=uid,
                 group_by=group_by,
                 allowed_memory_ids=allowed,
                 limit=limit,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
             return json.dumps(
@@ -1843,6 +1878,7 @@ async def graph_tag_cooccurrence(limit: int = 20, min_count: int = 2, sample_siz
             principal = principal_var.get(None)
             accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
             allowed = [str(memory.id) for memory in accessible_memories]
+            access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
             pairs = tag_cooccurrence_in_graph(
                 user_id=uid,
@@ -1850,6 +1886,8 @@ async def graph_tag_cooccurrence(limit: int = 20, min_count: int = 2, sample_siz
                 limit=limit,
                 min_count=min_count,
                 sample_size=sample_size,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
             return json.dumps(
@@ -1897,6 +1935,7 @@ async def graph_path_between_entities(entity_a: str, entity_b: str, max_hops: in
             principal = principal_var.get(None)
             accessible_memories = _get_accessible_memories(db, principal, user, app, include_archived=True)
             allowed = [str(memory.id) for memory in accessible_memories]
+            access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
             path = path_between_entities_in_graph(
                 user_id=uid,
@@ -1904,6 +1943,8 @@ async def graph_path_between_entities(entity_a: str, entity_b: str, max_hops: in
                 entity_b=entity_b,
                 allowed_memory_ids=allowed,
                 max_hops=max_hops,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
             return json.dumps({"path": path, "graph_enabled": True}, default=str)
@@ -2698,11 +2739,16 @@ async def graph_entity_network(
     min_count = max(1, int(min_count or 1))
 
     try:
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
+
         result = get_entity_network_from_graph(
             entity_name=entity_name,
             user_id=uid,
             min_count=min_count,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         if result is None:
@@ -2767,11 +2813,16 @@ async def graph_related_tags(
     min_count = max(1, int(min_count or 1))
 
     try:
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
+
         related = get_related_tags_from_graph(
             tag_key=tag_key,
             user_id=uid,
             min_count=min_count,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         return json.dumps({
@@ -2795,6 +2846,7 @@ Parameters:
 - auto: If true, automatically merge all detected duplicates
 - canonical: For manual merge: the target entity name
 - variants: For manual merge: comma-separated list of variant names to merge
+- access_entity: Access control scope to target (defaults to `user:<user_id>` if omitted)
 
 Returns:
 - duplicates: List of detected duplicate groups (if dry_run or no merge specified)
@@ -2810,6 +2862,7 @@ async def graph_normalize_entities(
     auto: bool = False,
     canonical: str = None,
     variants: str = None,
+    access_entity: str = None,
 ) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -2825,7 +2878,7 @@ async def graph_normalize_entities(
     try:
         # If just checking duplicates
         if dry_run and not auto and not canonical:
-            duplicates = find_duplicate_entities_in_graph(uid)
+            duplicates = find_duplicate_entities_in_graph(uid, access_entity=access_entity)
             return json.dumps({
                 "duplicates": duplicates,
                 "count": len(duplicates),
@@ -2842,6 +2895,7 @@ async def graph_normalize_entities(
             variant_names=variant_list,
             auto=auto,
             dry_run=dry_run,
+            access_entity=access_entity,
         )
 
         result["graph_enabled"] = True
@@ -2864,6 +2918,7 @@ Parameters:
 - threshold: Minimum confidence for match (0.0-1.0, default: 0.7). Lower = more matches.
 - canonical: For manual merge: target entity name
 - variants: For manual merge: comma-separated variant names
+- access_entity: Access control scope to target (defaults to `user:<user_id>` if omitted)
 
 Returns (mode=detect):
 - duplicates[]: Each group has {canonical, variants, confidence, sources}
@@ -2887,6 +2942,7 @@ async def graph_normalize_entities_semantic(
     threshold: float = 0.7,
     canonical: str = None,
     variants: str = None,
+    access_entity: str = None,
 ) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -2907,7 +2963,11 @@ async def graph_normalize_entities_semantic(
 
         if mode == "detect":
             # Only detect duplicates
-            duplicates = await find_semantic_duplicates(uid, threshold=threshold)
+            duplicates = await find_semantic_duplicates(
+                uid,
+                threshold=threshold,
+                access_entity=access_entity,
+            )
             return json.dumps({
                 "duplicates": duplicates,
                 "count": len(duplicates),
@@ -2928,6 +2988,7 @@ async def graph_normalize_entities_semantic(
                 variants=variant_list,
                 threshold=threshold,
                 dry_run=dry_run,
+                access_entity=access_entity,
             )
         else:
             # Auto-detect and merge
@@ -2936,6 +2997,7 @@ async def graph_normalize_entities_semantic(
                 auto=True,
                 threshold=threshold,
                 dry_run=dry_run,
+                access_entity=access_entity,
             )
 
         result["mode"] = mode
@@ -2996,6 +3058,9 @@ async def graph_entity_relations(
         type_filter = [t.strip() for t in relation_types.split(",")]
 
     try:
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
+
         relations = get_entity_relations_from_graph(
             entity_name=entity_name,
             user_id=uid,
@@ -3003,6 +3068,8 @@ async def graph_entity_relations(
             category=category,
             direction=direction,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         return json.dumps({
@@ -3062,6 +3129,9 @@ async def graph_biography_timeline(
     try:
         type_list = [t.strip() for t in event_types.split(",")] if event_types else None
 
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
+
         events = get_biography_timeline_from_graph(
             user_id=uid,
             entity_name=entity_name,
@@ -3069,6 +3139,8 @@ async def graph_biography_timeline(
             start_year=start_year,
             end_year=end_year,
             limit=min(max(1, limit or 50), 200),
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         return json.dumps({
@@ -3556,6 +3628,7 @@ Parameters:
 - symbol_name: Function/method name to find callers for
 - symbol_id: SCIP symbol ID (alternative to symbol_name)
 - depth: Traversal depth (default: 2, max: 5)
+- include_inferred_edges: Override inferred-edge usage (defaults to server config)
 
 Returns: nodes[] and edges[] representing the call graph.
 
@@ -3574,6 +3647,7 @@ async def find_callers(
     symbol_id: str = None,
     depth: int = 2,
     use_fallback: bool = True,
+    include_inferred_edges: bool | None = None,
 ) -> str:
     """Find functions that call a given symbol with automatic fallback."""
     # Check scope
@@ -3618,6 +3692,7 @@ async def find_callers(
             symbol_id=symbol_id,
             symbol_name=symbol_name,
             depth=min(max(1, depth or 2), 5),
+            include_inferred_edges=include_inferred_edges,
         )
 
         # Use fallback tool if enabled
@@ -3689,6 +3764,7 @@ Parameters:
 - symbol_name: Function/method name
 - symbol_id: SCIP symbol ID (alternative)
 - depth: Traversal depth (default: 2, max: 5)
+- include_inferred_edges: Override inferred-edge usage (defaults to server config)
 
 Returns: nodes[] and edges[] representing outgoing call graph.
 
@@ -3701,6 +3777,7 @@ async def find_callees(
     symbol_name: str = None,
     symbol_id: str = None,
     depth: int = 2,
+    include_inferred_edges: bool | None = None,
 ) -> str:
     """Find functions called by a given symbol."""
     # Check scope
@@ -3744,6 +3821,7 @@ async def find_callees(
             symbol_id=symbol_id,
             symbol_name=symbol_name,
             depth=min(max(1, depth or 2), 5),
+            include_inferred_edges=include_inferred_edges,
         )
 
         result = toolkit.callees_tool.find(input_data)
@@ -3770,6 +3848,7 @@ Optional parameters:
 - symbol_id: Changed symbol ID
 - max_depth: Maximum traversal depth (default: 3, max: 10)
 - include_cross_language: Include cross-language dependencies (default: false)
+- include_inferred_edges: Override inferred-edge usage (defaults to server config)
 
 Returns:
 - affected_files[]: List of affected files with impact scores
@@ -3785,6 +3864,7 @@ async def impact_analysis(
     symbol_id: str = None,
     max_depth: int = 3,
     include_cross_language: bool = False,
+    include_inferred_edges: bool | None = None,
 ) -> str:
     """Analyze the impact of code changes."""
     # Check scope
@@ -3824,6 +3904,7 @@ async def impact_analysis(
             symbol_id=symbol_id,
             include_cross_language=include_cross_language,
             max_depth=min(max(1, max_depth or 3), 10),
+            include_inferred_edges=include_inferred_edges,
         )
 
         result = toolkit.impact_tool.analyze(input_data)
@@ -4145,6 +4226,7 @@ Parameters:
 - content: Text content to extract from (required if memory_id not provided)
 - category: Optional category for concept scoping
 - store: Whether to store extracted concepts in graph (default: true)
+- access_entity: Access control scope for stored concepts (defaults to memory scope or user)
 
 Returns:
 - entities: Extracted business entities with types and importance
@@ -4159,6 +4241,7 @@ async def extract_business_concepts(
     content: str = None,
     category: str = None,
     store: bool = True,
+    access_entity: str = None,
 ) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -4181,17 +4264,28 @@ async def extract_business_concepts(
 
     try:
         # If memory_id provided but no content, fetch content from DB
-        if memory_id and not content:
+        memory_access_entity = None
+        if memory_id:
             db = SessionLocal()
             try:
                 memory = db.query(Memory).filter(Memory.id == uuid.UUID(memory_id)).first()
                 if not memory:
                     return json.dumps({"error": f"Memory {memory_id} not found"})
-                content = memory.content
-                if category is None and isinstance(memory.metadata_, dict):
-                    category = memory.metadata_.get("category")
+                if not content:
+                    content = memory.content
+                if isinstance(memory.metadata_, dict):
+                    if category is None:
+                        category = memory.metadata_.get("category")
+                    memory_access_entity = memory.metadata_.get("access_entity")
             finally:
                 db.close()
+
+        if memory_access_entity and access_entity and memory_access_entity != access_entity:
+            return json.dumps({
+                "error": "access_entity does not match memory scope",
+                "memory_access_entity": memory_access_entity,
+                "access_entity": access_entity,
+            })
 
         # Use provided memory_id or generate a temporary one
         effective_memory_id = memory_id or str(uuid.uuid4())
@@ -4204,6 +4298,7 @@ async def extract_business_concepts(
             content=content,
             category=category,
             store_in_graph=store,
+            access_entity=memory_access_entity or access_entity,
         )
 
         return json.dumps(result, indent=2, default=str)
@@ -4252,6 +4347,8 @@ async def list_business_concepts(
 
     try:
         from app.graph.concept_ops import list_concepts
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
         concepts = list_concepts(
             user_id=uid,
@@ -4260,6 +4357,8 @@ async def list_business_concepts(
             min_confidence=min_confidence,
             limit=limit,
             offset=offset,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         return json.dumps({
@@ -4304,7 +4403,15 @@ async def get_business_concept(
     try:
         from app.graph.concept_ops import get_concept
 
-        concept = get_concept(user_id=uid, name=name)
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
+
+        concept = get_concept(
+            user_id=uid,
+            name=name,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
 
         if concept:
             return json.dumps(concept, indent=2, default=str)
@@ -4361,6 +4468,8 @@ async def search_business_concepts(
             semantic_search_concepts,
             is_vector_search_enabled,
         )
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
         search_type = "fulltext"
 
@@ -4371,6 +4480,8 @@ async def search_business_concepts(
                 query=query,
                 top_k=limit,
                 min_score=min_score,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
             search_type = "semantic"
         else:
@@ -4378,6 +4489,8 @@ async def search_business_concepts(
                 user_id=uid,
                 query=query,
                 limit=limit,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
         return json.dumps({
@@ -4439,6 +4552,8 @@ async def find_similar_business_concepts(
             find_concept_duplicates,
             is_vector_search_enabled,
         )
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
         if not is_vector_search_enabled():
             return json.dumps({
@@ -4451,12 +4566,16 @@ async def find_similar_business_concepts(
             similar = find_concept_duplicates(
                 user_id=uid,
                 concept_name=concept_name,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
         else:
             similar = find_similar_concepts(
                 user_id=uid,
                 concept_name=concept_name,
                 top_k=top_k,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
         return json.dumps({
@@ -4506,12 +4625,16 @@ async def list_business_entities(
 
     try:
         from app.graph.concept_ops import list_business_entities as list_entities
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
         entities = list_entities(
             user_id=uid,
             entity_type=entity_type,
             min_importance=min_importance,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         return json.dumps({
@@ -4559,12 +4682,16 @@ async def get_concept_network(
 
     try:
         from app.graph.concept_ops import get_concept_network as get_network
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
         result = get_network(
             user_id=uid,
             concept_name=concept_name,
             depth=depth,
             limit=limit,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         return json.dumps(result, indent=2, default=str)
@@ -4612,18 +4739,24 @@ async def find_concept_contradictions(
             detect_contradictions_for_concept,
             find_all_contradictions,
         )
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
 
         if concept_name:
             contradictions = detect_contradictions_for_concept(
                 user_id=uid,
                 concept_name=concept_name,
                 store=True,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
         else:
             contradictions = find_all_contradictions(
                 user_id=uid,
                 category=category,
                 min_severity=min_severity,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
             )
 
         return json.dumps({
@@ -4678,7 +4811,13 @@ async def analyze_concept_convergence(
     try:
         from app.graph.convergence_detector import ConvergenceDetector
 
-        detector = ConvergenceDetector(user_id=uid)
+        principal = principal_var.get(None)
+        access_entities, access_entity_prefixes = _build_graph_access_filters(principal, uid)
+        detector = ConvergenceDetector(
+            user_id=uid,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
         result = detector.analyze_concept_convergence(
             concept_name=concept_name,
             min_evidence=min_evidence,
@@ -4703,12 +4842,14 @@ Requires BUSINESS_CONCEPTS_ENABLED=true.
 
 Parameters:
 - name: Name of the concept to delete (required)
+- access_entity: Access control scope to target (defaults to `user:<user_id>` if omitted)
 
 Returns:
 - deleted: Whether the concept was deleted
 """)
 async def delete_business_concept(
     name: str,
+    access_entity: str = None,
 ) -> str:
     uid = user_id_var.get(None)
     client_name = client_name_var.get(None)
@@ -4728,7 +4869,7 @@ async def delete_business_concept(
     try:
         from app.graph.concept_ops import delete_concept
 
-        deleted = delete_concept(user_id=uid, name=name)
+        deleted = delete_concept(user_id=uid, name=name, access_entity=access_entity)
 
         return json.dumps({
             "name": name,

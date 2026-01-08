@@ -64,6 +64,7 @@ class TestSCIPScheme:
         assert SCIPScheme.for_language(Language.TYPESCRIPT) == SCIPScheme.SCIP_TYPESCRIPT
         assert SCIPScheme.for_language(Language.TSX) == SCIPScheme.SCIP_TYPESCRIPT
         assert SCIPScheme.for_language(Language.JAVA) == SCIPScheme.SCIP_JAVA
+        assert SCIPScheme.for_language(Language.GO) == SCIPScheme.SCIP_GO
 
 
 # =============================================================================

@@ -51,6 +51,7 @@ class TemporalEvent:
     description: Optional[str] = None
     entity: Optional[str] = None      # Zugehörige Entity (Person, Ort, etc.)
     memory_ids: List[str] = None      # Quell-Memories
+    access_entity: Optional[str] = None
 
     def __post_init__(self):
         if self.memory_ids is None:
@@ -64,12 +65,20 @@ def ensure_temporal_constraints():
 
     constraints = [
         """
-        CREATE CONSTRAINT om_temporal_event_unique IF NOT EXISTS
-        FOR (t:OM_TemporalEvent) REQUIRE (t.userId, t.name) IS UNIQUE
+        CREATE CONSTRAINT om_temporal_event_access_name IF NOT EXISTS
+        FOR (t:OM_TemporalEvent) REQUIRE (t.accessEntity, t.name) IS UNIQUE
         """,
         """
         CREATE INDEX om_temporal_event_date IF NOT EXISTS
         FOR (t:OM_TemporalEvent) ON (t.startDate)
+        """,
+        """
+        CREATE INDEX om_temporal_event_access_entity IF NOT EXISTS
+        FOR (t:OM_TemporalEvent) ON (t.accessEntity)
+        """,
+        """
+        CREATE INDEX om_temporal_event_user_id IF NOT EXISTS
+        FOR (t:OM_TemporalEvent) ON (t.userId)
         """,
     ]
 
@@ -124,6 +133,7 @@ def parse_date_from_text(text: str) -> Optional[Tuple[str, str]]:
 def create_temporal_event(
     user_id: str,
     event: TemporalEvent,
+    access_entity: Optional[str] = None,
 ) -> bool:
     """
     Erstellt einen OM_TemporalEvent Node.
@@ -134,9 +144,12 @@ def create_temporal_event(
     if not is_neo4j_configured():
         return False
 
+    access_entity = event.access_entity or access_entity or f"user:{user_id}"
     query = """
-    MERGE (t:OM_TemporalEvent {userId: $userId, name: $name})
+    MERGE (t:OM_TemporalEvent {accessEntity: $accessEntity, name: $name})
     ON CREATE SET
+        t.userId = $userId,
+        t.accessEntity = $accessEntity,
         t.eventType = $eventType,
         t.startDate = $startDate,
         t.endDate = $endDate,
@@ -154,6 +167,7 @@ def create_temporal_event(
             result = session.run(
                 query,
                 userId=user_id,
+                accessEntity=access_entity,
                 name=event.name,
                 eventType=event.event_type.value,
                 startDate=event.start_date,
@@ -166,13 +180,16 @@ def create_temporal_event(
             # Link to entity if specified
             if record and event.entity:
                 link_query = """
-                MATCH (t:OM_TemporalEvent {userId: $userId, name: $eventName})
-                MATCH (e:OM_Entity {userId: $userId, name: $entityName})
+                MATCH (t:OM_TemporalEvent {accessEntity: $accessEntity, name: $eventName})
+                MATCH (e:OM_Entity {name: $entityName})
+                WHERE coalesce(e.accessEntity, $legacyAccessEntity) = $accessEntity
                 MERGE (e)-[:OM_TEMPORAL]->(t)
                 """
                 session.run(
                     link_query,
                     userId=user_id,
+                    accessEntity=access_entity,
+                    legacyAccessEntity=f"user:{user_id}",
                     eventName=event.name,
                     entityName=event.entity,
                 )
@@ -190,17 +207,21 @@ def get_biography_timeline(
     start_year: Optional[int] = None,
     end_year: Optional[int] = None,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Holt die biografische Timeline für eine Entity oder den gesamten User.
 
     Args:
-        user_id: User ID
+        user_id: User ID (legacy fallback)
         entity_name: Optional - beschränkt auf Events einer Entity
         event_types: Optional - Filter nach Event-Typen
         start_year: Optional - Nur Events ab diesem Jahr
         end_year: Optional - Nur Events bis zu diesem Jahr
         limit: Max Events
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Chronologisch sortierte Events
@@ -208,17 +229,34 @@ def get_biography_timeline(
     if not is_neo4j_configured():
         return []
 
+    access_entities = access_entities or [f"user:{user_id}"]
+    access_entity_prefixes = access_entity_prefixes or []
+
+    def access_filter(alias: str) -> str:
+        return (
+            "("
+            f"({alias}.accessEntity IS NOT NULL AND ("
+            f"{alias}.accessEntity IN $accessEntities "
+            f"OR any(prefix IN $accessEntityPrefixes WHERE {alias}.accessEntity STARTS WITH prefix)"
+            ")) "
+            f"OR ({alias}.accessEntity IS NULL AND {alias}.userId = $userId)"
+            ")"
+        )
+
     # Build query based on whether entity is specified
     if entity_name:
         match_clause = """
-        MATCH (e:OM_Entity {userId: $userId, name: $entityName})-[:OM_TEMPORAL]->(t:OM_TemporalEvent)
+        MATCH (e:OM_Entity {name: $entityName})-[:OM_TEMPORAL]->(t:OM_TemporalEvent)
         """
     else:
         match_clause = """
-        MATCH (t:OM_TemporalEvent {userId: $userId})
+        MATCH (t:OM_TemporalEvent)
         """
 
     where_clauses = []
+    if entity_name:
+        where_clauses.append(access_filter("e"))
+    where_clauses.append(access_filter("t"))
     if event_types:
         where_clauses.append("t.eventType IN $eventTypes")
     if start_year:
@@ -234,6 +272,7 @@ def get_biography_timeline(
     {match_clause}
     {where_clause}
     OPTIONAL MATCH (t)<-[:OM_TEMPORAL]-(related:OM_Entity)
+    WHERE {access_filter("related")}
     RETURN
         t.name AS name,
         t.eventType AS eventType,
@@ -254,6 +293,8 @@ def get_biography_timeline(
                 entityName=entity_name,
                 eventTypes=event_types,
                 limit=limit,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
             )
 
             events = []
@@ -274,7 +315,11 @@ def get_biography_timeline(
         return []
 
 
-def delete_temporal_event(user_id: str, event_name: str) -> bool:
+def delete_temporal_event(
+    user_id: str,
+    event_name: str,
+    access_entity: Optional[str] = None,
+) -> bool:
     """
     Löscht einen TemporalEvent Node und alle zugehörigen Kanten.
 
@@ -288,8 +333,9 @@ def delete_temporal_event(user_id: str, event_name: str) -> bool:
     if not is_neo4j_configured():
         return False
 
+    access_entity = access_entity or f"user:{user_id}"
     query = """
-    MATCH (t:OM_TemporalEvent {userId: $userId, name: $eventName})
+    MATCH (t:OM_TemporalEvent {accessEntity: $accessEntity, name: $eventName})
     DETACH DELETE t
     RETURN count(*) AS deleted
     """
@@ -299,6 +345,7 @@ def delete_temporal_event(user_id: str, event_name: str) -> bool:
             result = session.run(
                 query,
                 userId=user_id,
+                accessEntity=access_entity,
                 eventName=event_name,
             )
             record = result.single()
@@ -311,6 +358,8 @@ def delete_temporal_event(user_id: str, event_name: str) -> bool:
 def find_overlapping_events(
     user_id: str,
     event_name: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Findet Events die zeitlich mit dem gegebenen Event überlappen.
@@ -325,10 +374,26 @@ def find_overlapping_events(
     if not is_neo4j_configured():
         return []
 
-    query = """
-    MATCH (ref:OM_TemporalEvent {userId: $userId, name: $eventName})
-    MATCH (other:OM_TemporalEvent {userId: $userId})
-    WHERE other.name <> ref.name
+    access_entities = access_entities or [f"user:{user_id}"]
+    access_entity_prefixes = access_entity_prefixes or []
+
+    def access_filter(alias: str) -> str:
+        return (
+            "("
+            f"({alias}.accessEntity IS NOT NULL AND ("
+            f"{alias}.accessEntity IN $accessEntities "
+            f"OR any(prefix IN $accessEntityPrefixes WHERE {alias}.accessEntity STARTS WITH prefix)"
+            ")) "
+            f"OR ({alias}.accessEntity IS NULL AND {alias}.userId = $userId)"
+            ")"
+        )
+
+    query = f"""
+    MATCH (ref:OM_TemporalEvent {{name: $eventName}})
+    MATCH (other:OM_TemporalEvent)
+    WHERE {access_filter("ref")}
+      AND {access_filter("other")}
+      AND other.name <> ref.name
       AND ref.startDate IS NOT NULL
       AND other.startDate IS NOT NULL
       AND (
@@ -355,6 +420,8 @@ def find_overlapping_events(
                 query,
                 userId=user_id,
                 eventName=event_name,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
             )
 
             events = []
@@ -378,6 +445,8 @@ def get_events_in_year_range(
     start_year: int,
     end_year: int,
     entity_name: Optional[str] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Holt alle Events in einem Jahreszeitraum.
@@ -397,6 +466,8 @@ def get_events_in_year_range(
         start_year=start_year,
         end_year=end_year,
         limit=200,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
 
@@ -404,6 +475,7 @@ def link_event_to_memory(
     user_id: str,
     event_name: str,
     memory_id: str,
+    access_entity: Optional[str] = None,
 ) -> bool:
     """
     Verknüpft ein Event mit einem Memory (fügt memory_id zur Liste hinzu).
@@ -419,9 +491,12 @@ def link_event_to_memory(
     if not is_neo4j_configured():
         return False
 
+    access_entity = access_entity or f"user:{user_id}"
     query = """
-    MATCH (t:OM_TemporalEvent {userId: $userId, name: $eventName})
-    WHERE NOT $memoryId IN t.memoryIds
+    MATCH (t:OM_TemporalEvent {accessEntity: $accessEntity, name: $eventName})
+    MATCH (m:OM_Memory {id: $memoryId})
+    WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+      AND NOT $memoryId IN t.memoryIds
     SET t.memoryIds = coalesce(t.memoryIds, []) + [$memoryId],
         t.updatedAt = datetime()
     RETURN t.name AS name
@@ -432,6 +507,8 @@ def link_event_to_memory(
             result = session.run(
                 query,
                 userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}",
                 eventName=event_name,
                 memoryId=memory_id,
             )
@@ -445,6 +522,7 @@ def link_event_to_entity(
     user_id: str,
     event_name: str,
     entity_name: str,
+    access_entity: Optional[str] = None,
 ) -> bool:
     """
     Erstellt eine OM_TEMPORAL Kante zwischen Entity und Event.
@@ -460,9 +538,11 @@ def link_event_to_entity(
     if not is_neo4j_configured():
         return False
 
+    access_entity = access_entity or f"user:{user_id}"
     query = """
-    MATCH (t:OM_TemporalEvent {userId: $userId, name: $eventName})
-    MATCH (e:OM_Entity {userId: $userId, name: $entityName})
+    MATCH (t:OM_TemporalEvent {accessEntity: $accessEntity, name: $eventName})
+    MATCH (e:OM_Entity {name: $entityName})
+    WHERE coalesce(e.accessEntity, $legacyAccessEntity) = $accessEntity
     MERGE (e)-[:OM_TEMPORAL]->(t)
     RETURN t.name AS name
     """
@@ -472,6 +552,8 @@ def link_event_to_entity(
             result = session.run(
                 query,
                 userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}",
                 eventName=event_name,
                 entityName=entity_name,
             )

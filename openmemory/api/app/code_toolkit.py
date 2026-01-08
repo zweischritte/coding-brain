@@ -299,15 +299,22 @@ def _init_call_graph_tools(toolkit: CodeToolkit) -> None:
 
     try:
         from tools.call_graph import (
+            CallGraphConfig,
             create_find_callers_tool,
             create_find_callees_tool,
         )
+        from app.config import CodeIntelConfig
 
+        graph_config = CallGraphConfig(
+            include_inferred_edges=CodeIntelConfig.include_inferred_edges()
+        )
         toolkit.callers_tool = create_find_callers_tool(
             graph_driver=toolkit.neo4j_driver,
+            config=graph_config,
         )
         toolkit.callees_tool = create_find_callees_tool(
             graph_driver=toolkit.neo4j_driver,
+            config=graph_config,
         )
         logger.info("Call graph tools initialized")
     except ImportError as e:
@@ -327,10 +334,15 @@ def _init_impact_tool(toolkit: CodeToolkit) -> None:
         return
 
     try:
-        from tools.impact_analysis import create_impact_analysis_tool
+        from tools.impact_analysis import ImpactAnalysisConfig, create_impact_analysis_tool
+        from app.config import CodeIntelConfig
 
+        impact_config = ImpactAnalysisConfig(
+            include_inferred_edges=CodeIntelConfig.include_inferred_edges()
+        )
         toolkit.impact_tool = create_impact_analysis_tool(
             graph_driver=toolkit.neo4j_driver,
+            config=impact_config,
         )
         logger.info("Impact analysis tool initialized")
     except ImportError as e:

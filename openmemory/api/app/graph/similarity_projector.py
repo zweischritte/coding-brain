@@ -59,13 +59,16 @@ class SimilarityCypherBuilder:
         """
         return """
         UNWIND $edges AS edge
-        MATCH (source:OM_Memory {id: edge.source_id, userId: $userId})
-        MATCH (target:OM_Memory {id: edge.target_id, userId: $userId})
-        MERGE (source)-[r:OM_SIMILAR {userId: $userId}]->(target)
+        MATCH (source:OM_Memory {id: edge.source_id})
+        MATCH (target:OM_Memory {id: edge.target_id})
+        WHERE coalesce(source.accessEntity, $legacyAccessEntity) = $accessEntity
+          AND coalesce(target.accessEntity, $legacyAccessEntity) = $accessEntity
+        MERGE (source)-[r:OM_SIMILAR {accessEntity: $accessEntity}]->(target)
         ON CREATE SET r.createdAt = datetime()
         SET r.score = edge.score,
             r.rank = edge.rank,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.userId = coalesce(r.userId, $userId)
         RETURN count(r) AS created
         """
 
@@ -79,23 +82,27 @@ class SimilarityCypherBuilder:
         """
         return """
         UNWIND $edges AS edge
-        MATCH (source:OM_Memory {id: edge.source_id, userId: $userId})
-        MATCH (target:OM_Memory {id: edge.target_id, userId: $userId})
+        MATCH (source:OM_Memory {id: edge.source_id})
+        MATCH (target:OM_Memory {id: edge.target_id})
+        WHERE coalesce(source.accessEntity, $legacyAccessEntity) = $accessEntity
+          AND coalesce(target.accessEntity, $legacyAccessEntity) = $accessEntity
 
         // Forward edge (source → target)
-        MERGE (source)-[r1:OM_SIMILAR {userId: $userId}]->(target)
+        MERGE (source)-[r1:OM_SIMILAR {accessEntity: $accessEntity}]->(target)
         ON CREATE SET r1.createdAt = datetime()
         SET r1.score = edge.score,
             r1.rank = edge.rank,
-            r1.updatedAt = datetime()
+            r1.updatedAt = datetime(),
+            r1.userId = coalesce(r1.userId, $userId)
 
         // Reverse edge (target → source) with same score
         WITH source, target, edge
-        MERGE (target)-[r2:OM_SIMILAR {userId: $userId}]->(source)
+        MERGE (target)-[r2:OM_SIMILAR {accessEntity: $accessEntity}]->(source)
         ON CREATE SET r2.createdAt = datetime()
         SET r2.score = edge.score,
             r2.reverseRank = edge.rank,
-            r2.updatedAt = datetime()
+            r2.updatedAt = datetime(),
+            r2.userId = coalesce(r2.userId, $userId)
 
         RETURN count(*) AS created
         """
@@ -104,7 +111,11 @@ class SimilarityCypherBuilder:
     def delete_similarity_edges_for_memory_query() -> str:
         """Delete all outgoing similarity edges for a memory."""
         return """
-        MATCH (m:OM_Memory {id: $memoryId, userId: $userId})-[r:OM_SIMILAR]->()
+        MATCH (m:OM_Memory {id: $memoryId})
+        WITH m, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
+        MATCH (m)-[r:OM_SIMILAR]->()
+        WHERE (r.accessEntity IS NOT NULL AND r.accessEntity = accessEntity)
+           OR (r.accessEntity IS NULL AND r.userId = $userId)
         DELETE r
         RETURN count(r) AS deleted
         """
@@ -113,7 +124,11 @@ class SimilarityCypherBuilder:
     def delete_bidirectional_similarity_edges_query() -> str:
         """Delete all similarity edges (both directions) for a memory."""
         return """
-        MATCH (m:OM_Memory {id: $memoryId, userId: $userId})-[r:OM_SIMILAR]-()
+        MATCH (m:OM_Memory {id: $memoryId})
+        WITH m, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
+        MATCH (m)-[r:OM_SIMILAR]-()
+        WHERE (r.accessEntity IS NOT NULL AND r.accessEntity = accessEntity)
+           OR (r.accessEntity IS NULL AND r.userId = $userId)
         DELETE r
         RETURN count(r) AS deleted
         """
@@ -122,9 +137,18 @@ class SimilarityCypherBuilder:
     def get_similar_memories_query() -> str:
         """Get pre-computed similar memories via OM_SIMILAR edges."""
         return """
-        MATCH (m:OM_Memory {id: $memoryId, userId: $userId})-[r:OM_SIMILAR]->(similar:OM_Memory)
+        MATCH (m:OM_Memory {id: $memoryId})-[r:OM_SIMILAR]->(similar:OM_Memory)
+        WITH m, r, similar, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
         WHERE r.score >= $minScore
           AND ($allowedMemoryIds IS NULL OR similar.id IN $allowedMemoryIds)
+          AND (
+            (similar.accessEntity IS NOT NULL AND similar.accessEntity = accessEntity)
+            OR (similar.accessEntity IS NULL AND similar.userId = $userId)
+          )
+          AND (
+            (r.accessEntity IS NOT NULL AND r.accessEntity = accessEntity)
+            OR (r.accessEntity IS NULL AND r.userId = $userId)
+          )
         RETURN similar.id AS id,
                similar.content AS content,
                similar.category AS category,
@@ -143,7 +167,9 @@ class SimilarityCypherBuilder:
     def count_similarity_edges_query() -> str:
         """Count total similarity edges for a user."""
         return """
-        MATCH ()-[r:OM_SIMILAR {userId: $userId}]->()
+        MATCH ()-[r:OM_SIMILAR]->()
+        WHERE (r.accessEntity IS NOT NULL AND r.accessEntity = $accessEntity)
+           OR (r.accessEntity IS NULL AND r.userId = $userId)
         RETURN count(r) AS edgeCount
         """
 
@@ -178,7 +204,7 @@ class SimilarityProjector:
         self,
         memory_id: str,
         user_id: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> tuple[List[Dict[str, Any]], str]:
         """
         Find K nearest neighbors for a memory using Qdrant.
 
@@ -187,7 +213,8 @@ class SimilarityProjector:
             user_id: String user ID for filtering
 
         Returns:
-            List of {id, score, rank} dicts for similar memories
+            Tuple of (similar list, access_entity) where similar list contains
+            {id, score, rank} dicts.
         """
         try:
             from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -199,23 +226,30 @@ class SimilarityProjector:
                 collection_name=vector_store.collection_name,
                 ids=[memory_id],
                 with_vectors=True,
-                with_payload=False,
+                with_payload=True,
             )
 
             if not points or not points[0].vector:
                 logger.debug(f"No vector found for memory {memory_id}")
-                return []
+                return [], f"user:{user_id}"
 
             embedding = points[0].vector
+            payload = points[0].payload or {}
+            access_entity = payload.get("access_entity") or f"user:{user_id}"
+            org_id = payload.get("org_id")
+            if not org_id and hasattr(vector_store, "org_id"):
+                org_id = getattr(vector_store, "org_id")
 
             # Query for K+1 neighbors (will include self)
+            must_conditions = [FieldCondition(key="access_entity", match=MatchValue(value=access_entity))]
+            if org_id:
+                must_conditions.append(FieldCondition(key="org_id", match=MatchValue(value=org_id)))
+
             hits = vector_store.client.query_points(
                 collection_name=vector_store.collection_name,
                 query=embedding,
                 query_filter=Filter(
-                    must=[
-                        FieldCondition(key="user_id", match=MatchValue(value=user_id))
-                    ]
+                    must=must_conditions
                 ),
                 limit=self.config.k_neighbors + 1,
                 with_payload=False,
@@ -238,11 +272,11 @@ class SimilarityProjector:
                 if len(results) >= self.config.max_edges_per_memory:
                     break
 
-            return results
+            return results, access_entity
 
         except Exception as e:
             logger.warning(f"Error finding similar memories in Qdrant for {memory_id}: {e}")
-            return []
+            return [], f"user:{user_id}"
 
     def project_similarity_edges(
         self,
@@ -262,7 +296,7 @@ class SimilarityProjector:
         Returns:
             Number of edges created
         """
-        similar = self.find_similar_in_qdrant(memory_id, user_id)
+        similar, access_entity = self.find_similar_in_qdrant(memory_id, user_id)
 
         if not similar:
             return 0
@@ -283,24 +317,42 @@ class SimilarityProjector:
                 if self.config.bidirectional:
                     session.run(
                         SimilarityCypherBuilder.delete_bidirectional_similarity_edges_query(),
-                        {"memoryId": memory_id, "userId": user_id}
+                        {
+                            "memoryId": memory_id,
+                            "userId": user_id,
+                            "legacyAccessEntity": f"user:{user_id}",
+                        }
                     )
                 else:
                     session.run(
                         SimilarityCypherBuilder.delete_similarity_edges_for_memory_query(),
-                        {"memoryId": memory_id, "userId": user_id}
+                        {
+                            "memoryId": memory_id,
+                            "userId": user_id,
+                            "legacyAccessEntity": f"user:{user_id}",
+                        }
                     )
 
                 # Create new edges (bidirectional or unidirectional)
                 if self.config.bidirectional:
                     result = session.run(
                         SimilarityCypherBuilder.upsert_bidirectional_similarity_edges_query(),
-                        {"edges": edges, "userId": user_id}
+                        {
+                            "edges": edges,
+                            "userId": user_id,
+                            "accessEntity": access_entity,
+                            "legacyAccessEntity": f"user:{user_id}",
+                        }
                     )
                 else:
                     result = session.run(
                         SimilarityCypherBuilder.upsert_similarity_edges_query(),
-                        {"edges": edges, "userId": user_id}
+                        {
+                            "edges": edges,
+                            "userId": user_id,
+                            "accessEntity": access_entity,
+                            "legacyAccessEntity": f"user:{user_id}",
+                        }
                     )
 
                 record = result.single()
@@ -331,12 +383,20 @@ class SimilarityProjector:
                 if self.config.bidirectional:
                     session.run(
                         SimilarityCypherBuilder.delete_bidirectional_similarity_edges_query(),
-                        {"memoryId": memory_id, "userId": user_id}
+                        {
+                            "memoryId": memory_id,
+                            "userId": user_id,
+                            "legacyAccessEntity": f"user:{user_id}",
+                        }
                     )
                 else:
                     session.run(
                         SimilarityCypherBuilder.delete_similarity_edges_for_memory_query(),
-                        {"memoryId": memory_id, "userId": user_id}
+                        {
+                            "memoryId": memory_id,
+                            "userId": user_id,
+                            "legacyAccessEntity": f"user:{user_id}",
+                        }
                     )
             return True
         except Exception as e:
@@ -374,6 +434,7 @@ class SimilarityProjector:
                         "allowedMemoryIds": allowed_memory_ids,
                         "minScore": float(min_score or 0.0),
                         "limit": max(1, min(int(limit or 10), 100)),
+                        "legacyAccessEntity": f"user:{user_id}",
                     }
                 )
 
@@ -397,13 +458,20 @@ class SimilarityProjector:
             logger.warning(f"Error getting similar memories for {memory_id}: {e}")
             return []
 
-    def count_similarity_edges(self, user_id: str) -> int:
-        """Count total similarity edges for a user."""
+    def count_similarity_edges(
+        self,
+        user_id: str,
+        access_entity: Optional[str] = None,
+    ) -> int:
+        """Count total similarity edges for an access scope."""
         try:
             with self.session_factory() as session:
                 result = session.run(
                     SimilarityCypherBuilder.count_similarity_edges_query(),
-                    {"userId": user_id}
+                    {
+                        "userId": user_id,
+                        "accessEntity": access_entity or f"user:{user_id}",
+                    }
                 )
                 for record in result:
                     return record["edgeCount"]

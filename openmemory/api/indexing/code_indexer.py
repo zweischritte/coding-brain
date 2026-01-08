@@ -13,6 +13,10 @@ from typing import Any, Callable, Optional
 
 from openmemory.api.indexing.api_boundaries import create_api_boundary_analyzer
 from openmemory.api.indexing.ast_parser import ASTParser, Language, Symbol, SymbolType
+from openmemory.api.indexing.deterministic_edges import (
+    DeterministicEdgeExtractor,
+    RepoSymbolIndex,
+)
 from openmemory.api.indexing.fallback_symbols import extract_python_symbols
 from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType, GraphProjection
 from openmemory.api.indexing.scip_symbols import SCIPSymbolExtractor
@@ -58,6 +62,15 @@ class CodeIndexSummary:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class FileParseCache:
+    """Cached parse data for deterministic edge extraction."""
+
+    language: Language
+    symbols: list[Symbol]
+    symbol_pairs: list[tuple[Symbol, str]]
+
+
 class IndexingCancelled(Exception):
     """Raised to abort an indexing run early (e.g., cancellation)."""
 
@@ -85,7 +98,7 @@ class CodeIndexingService:
         self.opensearch_client = opensearch_client
         self.embedding_service = embedding_service
         self.index_name = index_name
-        self.extensions = extensions or [".py", ".ts", ".tsx", ".java", ".js", ".jsx"]
+        self.extensions = extensions or [".py", ".ts", ".tsx", ".java", ".go", ".js", ".jsx"]
         self.ignore_patterns = ignore_patterns or [
             "__pycache__",
             "node_modules",
@@ -103,6 +116,8 @@ class CodeIndexingService:
             else None
         )
         self._embedding_dim = self._resolve_embedding_dim()
+        self._symbol_index: Optional[RepoSymbolIndex] = None
+        self._edge_extractor: Optional[DeterministicEdgeExtractor] = None
 
     def _resolve_embedding_dim(self) -> int:
         provider = getattr(self.embedding_service, "provider", None)
@@ -151,6 +166,47 @@ class CodeIndexingService:
             if max_files is not None and len(files) >= max_files:
                 break
         return files
+
+    def _build_symbol_index(
+        self,
+        source_files: list[Path],
+    ) -> tuple[RepoSymbolIndex, dict[Path, FileParseCache]]:
+        symbol_index = RepoSymbolIndex(self.root_path)
+        parse_cache: dict[Path, FileParseCache] = {}
+
+        for file_path in source_files:
+            language = Language.from_path(file_path)
+            if not language:
+                continue
+            try:
+                content = file_path.read_text(errors="ignore")
+            except Exception as exc:
+                logger.debug(f"Failed to read {file_path} for symbol prepass: {exc}")
+                content = ""
+
+            try:
+                parse_result = self._parser.parse_file(file_path)
+            except Exception as exc:
+                logger.debug(f"Parse failed for {file_path}: {exc}")
+                continue
+
+            symbols = parse_result.symbols
+            if not symbols and language == Language.PYTHON:
+                symbols = extract_python_symbols(content)
+
+            symbol_pairs = [
+                (symbol, str(self._extractor.extract(symbol, file_path)))
+                for symbol in symbols
+            ]
+
+            symbol_index.add_file_symbols(file_path, language, symbol_pairs, content)
+            parse_cache[file_path] = FileParseCache(
+                language=language,
+                symbols=symbols,
+                symbol_pairs=symbol_pairs,
+            )
+
+        return symbol_index, parse_cache
 
     def reset_repo(self) -> None:
         if hasattr(self.graph_driver, "delete_repo_nodes"):
@@ -203,13 +259,19 @@ class CodeIndexingService:
         total_files_estimate = len(source_files)
         report_progress("scan")
 
+        self._symbol_index, parse_cache = self._build_symbol_index(source_files)
+        self._edge_extractor = DeterministicEdgeExtractor(self.root_path, self._symbol_index)
+
         for file_path in source_files:
             files_scanned += 1
             report_progress("parse", file_path)
             try:
+                cache_entry = parse_cache.get(file_path)
                 stats = self.index_file(
                     file_path,
                     phase_callback=lambda phase, path=file_path: report_progress(phase, path),
+                    symbols_override=cache_entry.symbols if cache_entry else None,
+                    skip_call_edges=True,
                 )
             except IndexingCancelled:
                 raise
@@ -230,6 +292,12 @@ class CodeIndexingService:
             summary.call_edges_indexed += stats.call_edges_indexed
             report_progress("graph_projection", file_path)
 
+        summary.call_edges_indexed += self._index_deterministic_edges(
+            source_files,
+            parse_cache,
+            progress_callback=progress_callback,
+        )
+
         if self.opensearch_client:
             try:
                 report_progress("search_indexing")
@@ -244,6 +312,8 @@ class CodeIndexingService:
         self,
         file_path: Path,
         phase_callback: Optional[Callable[[str, Optional[Path]], None]] = None,
+        symbols_override: Optional[list[Symbol]] = None,
+        skip_call_edges: bool = False,
     ) -> FileIndexStats:
         language = Language.from_path(file_path)
         if not language:
@@ -251,10 +321,13 @@ class CodeIndexingService:
 
         content = file_path.read_text(errors="ignore")
         lines = content.splitlines()
-        parse_result = self._parser.parse_file(file_path)
-        symbols = parse_result.symbols
-        if not symbols and language == Language.PYTHON:
-            symbols = extract_python_symbols(content)
+        if symbols_override is not None:
+            symbols = symbols_override
+        else:
+            parse_result = self._parser.parse_file(file_path)
+            symbols = parse_result.symbols
+            if not symbols and language == Language.PYTHON:
+                symbols = extract_python_symbols(content)
         content_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
         file_size = file_path.stat().st_size
 
@@ -274,7 +347,7 @@ class CodeIndexingService:
         for symbol_id in stale_symbols:
             self.graph_driver.delete_node(symbol_id)
 
-        call_edges = self._index_call_edges(symbol_pairs, lines)
+        call_edges = 0 if skip_call_edges else self._index_call_edges(symbol_pairs, lines)
 
         if self._api_analyzer:
             self._index_api_boundaries(language, content, file_path)
@@ -558,3 +631,61 @@ class CodeIndexingService:
 
     def _zero_embedding(self) -> list[float]:
         return [0.0] * self._embedding_dim
+
+    def _index_deterministic_edges(
+        self,
+        source_files: list[Path],
+        parse_cache: dict[Path, FileParseCache],
+        progress_callback: Optional[Callable[[dict[str, Any]], None]] = None,
+    ) -> int:
+        if not self._edge_extractor:
+            return 0
+
+        edges_added = 0
+
+        for file_path in source_files:
+            cache_entry = parse_cache.get(file_path)
+            if not cache_entry:
+                continue
+            if progress_callback:
+                progress_callback(
+                    {
+                        "current_phase": "call_edges",
+                        "current_file": str(file_path),
+                    }
+                )
+            try:
+                content = file_path.read_text(errors="ignore")
+            except Exception as exc:
+                logger.debug(f"Failed to read {file_path} for edge extraction: {exc}")
+                continue
+
+            lines = content.splitlines()
+            if cache_entry.symbol_pairs:
+                edges_added += self._index_call_edges(cache_entry.symbol_pairs, lines)
+
+            edges = self._edge_extractor.extract_edges(file_path, cache_entry.language, content)
+            for source_id, target_id in edges.call_edges:
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.CALLS,
+                    source_id=source_id,
+                    target_id=target_id,
+                    properties={"inferred": False, "resolution": "ast"},
+                )
+            edges_added += len(edges.call_edges)
+
+            for target in {t for t in edges.import_targets if t}:
+                if not target.exists() or not target.is_file():
+                    continue
+                try:
+                    target.relative_to(self.root_path)
+                except ValueError:
+                    continue
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.IMPORTS,
+                    source_id=str(file_path),
+                    target_id=str(target),
+                    properties={"resolution": "path"},
+                )
+
+        return edges_added

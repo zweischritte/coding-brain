@@ -336,6 +336,7 @@ async def find_callers(
             symbol_id=request.symbol_id,
             symbol_name=request.symbol_name,
             depth=request.depth,
+            include_inferred_edges=request.include_inferred_edges,
         )
 
         result = toolkit.callers_tool.find(input_data)
@@ -412,6 +413,7 @@ async def find_callees(
             symbol_id=request.symbol_id,
             symbol_name=request.symbol_name,
             depth=request.depth,
+            include_inferred_edges=request.include_inferred_edges,
         )
 
         result = toolkit.callees_tool.find(input_data)
@@ -488,6 +490,7 @@ async def impact_analysis(
             include_cross_language=request.include_cross_language,
             max_depth=request.max_depth,
             confidence_threshold=str(request.confidence_threshold),
+            include_inferred_edges=request.include_inferred_edges,
         )
 
         result = toolkit.impact_tool.analyze(input_data)

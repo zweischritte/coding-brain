@@ -1,0 +1,79 @@
+{
+  "access_entities": {
+    "org:default_org": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2025-12-31T19:38:42.184987",
+      "last_id": "ee1a8b34-6d55-4bf5-8500-06b7ba7e102b",
+      "processed": 5,
+      "skipped": 0
+    },
+    "project:cloudfactory/shared": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2026-01-06T21:33:49.055343",
+      "last_id": "6b41cdc6-e769-489d-a94f-40c3a7adb5a1",
+      "processed": 68,
+      "skipped": 0
+    },
+    "project:cloudfactory/vgbk": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2026-01-06T21:52:53.281306",
+      "last_id": "11079fa0-224d-483c-b970-8d2f8eebf065",
+      "processed": 180,
+      "skipped": 0
+    },
+    "project:default_org/coding-brain": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2026-01-03T18:43:39.133689",
+      "last_id": "cbf0c71f-5cac-47b7-94eb-1349952aa1b1",
+      "processed": 45,
+      "skipped": 0
+    },
+    "project:default_org/presentation": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2026-01-07T23:09:22.692102",
+      "last_id": "4bc0a15f-9969-4d81-ad18-88d6ebbd40c8",
+      "processed": 68,
+      "skipped": 0
+    },
+    "team:default_org/coding-brain": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2025-12-31T07:37:42.584557",
+      "last_id": "2f98d55d-8173-4372-89e3-ac886159ae93",
+      "processed": 1,
+      "skipped": 0
+    },
+    "user:default_user": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2025-12-29T21:35:21.654561",
+      "last_id": "9e77b459-85ed-44f7-90fb-5c6663a8dcc6",
+      "processed": 4,
+      "skipped": 0
+    },
+    "user:grischadallmer": {
+      "completed": true,
+      "failed": 0,
+      "failed_ids": [],
+      "last_created_at": "2026-01-02T15:55:51.499992",
+      "last_id": "b61b59f6-0f33-42a4-8b20-a1aff129fe6b",
+      "processed": 22,
+      "skipped": 0
+    }
+  },
+  "started_at": "2026-01-07T23:09:12.015450+00:00",
+  "updated_at": "2026-01-08T11:17:49.612766+00:00",
+  "version": 1
+}

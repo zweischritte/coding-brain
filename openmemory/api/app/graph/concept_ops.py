@@ -39,6 +39,17 @@ from app.graph.neo4j_client import get_neo4j_session, is_neo4j_configured, is_ne
 logger = logging.getLogger(__name__)
 
 
+def _normalize_access_filters(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Tuple[List[str], List[str]]:
+    return (
+        access_entities or [f"user:{user_id}"],
+        access_entity_prefixes or [],
+    )
+
+
 # =============================================================================
 # Feature Flag Checks
 # =============================================================================
@@ -77,6 +88,7 @@ def extract_and_store_concepts(
     user_id: str,
     content: str,
     category: Optional[str] = None,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Extract business concepts from memory content and store in graph.
@@ -89,9 +101,10 @@ def extract_and_store_concepts(
 
     Args:
         memory_id: UUID of the memory
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         content: Memory content to extract from
         category: Optional category for concept scoping
+        access_entity: Access entity scope (defaults to user)
 
     Returns:
         Dict with extraction results:
@@ -125,6 +138,7 @@ def extract_and_store_concepts(
         entities_stored = 0
         concepts_stored = 0
 
+        access_entity = access_entity or f"user:{user_id}"
         # Store business entities
         for entity in extraction.entities:
             if entity.importance >= min_confidence:
@@ -135,6 +149,7 @@ def extract_and_store_concepts(
                     importance=entity.importance,
                     context=entity.context,
                     mention_count=entity.mention_count,
+                    access_entity=access_entity,
                 )
                 if result:
                     # Link memory to entity
@@ -143,6 +158,7 @@ def extract_and_store_concepts(
                         user_id=user_id,
                         entity_name=entity.entity,
                         importance=entity.importance,
+                        access_entity=access_entity,
                     )
                     entities_stored += 1
 
@@ -158,6 +174,7 @@ def extract_and_store_concepts(
                     summary=None,
                     source_type=concept.source_type,
                     evidence_count=len(concept.evidence),
+                    access_entity=access_entity,
                 )
                 if result:
                     # Link memory to concept
@@ -166,6 +183,7 @@ def extract_and_store_concepts(
                         user_id=user_id,
                         concept_name=concept.concept,
                         confidence=concept.confidence,
+                        access_entity=access_entity,
                     )
                     # Link concept to mentioned entities
                     for entity_name in concept.entities:
@@ -173,6 +191,7 @@ def extract_and_store_concepts(
                             user_id=user_id,
                             concept_name=concept.concept,
                             entity_name=entity_name,
+                            access_entity=access_entity,
                         )
                     concepts_stored += 1
 
@@ -206,13 +225,15 @@ def extract_and_store_concepts(
 def extract_concepts_batch(
     memories: List[Dict[str, Any]],
     user_id: str,
+    access_entity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Extract concepts from multiple memories in batch.
 
     Args:
         memories: List of dicts with 'id', 'content', and optional 'category'
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
+        access_entity: Default access entity for batch (overridden per memory)
 
     Returns:
         Dict with batch results
@@ -241,6 +262,7 @@ def extract_concepts_batch(
             user_id=user_id,
             content=content,
             category=category,
+            access_entity=memory.get("access_entity") or access_entity,
         )
 
         if "error" in extraction:
@@ -264,16 +286,20 @@ def extract_concepts_batch(
 def get_concept(
     user_id: str,
     name: str,
-) -> Optional[Dict[str, Any]]:
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Optional[Dict[str, Any]] | List[Dict[str, Any]]:
     """
     Get a concept by name with its evidence.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         name: Concept name
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
-        Dict with concept data, or None if not found
+        Dict with concept data, list of matches, or None if not found
     """
     if not is_concepts_enabled():
         return None
@@ -285,7 +311,17 @@ def get_concept(
         if not projector:
             return None
 
-        return projector.get_concept(user_id, name)
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
+        return projector.get_concept(
+            user_id=user_id,
+            name=name,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
 
     except Exception as e:
         logger.error(f"Failed to get concept {name}: {e}")
@@ -299,17 +335,21 @@ def list_concepts(
     min_confidence: Optional[float] = None,
     limit: int = 50,
     offset: int = 0,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     List concepts for a user with optional filters.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         category: Optional category filter
         concept_type: Optional type filter
         min_confidence: Optional minimum confidence filter
         limit: Maximum results (default 50)
         offset: Pagination offset
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of concept dicts
@@ -324,6 +364,11 @@ def list_concepts(
         if not projector:
             return []
 
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         return projector.list_concepts(
             user_id=user_id,
             category=category,
@@ -331,6 +376,8 @@ def list_concepts(
             min_confidence=min_confidence,
             limit=limit,
             offset=offset,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
     except Exception as e:
@@ -341,6 +388,7 @@ def list_concepts(
 def delete_concept(
     user_id: str,
     name: str,
+    access_entity: Optional[str] = None,
 ) -> bool:
     """
     Delete a concept and its relationships.
@@ -362,7 +410,7 @@ def delete_concept(
         if not projector:
             return False
 
-        return projector.delete_concept(user_id, name)
+        return projector.delete_concept(user_id, name, access_entity=access_entity)
 
     except Exception as e:
         logger.error(f"Failed to delete concept {name}: {e}")
@@ -372,13 +420,15 @@ def delete_concept(
 def update_concept_confidence(
     user_id: str,
     name: str,
+    access_entity: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Recalculate concept confidence based on supporting memories.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         name: Concept name
+        access_entity: Access entity scope (defaults to user)
 
     Returns:
         Dict with new confidence and evidence count, or None on error
@@ -393,7 +443,11 @@ def update_concept_confidence(
         if not projector:
             return None
 
-        return projector.update_concept_confidence(user_id, name)
+        return projector.update_concept_confidence(
+            user_id=user_id,
+            name=name,
+            access_entity=access_entity,
+        )
 
     except Exception as e:
         logger.error(f"Failed to update concept confidence: {e}")
@@ -409,15 +463,19 @@ def list_business_entities(
     entity_type: Optional[str] = None,
     min_importance: Optional[float] = None,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     List business entities for a user.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         entity_type: Optional type filter
         min_importance: Optional minimum importance filter
         limit: Maximum results (default 50)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of entity dicts
@@ -428,8 +486,15 @@ def list_business_entities(
     try:
         with get_neo4j_session() as session:
             cypher = """
-            MATCH (e:OM_BizEntity {userId: $userId})
-            WHERE ($type IS NULL OR e.type = $type)
+            MATCH (e:OM_BizEntity)
+            WHERE (
+              (e.accessEntity IS NOT NULL AND (
+                e.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+              ))
+              OR (e.accessEntity IS NULL AND e.userId = $userId)
+            )
+              AND ($type IS NULL OR e.type = $type)
               AND ($minImportance IS NULL OR e.importance >= $minImportance)
             RETURN
                 e.id AS id,
@@ -438,10 +503,16 @@ def list_business_entities(
                 e.importance AS importance,
                 e.context AS context,
                 e.mentionCount AS mentionCount,
+                coalesce(e.accessEntity, $legacyAccessEntity) AS accessEntity,
                 e.createdAt AS createdAt
             ORDER BY e.importance DESC, e.mentionCount DESC
             LIMIT $limit
             """
+            access_entities, access_entity_prefixes = _normalize_access_filters(
+                user_id,
+                access_entities,
+                access_entity_prefixes,
+            )
             result = session.run(
                 cypher,
                 {
@@ -449,6 +520,9 @@ def list_business_entities(
                     "type": entity_type,
                     "minImportance": min_importance,
                     "limit": min(100, max(1, limit)),
+                    "accessEntities": access_entities,
+                    "accessEntityPrefixes": access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{user_id}",
                 }
             )
             entities = []
@@ -460,6 +534,7 @@ def list_business_entities(
                     "importance": record["importance"],
                     "context": record["context"],
                     "mentionCount": record["mentionCount"],
+                    "accessEntity": record["accessEntity"],
                     "createdAt": record["createdAt"],
                 })
             return entities
@@ -476,13 +551,15 @@ def list_business_entities(
 def detect_contradictions_for_memory(
     memory_id: str,
     user_id: str,
+    access_entity: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Detect contradictions between concepts related to a memory.
 
     Args:
         memory_id: UUID of the memory
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
+        access_entity: Access entity scope (defaults to memory access)
 
     Returns:
         List of detected contradictions
@@ -496,17 +573,29 @@ def detect_contradictions_for_memory(
         # Get concepts linked to this memory
         with get_neo4j_session() as session:
             cypher = """
-            MATCH (m:OM_Memory {id: $memoryId})-[:SUPPORTS]->(c:OM_Concept {userId: $userId})
-            RETURN c.name AS name
+            MATCH (m:OM_Memory {id: $memoryId})
+            WITH m, coalesce(m.accessEntity, $legacyAccessEntity) AS resolvedAccess
+            MATCH (m)-[:SUPPORTS]->(c:OM_Concept)
+            WHERE coalesce(c.accessEntity, $legacyAccessEntity) = coalesce($accessEntity, resolvedAccess)
+            RETURN c.name AS name, coalesce(c.accessEntity, $legacyAccessEntity) AS accessEntity
             """
-            result = session.run(cypher, {"memoryId": memory_id, "userId": user_id})
-            concept_names = [record["name"] for record in result]
+            result = session.run(
+                cypher,
+                {
+                    "memoryId": memory_id,
+                    "userId": user_id,
+                    "legacyAccessEntity": f"user:{user_id}",
+                    "accessEntity": access_entity,
+                },
+            )
+            concept_rows = [(record["name"], record["accessEntity"]) for record in result]
 
         all_contradictions = []
-        for concept_name in concept_names:
+        for concept_name, concept_access_entity in concept_rows:
             contradictions = detect_contradictions_for_concept(
                 user_id=user_id,
                 concept_name=concept_name,
+                access_entity=concept_access_entity,
             )
             all_contradictions.extend(contradictions)
 
@@ -520,13 +609,17 @@ def detect_contradictions_for_memory(
 def find_contradictions(
     user_id: str,
     concept_name: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find unresolved contradictions for a concept.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         concept_name: Name of the concept
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of contradiction dicts
@@ -541,7 +634,17 @@ def find_contradictions(
         if not projector:
             return []
 
-        return projector.find_contradictions(user_id, concept_name)
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
+        return projector.find_contradictions(
+            user_id=user_id,
+            concept_name=concept_name,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
 
     except Exception as e:
         logger.error(f"Failed to find contradictions: {e}")
@@ -553,15 +656,17 @@ def resolve_contradiction(
     concept_name1: str,
     concept_name2: str,
     resolution: str,
+    access_entity: Optional[str] = None,
 ) -> bool:
     """
     Mark a contradiction as resolved.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         concept_name1: Name of the first concept
         concept_name2: Name of the second concept
         resolution: Resolution explanation
+        access_entity: Access entity scope (defaults to user)
 
     Returns:
         True if successful, False otherwise
@@ -581,6 +686,7 @@ def resolve_contradiction(
             concept_name1=concept_name1,
             concept_name2=concept_name2,
             resolution=resolution,
+            access_entity=access_entity,
         )
 
     except Exception as e:
@@ -597,15 +703,19 @@ def get_concept_network(
     concept_name: Optional[str] = None,
     depth: int = 2,
     limit: int = 50,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Get the concept network graph for visualization.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         concept_name: Optional seed concept (if None, returns full network)
         depth: Traversal depth (1-3)
         limit: Maximum nodes to return
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Dict with nodes and edges for visualization
@@ -615,13 +725,30 @@ def get_concept_network(
 
     depth = max(1, min(3, depth))
     limit = max(1, min(200, limit))
+    access_entities, access_entity_prefixes = _normalize_access_filters(
+        user_id,
+        access_entities,
+        access_entity_prefixes,
+    )
+
+    def access_filter(alias: str) -> str:
+        return (
+            "("
+            f"({alias}.accessEntity IS NOT NULL AND ("
+            f"{alias}.accessEntity IN $accessEntities "
+            f"OR any(prefix IN $accessEntityPrefixes WHERE {alias}.accessEntity STARTS WITH prefix)"
+            ")) "
+            f"OR ({alias}.accessEntity IS NULL AND {alias}.userId = $userId)"
+            ")"
+        )
 
     try:
         with get_neo4j_session() as session:
             if concept_name:
                 # Get network around a specific concept
                 cypher = f"""
-                MATCH (seed:OM_Concept {{userId: $userId, name: $conceptName}})
+                MATCH (seed:OM_Concept {{name: $conceptName}})
+                WHERE {access_filter("seed")}
                 CALL apoc.path.subgraphAll(seed, {{
                     maxLevel: {depth},
                     relationshipFilter: 'SUPPORTS|RELATES_TO|CONTRADICTS|INVOLVES|MENTIONS'
@@ -631,8 +758,11 @@ def get_concept_network(
                 WITH COLLECT(DISTINCT node) AS allNodes, relationships
                 UNWIND allNodes AS n
                 WITH n, relationships
-                WHERE n:OM_Concept OR n:OM_BizEntity OR n:OM_Memory
-                WITH COLLECT(DISTINCT {{
+                WHERE (n:OM_Concept OR n:OM_BizEntity OR n:OM_Memory)
+                  AND {access_filter("n")}
+                WITH COLLECT(DISTINCT n) AS scopedNodes, relationships
+                WITH scopedNodes,
+                     [n IN scopedNodes | {{
                     id: CASE
                         WHEN n:OM_Concept THEN 'concept:' + n.name
                         WHEN n:OM_BizEntity THEN 'entity:' + n.name
@@ -649,8 +779,12 @@ def get_concept_network(
                         WHEN n:OM_Memory THEN 'memory'
                     END,
                     data: properties(n)
-                }})[0..$limit] AS nodes, relationships
+                }}][0..$limit] AS nodes, relationships
                 UNWIND relationships AS r
+                WITH nodes, scopedNodes, r
+                WHERE {access_filter("r")}
+                  AND startNode(r) IN scopedNodes
+                  AND endNode(r) IN scopedNodes
                 WITH nodes, COLLECT(DISTINCT {{
                     source: CASE
                         WHEN startNode(r):OM_Concept THEN 'concept:' + startNode(r).name
@@ -670,9 +804,30 @@ def get_concept_network(
             else:
                 # Get full concept network
                 cypher = """
-                MATCH (c:OM_Concept {userId: $userId})
-                OPTIONAL MATCH (c)-[r:RELATES_TO|CONTRADICTS]-(other:OM_Concept {userId: $userId})
-                OPTIONAL MATCH (c)-[i:INVOLVES]->(e:OM_BizEntity {userId: $userId})
+                MATCH (c:OM_Concept)
+                WHERE (
+                  (c.accessEntity IS NOT NULL AND (
+                    c.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE c.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (c.accessEntity IS NULL AND c.userId = $userId)
+                )
+                OPTIONAL MATCH (c)-[r:RELATES_TO|CONTRADICTS]-(other:OM_Concept)
+                WHERE (
+                  (other.accessEntity IS NOT NULL AND (
+                    other.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE other.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (other.accessEntity IS NULL AND other.userId = $userId)
+                )
+                OPTIONAL MATCH (c)-[i:INVOLVES]->(e:OM_BizEntity)
+                WHERE (
+                  (e.accessEntity IS NOT NULL AND (
+                    e.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (e.accessEntity IS NULL AND e.userId = $userId)
+                )
                 WITH COLLECT(DISTINCT {
                     id: 'concept:' + c.name,
                     label: c.name,
@@ -715,6 +870,8 @@ def get_concept_network(
                     "userId": user_id,
                     "conceptName": concept_name,
                     "limit": limit,
+                    "accessEntities": access_entities,
+                    "accessEntityPrefixes": access_entity_prefixes,
                 }
             )
 
@@ -735,14 +892,18 @@ def get_concept_evolution(
     user_id: str,
     concept_name: str,
     days: int = 90,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get the evolution of a concept's confidence over time.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         concept_name: Name of the concept
         days: Number of days to look back (default 90)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of dicts with date and confidence snapshots
@@ -753,9 +914,17 @@ def get_concept_evolution(
     try:
         with get_neo4j_session() as session:
             cypher = """
-            MATCH (c:OM_Concept {userId: $userId, name: $conceptName})
+            MATCH (c:OM_Concept {name: $conceptName})
+            WHERE (
+              (c.accessEntity IS NOT NULL AND (
+                c.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE c.accessEntity STARTS WITH prefix)
+              ))
+              OR (c.accessEntity IS NULL AND c.userId = $userId)
+            )
             MATCH (m:OM_Memory)-[s:SUPPORTS]->(c)
-            WHERE m.createdAt >= datetime() - duration({days: $days})
+            WHERE coalesce(m.accessEntity, $legacyAccessEntity) = coalesce(c.accessEntity, $legacyAccessEntity)
+              AND m.createdAt >= datetime() - duration({days: $days})
             WITH c, m, s
             ORDER BY m.createdAt ASC
             WITH c, collect({
@@ -771,6 +940,9 @@ def get_concept_evolution(
                     "userId": user_id,
                     "conceptName": concept_name,
                     "days": max(1, min(365, days)),
+                    "accessEntities": (access_entities or [f"user:{user_id}"]),
+                    "accessEntityPrefixes": access_entity_prefixes or [],
+                    "legacyAccessEntity": f"user:{user_id}",
                 }
             )
 
@@ -792,14 +964,18 @@ def search_concepts(
     user_id: str,
     query: str,
     limit: int = 20,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Full-text search across concepts.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         query: Search query
         limit: Maximum results
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of matching concepts with scores
@@ -815,7 +991,13 @@ def search_concepts(
             cypher = """
             CALL db.index.fulltext.queryNodes('om_concept_fulltext', $query)
             YIELD node, score
-            WHERE node.userId = $userId
+            WHERE score IS NOT NULL AND (
+              (node.accessEntity IS NOT NULL AND (
+                node.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE node.accessEntity STARTS WITH prefix)
+              ))
+              OR (node.accessEntity IS NULL AND node.userId = $userId)
+            )
             RETURN
                 node.id AS id,
                 node.name AS name,
@@ -823,16 +1005,25 @@ def search_concepts(
                 node.confidence AS confidence,
                 node.category AS category,
                 node.summary AS summary,
+                coalesce(node.accessEntity, $legacyAccessEntity) AS accessEntity,
                 score AS searchScore
             ORDER BY score DESC
             LIMIT $limit
             """
+            access_entities, access_entity_prefixes = _normalize_access_filters(
+                user_id,
+                access_entities,
+                access_entity_prefixes,
+            )
             result = session.run(
                 cypher,
                 {
                     "userId": user_id,
                     "query": query.strip(),
                     "limit": min(100, max(1, limit)),
+                    "accessEntities": access_entities,
+                    "accessEntityPrefixes": access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{user_id}",
                 }
             )
 
@@ -845,6 +1036,7 @@ def search_concepts(
                     "confidence": record["confidence"],
                     "category": record["category"],
                     "summary": record["summary"],
+                    "accessEntity": record["accessEntity"],
                     "searchScore": record["searchScore"],
                 })
             return concepts
@@ -859,14 +1051,18 @@ def search_business_entities(
     user_id: str,
     query: str,
     limit: int = 20,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Full-text search across business entities.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         query: Search query
         limit: Maximum results
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of matching entities with scores
@@ -882,23 +1078,38 @@ def search_business_entities(
             cypher = """
             CALL db.index.fulltext.queryNodes('om_bizentity_fulltext', $query)
             YIELD node, score
-            WHERE node.userId = $userId
+            WHERE score IS NOT NULL AND (
+              (node.accessEntity IS NOT NULL AND (
+                node.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE node.accessEntity STARTS WITH prefix)
+              ))
+              OR (node.accessEntity IS NULL AND node.userId = $userId)
+            )
             RETURN
                 node.id AS id,
                 node.name AS name,
                 node.type AS type,
                 node.importance AS importance,
                 node.context AS context,
+                coalesce(node.accessEntity, $legacyAccessEntity) AS accessEntity,
                 score AS searchScore
             ORDER BY score DESC
             LIMIT $limit
             """
+            access_entities, access_entity_prefixes = _normalize_access_filters(
+                user_id,
+                access_entities,
+                access_entity_prefixes,
+            )
             result = session.run(
                 cypher,
                 {
                     "userId": user_id,
                     "query": query.strip(),
                     "limit": min(100, max(1, limit)),
+                    "accessEntities": access_entities,
+                    "accessEntityPrefixes": access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{user_id}",
                 }
             )
 
@@ -910,6 +1121,7 @@ def search_business_entities(
                     "type": record["type"],
                     "importance": record["importance"],
                     "context": record["context"],
+                    "accessEntity": record["accessEntity"],
                     "searchScore": record["searchScore"],
                 })
             return entities
@@ -937,6 +1149,8 @@ def semantic_search_concepts(
     query: str,
     top_k: int = 10,
     min_score: float = 0.5,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Semantic search for concepts using vector embeddings.
@@ -945,31 +1159,52 @@ def semantic_search_concepts(
     understanding the meaning of the query, not just keywords.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         query: Search query text
         top_k: Number of results to return
         min_score: Minimum similarity score (0-1)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of matching concepts with similarity scores
     """
     if not is_vector_search_enabled():
         # Fall back to full-text search
-        return search_concepts(user_id, query, top_k)
+        return search_concepts(
+            user_id,
+            query,
+            top_k,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
 
     try:
         from app.graph.concept_vector_store import get_concept_similarity_service
 
         service = get_concept_similarity_service()
         if not service:
-            return search_concepts(user_id, query, top_k)
+            return search_concepts(
+                user_id,
+                query,
+                top_k,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            )
 
         # Get vector results
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         vector_results = service.search_concepts(
             query=query,
             user_id=user_id,
             top_k=top_k,
             min_score=min_score,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         if not vector_results:
@@ -985,10 +1220,24 @@ def semantic_search_concepts(
             from app.graph.concept_projector import get_projector
             projector = get_projector()
             if projector:
-                full_concept = projector.get_concept(user_id, name)
-                if full_concept:
-                    full_concept["similarityScore"] = vr.get("score", 0)
-                    enriched_results.append(full_concept)
+                access_entity = vr.get("access_entity")
+                full_concepts = projector.get_concept(
+                    user_id=user_id,
+                    name=name,
+                    access_entities=access_entities,
+                    access_entity_prefixes=access_entity_prefixes,
+                )
+                if isinstance(full_concepts, list):
+                    scoped = [
+                        c for c in full_concepts
+                        if not access_entity or c.get("accessEntity") == access_entity
+                    ]
+                    selected = scoped[0] if scoped else (full_concepts[0] if full_concepts else None)
+                else:
+                    selected = full_concepts
+                if selected:
+                    selected["similarityScore"] = vr.get("score", 0)
+                    enriched_results.append(selected)
                     continue
 
             # Fall back to vector result if graph lookup fails
@@ -1005,13 +1254,21 @@ def semantic_search_concepts(
     except Exception as e:
         logger.error(f"Semantic search failed: {e}")
         # Fall back to full-text
-        return search_concepts(user_id, query, top_k)
+        return search_concepts(
+            user_id,
+            query,
+            top_k,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
 
 
 def find_similar_concepts(
     user_id: str,
     concept_name: str,
     top_k: int = 5,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find concepts semantically similar to a given concept.
@@ -1022,9 +1279,11 @@ def find_similar_concepts(
     - Building concept clusters
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         concept_name: Name of the seed concept
         top_k: Number of similar concepts to return
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of similar concepts with similarity scores
@@ -1039,10 +1298,17 @@ def find_similar_concepts(
         if not service:
             return []
 
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         return service.find_similar_concepts(
             concept_name=concept_name,
             user_id=user_id,
             top_k=top_k,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
     except Exception as e:
@@ -1054,6 +1320,8 @@ def find_concept_duplicates(
     user_id: str,
     concept_name: str,
     threshold: Optional[float] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find potential duplicate concepts for a given concept.
@@ -1062,9 +1330,11 @@ def find_concept_duplicates(
     to identify concepts that likely represent the same thing.
 
     Args:
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         concept_name: Name of the concept to check
         threshold: Similarity threshold (default: from config, typically 0.75)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of potential duplicates with similarity scores
@@ -1091,11 +1361,18 @@ def find_concept_duplicates(
         embedding = service.embedder.embed_text(concept_name)
 
         # Find similar with high threshold
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         results = service.store.search_similar(
             query_embedding=embedding,
             user_id=user_id,
             top_k=10,
             min_score=threshold,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
         )
 
         # Filter out exact name matches

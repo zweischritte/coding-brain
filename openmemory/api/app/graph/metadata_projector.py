@@ -146,6 +146,10 @@ class MemoryMetadata:
         else:
             tags = {}
 
+        access_entity = metadata.get("access_entity") or data.get("access_entity")
+        if not access_entity and user_id:
+            access_entity = f"user:{user_id}"
+
         return cls(
             id=memory_id,
             user_id=user_id,
@@ -162,7 +166,7 @@ class MemoryMetadata:
             source=metadata.get("source") or metadata.get("src"),
             source_app=metadata.get("source_app"),
             mcp_client=metadata.get("mcp_client"),
-            access_entity=metadata.get("access_entity"),
+            access_entity=access_entity,
             tags=tags,
         )
 
@@ -185,8 +189,8 @@ class CypherBuilder:
         return [
             # Unique constraint on OM_Memory.id
             "CREATE CONSTRAINT om_memory_id IF NOT EXISTS FOR (m:OM_Memory) REQUIRE m.id IS UNIQUE",
-            # Composite unique on OM_Entity (userId + name)
-            "CREATE CONSTRAINT om_entity_user_name IF NOT EXISTS FOR (e:OM_Entity) REQUIRE (e.userId, e.name) IS UNIQUE",
+            # Composite unique on OM_Entity (accessEntity + name)
+            "CREATE CONSTRAINT om_entity_access_name IF NOT EXISTS FOR (e:OM_Entity) REQUIRE (e.accessEntity, e.name) IS UNIQUE",
             # Unique constraints on dimension nodes
             "CREATE CONSTRAINT om_category_name IF NOT EXISTS FOR (c:OM_Category) REQUIRE c.name IS UNIQUE",
             "CREATE CONSTRAINT om_scope_name IF NOT EXISTS FOR (s:OM_Scope) REQUIRE s.name IS UNIQUE",
@@ -195,20 +199,29 @@ class CypherBuilder:
             "CREATE CONSTRAINT om_tag_key IF NOT EXISTS FOR (t:OM_Tag) REQUIRE t.key IS UNIQUE",
             "CREATE CONSTRAINT om_evidence_name IF NOT EXISTS FOR (e:OM_Evidence) REQUIRE e.name IS UNIQUE",
             "CREATE CONSTRAINT om_app_name IF NOT EXISTS FOR (a:OM_App) REQUIRE a.name IS UNIQUE",
-            # Index on userId for efficient filtering (camelCase per best practices)
+            # Index on accessEntity for efficient filtering (camelCase per best practices)
+            "CREATE INDEX om_memory_access_entity IF NOT EXISTS FOR (m:OM_Memory) ON (m.accessEntity)",
+            # Index on userId for audit queries
             "CREATE INDEX om_memory_user_id IF NOT EXISTS FOR (m:OM_Memory) ON (m.userId)",
             # Composite index for time-range queries (common pattern)
+            "CREATE INDEX om_memory_access_created IF NOT EXISTS FOR (m:OM_Memory) ON (m.accessEntity, m.createdAt)",
             "CREATE INDEX om_memory_user_created IF NOT EXISTS FOR (m:OM_Memory) ON (m.userId, m.createdAt)",
-            # Index on OM_Entity.userId for user-scoped entity lookups
+            # Index on OM_Entity.accessEntity for scope lookups
+            "CREATE INDEX om_entity_access_entity IF NOT EXISTS FOR (e:OM_Entity) ON (e.accessEntity)",
+            # Index on OM_Entity.userId for audit queries
             "CREATE INDEX om_entity_user_id IF NOT EXISTS FOR (e:OM_Entity) ON (e.userId)",
             # Indexes for entity-to-entity edges (OM_CO_MENTIONED)
+            "CREATE INDEX om_co_mentioned_access_entity IF NOT EXISTS FOR ()-[r:OM_CO_MENTIONED]-() ON (r.accessEntity)",
             "CREATE INDEX om_co_mentioned_user_id IF NOT EXISTS FOR ()-[r:OM_CO_MENTIONED]-() ON (r.userId)",
             # Indexes for tag-to-tag edges (OM_COOCCURS)
+            "CREATE INDEX om_cooccurs_access_entity IF NOT EXISTS FOR ()-[r:OM_COOCCURS]-() ON (r.accessEntity)",
             "CREATE INDEX om_cooccurs_user_id IF NOT EXISTS FOR ()-[r:OM_COOCCURS]-() ON (r.userId)",
             # Indexes for memory-to-memory similarity edges (OM_SIMILAR)
+            "CREATE INDEX om_similar_access_entity IF NOT EXISTS FOR ()-[r:OM_SIMILAR]-() ON (r.accessEntity)",
             "CREATE INDEX om_similar_user_id IF NOT EXISTS FOR ()-[r:OM_SIMILAR]-() ON (r.userId)",
             "CREATE INDEX om_similar_score IF NOT EXISTS FOR ()-[r:OM_SIMILAR]-() ON (r.score)",
             # Indexes for entity-to-entity typed relationship edges (OM_RELATION)
+            "CREATE INDEX om_relation_access_entity IF NOT EXISTS FOR ()-[r:OM_RELATION]-() ON (r.accessEntity)",
             "CREATE INDEX om_relation_user_id IF NOT EXISTS FOR ()-[r:OM_RELATION]-() ON (r.userId)",
             "CREATE INDEX om_relation_type IF NOT EXISTS FOR ()-[r:OM_RELATION]-() ON (r.type)",
             # Index on memory state for filtering active/deleted
@@ -272,8 +285,16 @@ class CypherBuilder:
         """Generate query to create entity relation."""
         return """
         MATCH (m:OM_Memory {id: $memoryId})
-        MERGE (e:OM_Entity {userId: $userId, name: $entityName})
-        MERGE (m)-[:OM_ABOUT]->(e)
+        WITH m, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
+        MERGE (e:OM_Entity {accessEntity: accessEntity, name: $entityName})
+        ON CREATE SET e.userId = $userId,
+                      e.createdAt = datetime(),
+                      e.displayName = $entityDisplayName
+        ON MATCH SET e.updatedAt = datetime(),
+                     e.displayName = coalesce(e.displayName, $entityDisplayName)
+        MERGE (m)-[r:OM_ABOUT]->(e)
+        ON CREATE SET r.createdAt = datetime()
+        ON MATCH SET r.updatedAt = datetime()
         """
 
     @staticmethod
@@ -369,14 +390,18 @@ class CypherBuilder:
         an edge between them with count and sample memory IDs.
         """
         return """
-        MATCH (m:OM_Memory {id: $memoryId})-[:OM_ABOUT]->(e1:OM_Entity {userId: $userId})
-        MATCH (m)-[:OM_ABOUT]->(e2:OM_Entity {userId: $userId})
+        MATCH (m:OM_Memory {id: $memoryId})-[:OM_ABOUT]->(e1:OM_Entity)
+        MATCH (m)-[:OM_ABOUT]->(e2:OM_Entity)
+        WITH m, e1, e2, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
         WHERE e1.name < e2.name
-        MERGE (e1)-[r:OM_CO_MENTIONED {userId: $userId}]->(e2)
+          AND coalesce(e1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(e2.accessEntity, $legacyAccessEntity) = accessEntity
+        MERGE (e1)-[r:OM_CO_MENTIONED {accessEntity: accessEntity}]->(e2)
         ON CREATE SET r.count = 1,
                       r.memoryIds = [$memoryId],
                       r.createdAt = datetime(),
-                      r.updatedAt = datetime()
+                      r.updatedAt = datetime(),
+                      r.userId = $userId
         ON MATCH SET r.count = r.count + 1,
                      r.memoryIds = CASE
                        WHEN size(r.memoryIds) < 5 AND NOT $memoryId IN r.memoryIds
@@ -395,9 +420,12 @@ class CypherBuilder:
         Removes edges with count <= 0.
         """
         return """
-        MATCH (e1:OM_Entity {userId: $userId})<-[:OM_ABOUT]-(m:OM_Memory {id: $memoryId})-[:OM_ABOUT]->(e2:OM_Entity {userId: $userId})
+        MATCH (e1:OM_Entity)<-[:OM_ABOUT]-(m:OM_Memory {id: $memoryId})-[:OM_ABOUT]->(e2:OM_Entity)
+        WITH e1, e2, m, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
         WHERE e1.name < e2.name
-        MATCH (e1)-[r:OM_CO_MENTIONED {userId: $userId}]->(e2)
+          AND coalesce(e1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(e2.accessEntity, $legacyAccessEntity) = accessEntity
+        MATCH (e1)-[r:OM_CO_MENTIONED {accessEntity: accessEntity}]->(e2)
         SET r.count = r.count - 1,
             r.memoryIds = [mid IN r.memoryIds WHERE mid <> $memoryId],
             r.updatedAt = datetime()
@@ -411,15 +439,32 @@ class CypherBuilder:
     def get_entity_connections_query() -> str:
         """Get all OM_CO_MENTIONED connections for an entity."""
         return """
-        MATCH (e:OM_Entity {userId: $userId, name: $entityName})
-        OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED {userId: $userId}]-(other:OM_Entity)
+        MATCH (e:OM_Entity {name: $entityName})
+        WHERE (
+          (e.accessEntity IS NOT NULL AND (
+            e.accessEntity IN $accessEntities
+            OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+          ))
+          OR (e.accessEntity IS NULL AND e.userId = $userId)
+        )
+        OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED]-(other:OM_Entity)
         WHERE r.count >= $minCount
+          AND (
+            (r.accessEntity IS NOT NULL AND r.accessEntity = e.accessEntity)
+            OR (r.accessEntity IS NULL AND r.userId = $userId)
+          )
+          AND (
+            (other.accessEntity IS NOT NULL AND other.accessEntity = e.accessEntity)
+            OR (other.accessEntity IS NULL AND other.userId = $userId)
+          )
         WITH e, other, r
         ORDER BY r.count DESC
         LIMIT $limit
         RETURN e.name AS entity,
+               coalesce(e.displayName, e.name) AS entityDisplayName,
                collect({
                  entity: other.name,
+                 displayName: coalesce(other.displayName, other.name),
                  count: r.count,
                  memoryIds: r.memoryIds
                }) AS connections
@@ -433,15 +478,20 @@ class CypherBuilder:
         Creates edges between all entity pairs that appear together in memories.
         """
         return """
-        MATCH (e1:OM_Entity {userId: $userId})<-[:OM_ABOUT]-(m:OM_Memory {userId: $userId})-[:OM_ABOUT]->(e2:OM_Entity {userId: $userId})
+        MATCH (e1:OM_Entity)<-[:OM_ABOUT]-(m:OM_Memory)-[:OM_ABOUT]->(e2:OM_Entity)
+        WITH e1, e2, m, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
         WHERE e1.name < e2.name
-        WITH e1, e2, count(m) AS cnt, collect(m.id)[0..5] AS sampleIds
+          AND coalesce(e1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(e2.accessEntity, $legacyAccessEntity) = accessEntity
+          AND accessEntity = $accessEntity
+        WITH e1, e2, accessEntity, count(m) AS cnt, collect(m.id)[0..5] AS sampleIds
         WHERE cnt >= $minCount
-        MERGE (e1)-[r:OM_CO_MENTIONED {userId: $userId}]->(e2)
+        MERGE (e1)-[r:OM_CO_MENTIONED {accessEntity: accessEntity}]->(e2)
         ON CREATE SET r.createdAt = datetime()
         SET r.count = cnt,
             r.memoryIds = sampleIds,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.userId = coalesce(r.userId, $userId)
         RETURN count(r) AS edgesCreated
         """
 
@@ -459,20 +509,24 @@ class CypherBuilder:
         """
         return """
         // First get total memories and tag frequencies
-        MATCH (m:OM_Memory {userId: $userId})
+        MATCH (m:OM_Memory)
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
         WITH count(m) AS totalMemories
 
         // Get co-occurrences
-        MATCH (m:OM_Memory {userId: $userId})-[:OM_TAGGED]->(t1:OM_Tag)
+        MATCH (m:OM_Memory)-[:OM_TAGGED]->(t1:OM_Tag)
         MATCH (m)-[:OM_TAGGED]->(t2:OM_Tag)
-        WHERE t1.key < t2.key
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+          AND t1.key < t2.key
         WITH totalMemories, t1, t2, count(m) AS cooccurCount
         WHERE cooccurCount >= $minCount
 
         // Get individual tag frequencies
-        MATCH (m1:OM_Memory {userId: $userId})-[:OM_TAGGED]->(t1)
+        MATCH (m1:OM_Memory)-[:OM_TAGGED]->(t1)
+        WHERE coalesce(m1.accessEntity, $legacyAccessEntity) = $accessEntity
         WITH totalMemories, t1, t2, cooccurCount, count(m1) AS countA
-        MATCH (m2:OM_Memory {userId: $userId})-[:OM_TAGGED]->(t2)
+        MATCH (m2:OM_Memory)-[:OM_TAGGED]->(t2)
+        WHERE coalesce(m2.accessEntity, $legacyAccessEntity) = $accessEntity
         WITH totalMemories, t1, t2, cooccurCount, countA, count(m2) AS countB
 
         // Calculate PMI: log2(P(a,b) / (P(a) * P(b)))
@@ -491,11 +545,12 @@ class CypherBuilder:
 
         WHERE npmi >= $minPmi
 
-        MERGE (t1)-[r:OM_COOCCURS {userId: $userId}]->(t2)
+        MERGE (t1)-[r:OM_COOCCURS {accessEntity: $accessEntity}]->(t2)
         ON CREATE SET r.createdAt = datetime()
         SET r.count = cooccurCount,
             r.pmi = npmi,
-            r.updatedAt = datetime()
+            r.updatedAt = datetime(),
+            r.userId = coalesce(r.userId, $userId)
         RETURN count(r) AS edgesCreated
         """
 
@@ -511,12 +566,14 @@ class CypherBuilder:
         return """
         MATCH (m:OM_Memory {id: $memoryId})-[:OM_TAGGED]->(t1:OM_Tag)
         MATCH (m)-[:OM_TAGGED]->(t2:OM_Tag)
+        WITH m, t1, t2, coalesce(m.accessEntity, $legacyAccessEntity) AS accessEntity
         WHERE t1.key < t2.key
-        MERGE (t1)-[r:OM_COOCCURS {userId: $userId}]->(t2)
+        MERGE (t1)-[r:OM_COOCCURS {accessEntity: accessEntity}]->(t2)
         ON CREATE SET r.count = 1,
                       r.pmi = 0.0,
                       r.createdAt = datetime(),
-                      r.updatedAt = datetime()
+                      r.updatedAt = datetime(),
+                      r.userId = $userId
         ON MATCH SET r.count = r.count + 1,
                      r.updatedAt = datetime()
         RETURN count(r) AS updated
@@ -526,8 +583,15 @@ class CypherBuilder:
     def get_related_tags_query() -> str:
         """Get co-occurring tags for a given tag."""
         return """
-        MATCH (t:OM_Tag {key: $tagKey})-[r:OM_COOCCURS {userId: $userId}]-(other:OM_Tag)
+        MATCH (t:OM_Tag {key: $tagKey})-[r:OM_COOCCURS]-(other:OM_Tag)
         WHERE r.count >= $minCount
+          AND (
+            (r.accessEntity IS NOT NULL AND (
+              r.accessEntity IN $accessEntities
+              OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+            ))
+            OR (r.accessEntity IS NULL AND r.userId = $userId)
+          )
         RETURN other.key AS tag,
                r.count AS count,
                r.pmi AS pmi
@@ -550,9 +614,15 @@ class CypherBuilder:
         return """
         CALL db.index.fulltext.queryNodes('om_memory_content', $searchText)
         YIELD node, score
-        WHERE node.userId = $userId
-          AND ($allowedMemoryIds IS NULL OR node.id IN $allowedMemoryIds)
+        WHERE ($allowedMemoryIds IS NULL OR node.id IN $allowedMemoryIds)
           AND node.state = 'active'
+          AND (
+            (node.accessEntity IS NOT NULL AND (
+              node.accessEntity IN $accessEntities
+              OR any(prefix IN $accessEntityPrefixes WHERE node.accessEntity STARTS WITH prefix)
+            ))
+            OR (node.accessEntity IS NULL AND node.userId = $userId)
+          )
         RETURN node.id AS id,
                node.content AS content,
                node.category AS category,
@@ -575,8 +645,15 @@ class CypherBuilder:
         return """
         CALL db.index.fulltext.queryNodes('om_entity_name', $searchText)
         YIELD node, score
-        WHERE node.userId = $userId
+        WHERE (
+          (node.accessEntity IS NOT NULL AND (
+            node.accessEntity IN $accessEntities
+            OR any(prefix IN $accessEntityPrefixes WHERE node.accessEntity STARTS WITH prefix)
+          ))
+          OR (node.accessEntity IS NULL AND node.userId = $userId)
+        )
         RETURN node.name AS name,
+               coalesce(node.displayName, node.name) AS displayName,
                score AS searchScore
         ORDER BY score DESC
         LIMIT $limit
@@ -595,10 +672,26 @@ class CypherBuilder:
         For PageRank, use Neo4j GDS library.
         """
         return """
-        MATCH (e:OM_Entity {userId: $userId})
-        OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED {userId: $userId}]-(other:OM_Entity)
+        MATCH (e:OM_Entity)
+        WHERE (
+          (e.accessEntity IS NOT NULL AND (
+            e.accessEntity IN $accessEntities
+            OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+          ))
+          OR (e.accessEntity IS NULL AND e.userId = $userId)
+        )
+        OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED]-(other:OM_Entity)
+        WHERE (
+          (r.accessEntity IS NOT NULL AND r.accessEntity = e.accessEntity)
+          OR (r.accessEntity IS NULL AND r.userId = $userId)
+        )
+          AND (
+            (other.accessEntity IS NOT NULL AND other.accessEntity = e.accessEntity)
+            OR (other.accessEntity IS NULL AND other.userId = $userId)
+          )
         WITH e, count(r) AS degree, sum(r.count) AS totalMentions
         RETURN e.name AS entity,
+               coalesce(e.displayName, e.name) AS displayName,
                degree AS connections,
                totalMentions AS mentionCount
         ORDER BY totalMentions DESC, degree DESC
@@ -613,11 +706,22 @@ class CypherBuilder:
         Shows how many shared dimensions each memory has with others.
         """
         return """
-        MATCH (m:OM_Memory {userId: $userId})
-        WHERE $allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds
+        MATCH (m:OM_Memory)
+        WHERE ($allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds)
+          AND (
+            (m.accessEntity IS NOT NULL AND (
+              m.accessEntity IN $accessEntities
+              OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+            ))
+            OR (m.accessEntity IS NULL AND m.userId = $userId)
+          )
         OPTIONAL MATCH (m)-[r]->(:OM_Entity)
         WITH m, count(r) AS entityCount
-        OPTIONAL MATCH (m)-[:OM_SIMILAR]->(similar:OM_Memory)
+        OPTIONAL MATCH (m)-[sim:OM_SIMILAR]->(similar:OM_Memory)
+        WHERE (
+          (sim.accessEntity IS NOT NULL AND sim.accessEntity = m.accessEntity)
+          OR (sim.accessEntity IS NULL AND sim.userId = $userId)
+        )
         WITH m, entityCount, count(similar) AS similarCount
         RETURN m.id AS id,
                m.content AS content,
@@ -662,6 +766,10 @@ class CypherBuilder:
                    WHEN target:OM_App THEN target.name
                    ELSE null
                END AS targetValue,
+               CASE
+                   WHEN target:OM_Entity THEN coalesce(target.displayName, target.name)
+                   ELSE null
+               END AS targetDisplayName,
                r.tagValue AS relationValue,
                CASE
                    WHEN type(r) = 'OM_SIMILAR' THEN r.score
@@ -737,6 +845,19 @@ class MetadataProjector:
             return json.dumps(value)
         return str(value)
 
+    def _normalize_access_filters(
+        self,
+        user_id: str,
+        access_entities: Optional[List[str]],
+        access_entity_prefixes: Optional[List[str]],
+    ) -> Tuple[List[str], List[str]]:
+        """Ensure access_entity filters are always populated with a safe default."""
+        if not access_entities:
+            access_entities = [f"user:{user_id}"] if user_id else []
+        if access_entity_prefixes is None:
+            access_entity_prefixes = []
+        return access_entities, access_entity_prefixes
+
     def upsert_memory(self, metadata: MemoryMetadata) -> bool:
         """
         Upsert a memory and its metadata relations.
@@ -783,14 +904,25 @@ class MetadataProjector:
                 if self.config.create_dimension_nodes:
                     # Entity relation
                     if metadata.entity:
-                        session.run(
-                            CypherBuilder.entity_relation_query(),
-                            {
-                                "memoryId": metadata.id,
-                                "userId": metadata.user_id,
-                                "entityName": metadata.entity,
-                            }
-                        )
+                        from app.graph.entity_normalizer import normalize_entity_name
+
+                        normalized_entity = normalize_entity_name(metadata.entity)
+                        if not normalized_entity:
+                            logger.warning(
+                                f"Skipping entity relation for memory {metadata.id}: invalid entity '{metadata.entity}'"
+                            )
+                            normalized_entity = None
+                        if normalized_entity:
+                            session.run(
+                                CypherBuilder.entity_relation_query(),
+                                {
+                                    "memoryId": metadata.id,
+                                    "userId": metadata.user_id,
+                                    "entityName": normalized_entity,
+                                    "entityDisplayName": metadata.entity,
+                                    "legacyAccessEntity": f"user:{metadata.user_id}",
+                                }
+                            )
 
                     # Category relation
                     if metadata.category:
@@ -943,6 +1075,8 @@ class MetadataProjector:
                         "target_label": record["targetLabel"],
                         "target_value": record["targetValue"],
                     }
+                    if record.get("targetDisplayName") is not None:
+                        relation["target_display_name"] = record["targetDisplayName"]
                     if record["relationValue"] is not None:
                         relation["value"] = record["relationValue"]
 
@@ -971,6 +1105,8 @@ class MetadataProjector:
         memory_id: str,
         user_id: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Get a single OM_Memory node's key properties.
@@ -985,16 +1121,25 @@ class MetadataProjector:
         """
         try:
             with self.session_factory() as session:
-                match = (
-                    "MATCH (m:OM_Memory {id: $memoryId, userId: $userId})"
-                    if allowed_memory_ids is None
-                    else "MATCH (m:OM_Memory {id: $memoryId})"
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
                 )
+                match = "MATCH (m:OM_Memory {id: $memoryId})"
                 cypher = f"""
                 {match}
                 WHERE ($allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds)
+                  AND (
+                    (m.accessEntity IS NOT NULL AND (
+                      m.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (m.accessEntity IS NULL AND m.userId = $userId)
+                  )
                 RETURN m.id AS id,
                        m.userId AS userId,
+                       m.accessEntity AS accessEntity,
                        m.content AS content,
                        m.createdAt AS createdAt,
                        m.updatedAt AS updatedAt,
@@ -1013,12 +1158,15 @@ class MetadataProjector:
                         "memoryId": memory_id,
                         "userId": user_id,
                         "allowedMemoryIds": allowed_memory_ids,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     },
                 )
                 for record in result:
                     return {
                         "id": record["id"],
                         "userId": record["userId"],
+                        "accessEntity": record["accessEntity"],
                         "content": record["content"],
                         "createdAt": record["createdAt"],
                         "updatedAt": record["updatedAt"],
@@ -1040,6 +1188,8 @@ class MetadataProjector:
         memory_id: str,
         user_id: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         rel_types: Optional[List[str]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -1064,16 +1214,13 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                seed_match = (
-                    "MATCH (seed:OM_Memory {id: $memoryId, userId: $userId})"
-                    if allowed_memory_ids is None
-                    else "MATCH (seed:OM_Memory {id: $memoryId})"
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
                 )
-                other_match = (
-                    "MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory {userId: $userId})"
-                    if allowed_memory_ids is None
-                    else "MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory)"
-                )
+                seed_match = "MATCH (seed:OM_Memory {id: $memoryId})"
+                other_match = "MATCH (seed)-[r]->(dim)<-[r2]-(other:OM_Memory)"
                 cypher = "\n".join(
                     [
                         seed_match,
@@ -1083,6 +1230,20 @@ class MetadataProjector:
                         "  AND type(r2) = type(r)",
                         "  AND ($allowedMemoryIds IS NULL OR other.id IN $allowedMemoryIds)",
                         "  AND ($allowedMemoryIds IS NULL OR seed.id IN $allowedMemoryIds)",
+                        "  AND (",
+                        "    (seed.accessEntity IS NOT NULL AND (",
+                        "      seed.accessEntity IN $accessEntities",
+                        "      OR any(prefix IN $accessEntityPrefixes WHERE seed.accessEntity STARTS WITH prefix)",
+                        "    ))",
+                        "    OR (seed.accessEntity IS NULL AND seed.userId = $userId)",
+                        "  )",
+                        "  AND (",
+                        "    (other.accessEntity IS NOT NULL AND (",
+                        "      other.accessEntity IN $accessEntities",
+                        "      OR any(prefix IN $accessEntityPrefixes WHERE other.accessEntity STARTS WITH prefix)",
+                        "    ))",
+                        "    OR (other.accessEntity IS NULL AND other.userId = $userId)",
+                        "  )",
                         "WITH other,",
                         "     collect(DISTINCT {",
                         "        type: type(r),",
@@ -1096,6 +1257,10 @@ class MetadataProjector:
                         "            WHEN dim:OM_Tag THEN dim.key",
                         "            WHEN dim:OM_Evidence THEN dim.name",
                         "            WHEN dim:OM_App THEN dim.name",
+                        "            ELSE null",
+                        "        END,",
+                        "        targetDisplayName: CASE",
+                        "            WHEN dim:OM_Entity THEN coalesce(dim.displayName, dim.name)",
                         "            ELSE null",
                         "        END,",
                         "        seedValue: r.tagValue,",
@@ -1112,6 +1277,7 @@ class MetadataProjector:
                         "       other.artifactType AS artifactType,",
                         "       other.artifactRef AS artifactRef,",
                         "       other.entity AS entity,",
+                        "       other.accessEntity AS accessEntity,",
                         "       other.source AS source,",
                         "       sharedRelations AS sharedRelations,",
                         "       sharedCount AS sharedCount",
@@ -1128,6 +1294,8 @@ class MetadataProjector:
                         "allowedMemoryIds": allowed_memory_ids,
                         "relTypes": rel_types,
                         "limit": limit,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     },
                 )
 
@@ -1144,6 +1312,8 @@ class MetadataProjector:
                             "targetLabel": rel.get("targetLabel"),
                             "targetValue": rel.get("targetValue"),
                         }
+                        if rel.get("targetDisplayName") is not None:
+                            rel_out["targetDisplayName"] = rel.get("targetDisplayName")
                         if rel.get("seedValue") is not None:
                             rel_out["seedValue"] = rel.get("seedValue")
                         if rel.get("otherValue") is not None:
@@ -1162,6 +1332,7 @@ class MetadataProjector:
                             "artifactType": record["artifactType"],
                             "artifactRef": record["artifactRef"],
                             "entity": record["entity"],
+                            "accessEntity": record["accessEntity"],
                             "source": record["source"],
                             "sharedRelations": normalized_shared,
                             "sharedCount": record["sharedCount"],
@@ -1179,6 +1350,8 @@ class MetadataProjector:
         user_id: str,
         group_by: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """
@@ -1195,8 +1368,13 @@ class MetadataProjector:
         """
         group_by = (group_by or "").strip().lower()
         limit = max(1, min(int(limit or 20), 200))
-        memory_label = "m:OM_Memory {userId: $userId}" if allowed_memory_ids is None else "m:OM_Memory"
-        entity_label = "d:OM_Entity {userId: $userId}" if allowed_memory_ids is None else "d:OM_Entity"
+        access_entities, access_entity_prefixes = self._normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
+        memory_label = "m:OM_Memory"
+        entity_label = "d:OM_Entity"
 
         # Cypher fragments per aggregation type
         if group_by == "category":
@@ -1235,11 +1413,38 @@ class MetadataProjector:
                 "Use one of: category, scope, artifact_type, artifact_ref, tag, entity, app, evidence, source, state."
             )
 
+        memory_access_filter = """
+        (
+          (m.accessEntity IS NOT NULL AND (
+            m.accessEntity IN $accessEntities
+            OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+          ))
+          OR (m.accessEntity IS NULL AND m.userId = $userId)
+        )
+        """
+        entity_access_filter = """
+        (
+          (d.accessEntity IS NOT NULL AND (
+            d.accessEntity IN $accessEntities
+            OR any(prefix IN $accessEntityPrefixes WHERE d.accessEntity STARTS WITH prefix)
+          ))
+          OR (d.accessEntity IS NULL AND d.userId = $userId)
+        )
+        """
+        extra_entity_filter = f"AND {entity_access_filter}" if group_by == "entity" else ""
+        display_expr = (
+            "coalesce(d.displayName, d.name)"
+            if group_by == "entity"
+            else "null"
+        )
+
         cypher = f"""
         {match}
         WHERE ($allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds)
+          AND {memory_access_filter}
+          {extra_entity_filter}
           AND {key_expr} IS NOT NULL
-        RETURN {key_expr} AS key, count(DISTINCT m) AS count
+        RETURN {key_expr} AS key, count(DISTINCT m) AS count, {display_expr} AS displayName
         ORDER BY count DESC, key ASC
         LIMIT $limit
         """
@@ -1252,11 +1457,17 @@ class MetadataProjector:
                         "userId": user_id,
                         "allowedMemoryIds": allowed_memory_ids,
                         "limit": limit,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     },
                 )
                 buckets: List[Dict[str, Any]] = []
                 for record in result:
-                    buckets.append({"key": record["key"], "count": record["count"]})
+                    bucket = {"key": record["key"], "count": record["count"]}
+                    display_name = record.get("displayName")
+                    if isinstance(display_name, str) and display_name.strip():
+                        bucket["displayName"] = display_name
+                    buckets.append(bucket)
                 return buckets
         except Exception as e:
             logger.error(f"Failed to aggregate memories by {group_by}: {e}")
@@ -1266,6 +1477,8 @@ class MetadataProjector:
         self,
         user_id: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 20,
         min_count: int = 2,
         sample_size: int = 3,
@@ -1289,12 +1502,24 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                memory_match = "(m:OM_Memory {userId: $userId})" if allowed_memory_ids is None else "(m:OM_Memory)"
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
+                memory_match = "(m:OM_Memory)"
                 cypher = f"""
                 MATCH {memory_match}-[:OM_TAGGED]->(t1:OM_Tag)
                 MATCH (m)-[:OM_TAGGED]->(t2:OM_Tag)
                 WHERE t1.key < t2.key
                   AND ($allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds)
+                  AND (
+                    (m.accessEntity IS NOT NULL AND (
+                      m.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (m.accessEntity IS NULL AND m.userId = $userId)
+                  )
                 WITH t1.key AS tag1, t2.key AS tag2, count(*) AS count, collect(m.id) AS memoryIds
                 WHERE count >= $minCount
                 RETURN tag1, tag2, count, memoryIds AS memoryIds
@@ -1308,6 +1533,8 @@ class MetadataProjector:
                         "allowedMemoryIds": allowed_memory_ids,
                         "limit": limit,
                         "minCount": min_count,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     },
                 )
 
@@ -1357,7 +1584,11 @@ class MetadataProjector:
             with self.session_factory() as session:
                 session.run(
                     CypherBuilder.update_co_mention_on_add_query(),
-                    {"memoryId": memory_id, "userId": user_id}
+                    {
+                        "memoryId": memory_id,
+                        "userId": user_id,
+                        "legacyAccessEntity": f"user:{user_id}",
+                    }
                 )
             logger.debug(f"Updated entity edges for memory {memory_id}")
             return True
@@ -1382,7 +1613,11 @@ class MetadataProjector:
             with self.session_factory() as session:
                 session.run(
                     CypherBuilder.update_co_mention_on_delete_query(),
-                    {"memoryId": memory_id, "userId": user_id}
+                    {
+                        "memoryId": memory_id,
+                        "userId": user_id,
+                        "legacyAccessEntity": f"user:{user_id}",
+                    }
                 )
             logger.debug(f"Updated entity edges on delete for memory {memory_id}")
             return True
@@ -1396,6 +1631,8 @@ class MetadataProjector:
         user_id: str,
         min_count: int = 1,
         limit: int = 50,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Get all co-mentioned entities for a given entity.
@@ -1411,6 +1648,11 @@ class MetadataProjector:
         """
         try:
             with self.session_factory() as session:
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
                 result = session.run(
                     CypherBuilder.get_entity_connections_query(),
                     {
@@ -1418,6 +1660,8 @@ class MetadataProjector:
                         "userId": user_id,
                         "minCount": max(1, int(min_count or 1)),
                         "limit": max(1, min(int(limit or 50), 200)),
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     }
                 )
                 for record in result:
@@ -1428,6 +1672,7 @@ class MetadataProjector:
                     ]
                     return {
                         "entity": record["entity"],
+                        "entityDisplayName": record.get("entityDisplayName") or record["entity"],
                         "connections": connections,
                         "total_connections": len(connections),
                     }
@@ -1436,7 +1681,12 @@ class MetadataProjector:
             logger.error(f"Failed to get entity connections for {entity_name}: {e}")
             return None
 
-    def backfill_entity_edges(self, user_id: str, min_count: int = 1) -> int:
+    def backfill_entity_edges(
+        self,
+        user_id: str,
+        min_count: int = 1,
+        access_entity: Optional[str] = None,
+    ) -> int:
         """
         Backfill all OM_CO_MENTIONED edges for a user.
 
@@ -1451,7 +1701,12 @@ class MetadataProjector:
             with self.session_factory() as session:
                 result = session.run(
                     CypherBuilder.backfill_co_mention_query(),
-                    {"userId": user_id, "minCount": max(1, int(min_count or 1))}
+                    {
+                        "userId": user_id,
+                        "minCount": max(1, int(min_count or 1)),
+                        "accessEntity": access_entity or f"user:{user_id}",
+                        "legacyAccessEntity": f"user:{user_id}",
+                    }
                 )
                 for record in result:
                     return record["edgesCreated"]
@@ -1482,7 +1737,11 @@ class MetadataProjector:
             with self.session_factory() as session:
                 session.run(
                     CypherBuilder.update_tag_cooccurs_for_memory_query(),
-                    {"memoryId": memory_id, "userId": user_id}
+                    {
+                        "memoryId": memory_id,
+                        "userId": user_id,
+                        "legacyAccessEntity": f"user:{user_id}",
+                    }
                 )
             logger.debug(f"Updated tag edges for memory {memory_id}")
             return True
@@ -1496,6 +1755,8 @@ class MetadataProjector:
         user_id: str,
         min_count: int = 1,
         limit: int = 20,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Get co-occurring tags for a given tag.
@@ -1511,6 +1772,11 @@ class MetadataProjector:
         """
         try:
             with self.session_factory() as session:
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
                 result = session.run(
                     CypherBuilder.get_related_tags_query(),
                     {
@@ -1518,6 +1784,8 @@ class MetadataProjector:
                         "userId": user_id,
                         "minCount": max(1, int(min_count or 1)),
                         "limit": max(1, min(int(limit or 20), 100)),
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     }
                 )
                 tags = []
@@ -1537,6 +1805,7 @@ class MetadataProjector:
         user_id: str,
         min_count: int = 2,
         min_pmi: float = 0.0,
+        access_entity: Optional[str] = None,
     ) -> int:
         """
         Backfill all OM_COOCCURS edges for a user with PMI calculation.
@@ -1557,6 +1826,8 @@ class MetadataProjector:
                         "userId": user_id,
                         "minCount": max(1, int(min_count or 2)),
                         "minPmi": float(min_pmi or 0.0),
+                        "accessEntity": access_entity or f"user:{user_id}",
+                        "legacyAccessEntity": f"user:{user_id}",
                     }
                 )
                 for record in result:
@@ -1576,6 +1847,8 @@ class MetadataProjector:
         entity_a: str,
         entity_b: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         max_hops: int = 6,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -1599,25 +1872,43 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                entity_a_match = (
-                    "MATCH (a:OM_Entity {userId: $userId, name: $entityA})"
-                    if allowed_memory_ids is None
-                    else "MATCH (a:OM_Entity {name: $entityA})"
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
                 )
-                entity_b_match = (
-                    "MATCH (b:OM_Entity {userId: $userId, name: $entityB})"
-                    if allowed_memory_ids is None
-                    else "MATCH (b:OM_Entity {name: $entityB})"
-                )
-                memory_acl_prefix = "n.userId = $userId AND " if allowed_memory_ids is None else ""
+                entity_a_match = "MATCH (a:OM_Entity {name: $entityA})"
+                entity_b_match = "MATCH (b:OM_Entity {name: $entityB})"
+                memory_acl_prefix = ""
 
                 cypher = f"""
                 {entity_a_match}
                 {entity_b_match}
                 MATCH p = shortestPath((a)-[:{rel_types}*..{max_hops}]-(b))
                 WHERE all(n IN nodes(p) WHERE NOT n:OM_Memory OR (
-                    {memory_acl_prefix}($allowedMemoryIds IS NULL OR n.id IN $allowedMemoryIds)
+                    ($allowedMemoryIds IS NULL OR n.id IN $allowedMemoryIds)
+                    AND (
+                      (n.accessEntity IS NOT NULL AND (
+                        n.accessEntity IN $accessEntities
+                        OR any(prefix IN $accessEntityPrefixes WHERE n.accessEntity STARTS WITH prefix)
+                      ))
+                      OR (n.accessEntity IS NULL AND n.userId = $userId)
+                    )
                 ))
+                  AND (
+                    (a.accessEntity IS NOT NULL AND (
+                      a.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE a.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (a.accessEntity IS NULL AND a.userId = $userId)
+                  )
+                  AND (
+                    (b.accessEntity IS NOT NULL AND (
+                      b.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE b.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (b.accessEntity IS NULL AND b.userId = $userId)
+                  )
                 RETURN
                   [n IN nodes(p) | {{
                     label: labels(n)[0],
@@ -1631,6 +1922,10 @@ class MetadataProjector:
                       WHEN n:OM_Tag THEN n.key
                       WHEN n:OM_Evidence THEN n.name
                       WHEN n:OM_App THEN n.name
+                      ELSE null
+                    END,
+                    displayName: CASE
+                      WHEN n:OM_Entity THEN coalesce(n.displayName, n.name)
                       ELSE null
                     END,
                     memoryId: CASE WHEN n:OM_Memory THEN n.id ELSE null END,
@@ -1651,6 +1946,8 @@ class MetadataProjector:
                         "entityA": entity_a,
                         "entityB": entity_b,
                         "allowedMemoryIds": allowed_memory_ids,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     },
                 )
                 for record in result:
@@ -1674,6 +1971,8 @@ class MetadataProjector:
         search_text: str,
         user_id: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """
@@ -1701,12 +2000,23 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                user_filter = "node.userId = $userId AND " if allowed_memory_ids is None else ""
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
                 cypher = f"""
                 CALL db.index.fulltext.queryNodes('om_memory_content', $searchText)
                 YIELD node, score
-                WHERE {user_filter}($allowedMemoryIds IS NULL OR node.id IN $allowedMemoryIds)
+                WHERE ($allowedMemoryIds IS NULL OR node.id IN $allowedMemoryIds)
                   AND node.state = 'active'
+                  AND (
+                    (node.accessEntity IS NOT NULL AND (
+                      node.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE node.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (node.accessEntity IS NULL AND node.userId = $userId)
+                  )
                 RETURN node.id AS id,
                        node.content AS content,
                        node.category AS category,
@@ -1725,6 +2035,8 @@ class MetadataProjector:
                         "userId": user_id,
                         "allowedMemoryIds": allowed_memory_ids,
                         "limit": limit,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     }
                 )
 
@@ -1751,6 +2063,8 @@ class MetadataProjector:
         self,
         search_text: str,
         user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """
@@ -1773,12 +2087,19 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
                 result = session.run(
                     CypherBuilder.fulltext_search_entities_query(),
                     {
                         "searchText": search_text.strip(),
                         "userId": user_id,
                         "limit": limit,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     }
                 )
 
@@ -1786,6 +2107,7 @@ class MetadataProjector:
                 for record in result:
                     entities.append({
                         "name": record["name"],
+                        "displayName": record.get("displayName") or record["name"],
                         "searchScore": record["searchScore"],
                     })
                 return entities
@@ -1801,6 +2123,8 @@ class MetadataProjector:
     def get_entity_centrality(
         self,
         user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """
@@ -1820,15 +2144,26 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
                 result = session.run(
                     CypherBuilder.entity_centrality_query(),
-                    {"userId": user_id, "limit": limit}
+                    {
+                        "userId": user_id,
+                        "limit": limit,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
+                    }
                 )
 
                 entities = []
                 for record in result:
                     entities.append({
                         "entity": record["entity"],
+                        "displayName": record.get("displayName") or record["entity"],
                         "connections": record["connections"],
                         "mentionCount": record["mentionCount"] or 0,
                     })
@@ -1842,6 +2177,8 @@ class MetadataProjector:
         self,
         user_id: str,
         allowed_memory_ids: Optional[List[str]] = None,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """
@@ -1861,17 +2198,29 @@ class MetadataProjector:
 
         try:
             with self.session_factory() as session:
-                memory_match = (
-                    "MATCH (m:OM_Memory {userId: $userId})"
-                    if allowed_memory_ids is None
-                    else "MATCH (m:OM_Memory)"
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
                 )
+                memory_match = "MATCH (m:OM_Memory)"
                 cypher = f"""
                 {memory_match}
                 WHERE $allowedMemoryIds IS NULL OR m.id IN $allowedMemoryIds
+                  AND (
+                    (m.accessEntity IS NOT NULL AND (
+                      m.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (m.accessEntity IS NULL AND m.userId = $userId)
+                  )
                 OPTIONAL MATCH (m)-[r]->(:OM_Entity)
                 WITH m, count(r) AS entityCount
-                OPTIONAL MATCH (m)-[:OM_SIMILAR]->(similar:OM_Memory)
+                OPTIONAL MATCH (m)-[sim:OM_SIMILAR]->(similar:OM_Memory)
+                WHERE (
+                  (sim.accessEntity IS NOT NULL AND sim.accessEntity = m.accessEntity)
+                  OR (sim.accessEntity IS NULL AND sim.userId = $userId)
+                )
                 WITH m, entityCount, count(similar) AS similarCount
                 RETURN m.id AS id,
                        m.content AS content,
@@ -1887,6 +2236,8 @@ class MetadataProjector:
                         "userId": user_id,
                         "allowedMemoryIds": allowed_memory_ids,
                         "limit": limit,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
                     }
                 )
 
@@ -1905,7 +2256,12 @@ class MetadataProjector:
             logger.error(f"Failed to get memory connectivity: {e}")
             return []
 
-    def get_graph_statistics(self, user_id: str) -> Dict[str, Any]:
+    def get_graph_statistics(
+        self,
+        user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """
         Get statistics about the user's graph.
 
@@ -1917,25 +2273,72 @@ class MetadataProjector:
         """
         try:
             with self.session_factory() as session:
+                access_entities, access_entity_prefixes = self._normalize_access_filters(
+                    user_id,
+                    access_entities,
+                    access_entity_prefixes,
+                )
                 cypher = """
-                MATCH (m:OM_Memory {userId: $userId})
+                MATCH (m:OM_Memory)
+                WHERE (
+                  (m.accessEntity IS NOT NULL AND (
+                    m.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (m.accessEntity IS NULL AND m.userId = $userId)
+                )
                 WITH count(m) AS memoryCount
 
-                OPTIONAL MATCH (e:OM_Entity {userId: $userId})
+                OPTIONAL MATCH (e:OM_Entity)
+                WHERE (
+                  (e.accessEntity IS NOT NULL AND (
+                    e.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (e.accessEntity IS NULL AND e.userId = $userId)
+                )
                 WITH memoryCount, count(e) AS entityCount
 
-                OPTIONAL MATCH ()-[co:OM_CO_MENTIONED {userId: $userId}]->()
+                OPTIONAL MATCH ()-[co:OM_CO_MENTIONED]->()
+                WHERE (
+                  (co.accessEntity IS NOT NULL AND (
+                    co.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE co.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (co.accessEntity IS NULL AND co.userId = $userId)
+                )
                 WITH memoryCount, entityCount, count(co) AS coMentionEdges
 
-                OPTIONAL MATCH ()-[sim:OM_SIMILAR {userId: $userId}]->()
+                OPTIONAL MATCH ()-[sim:OM_SIMILAR]->()
+                WHERE (
+                  (sim.accessEntity IS NOT NULL AND (
+                    sim.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE sim.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (sim.accessEntity IS NULL AND sim.userId = $userId)
+                )
                 WITH memoryCount, entityCount, coMentionEdges, count(sim) AS similarityEdges
 
-                OPTIONAL MATCH ()-[tag:OM_COOCCURS {userId: $userId}]->()
+                OPTIONAL MATCH ()-[tag:OM_COOCCURS]->()
+                WHERE (
+                  (tag.accessEntity IS NOT NULL AND (
+                    tag.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE tag.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (tag.accessEntity IS NULL AND tag.userId = $userId)
+                )
                 WITH memoryCount, entityCount, coMentionEdges, similarityEdges, count(tag) AS tagEdges
 
                 RETURN memoryCount, entityCount, coMentionEdges, similarityEdges, tagEdges
                 """
-                result = session.run(cypher, {"userId": user_id})
+                result = session.run(
+                    cypher,
+                    {
+                        "userId": user_id,
+                        "accessEntities": access_entities,
+                        "accessEntityPrefixes": access_entity_prefixes,
+                    },
+                )
 
                 for record in result:
                     return {

@@ -291,7 +291,8 @@
         "symbol_id": { "type": "string" },
         "symbol_name": { "type": "string" },
         "repo_id": { "type": "string" },
-        "depth": { "type": "integer", "minimum": 1, "maximum": 5 }
+        "depth": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "include_inferred_edges": { "type": "boolean" }
       },
       "anyOf": [
         { "required": ["symbol_id"] },
@@ -372,6 +373,7 @@
         "changed_files": { "type": "array", "items": { "type": "string" } },
         "symbol_id": { "type": "string" },
         "include_cross_language": { "type": "boolean" },
+        "include_inferred_edges": { "type": "boolean" },
         "max_depth": { "type": "integer", "minimum": 1, "maximum": 10 },
         "confidence_threshold": {
           "type": "string",

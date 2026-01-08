@@ -116,6 +116,7 @@ class TestImpactAnalysisConfig:
         assert config.confidence_threshold == "probable"
         assert config.include_cross_language is False
         assert config.max_affected_files == 100
+        assert config.include_inferred_edges is True
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -126,12 +127,14 @@ class TestImpactAnalysisConfig:
             confidence_threshold="definite",
             include_cross_language=True,
             max_affected_files=50,
+            include_inferred_edges=False,
         )
 
         assert config.max_depth == 5
         assert config.confidence_threshold == "definite"
         assert config.include_cross_language is True
         assert config.max_affected_files == 50
+        assert config.include_inferred_edges is False
 
 
 # =============================================================================

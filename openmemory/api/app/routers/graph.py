@@ -18,7 +18,11 @@ from app.database import get_db
 from app.models import User, Memory
 from app.security.dependencies import require_scopes
 from app.security.types import Principal, Scope
-from app.security.access import resolve_access_entities, can_read_access_entity
+from app.security.access import (
+    resolve_access_entities,
+    can_read_access_entity,
+    build_access_entity_patterns,
+)
 
 router = APIRouter(prefix="/api/v1/graph", tags=["graph"])
 
@@ -70,6 +74,12 @@ def _get_allowed_memory_ids(principal: Principal, db: Session) -> Optional[List[
     return list(allowed_ids) if allowed_ids else None
 
 
+def _get_graph_access_filters(principal: Principal) -> tuple[list[str], list[str]]:
+    exact, like_patterns = build_access_entity_patterns(principal)
+    prefixes = [p[:-1] for p in like_patterns if p.endswith("%")]
+    return exact, prefixes
+
+
 # =============================================================================
 # Graph Statistics
 # =============================================================================
@@ -93,7 +103,12 @@ async def get_stats(
             "message": "Graph features not available (Neo4j not configured)",
         }
 
-    stats = get_graph_statistics(user_id=principal.user_id)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+    stats = get_graph_statistics(
+        user_id=principal.user_id,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
     stats["enabled"] = True
 
     return stats
@@ -151,12 +166,15 @@ async def aggregate_by_dimension(
 
     # Get allowed memory IDs based on access_entity grants
     allowed_memory_ids = _get_allowed_memory_ids(principal, db)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
 
     results = aggregate_memories_in_graph(
         user_id=principal.user_id,
         group_by=dimension,
         allowed_memory_ids=allowed_memory_ids,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"dimension": dimension, "buckets": results}
@@ -183,12 +201,15 @@ async def get_tag_cooccurrence(
 
     # Get allowed memory IDs based on access_entity grants
     allowed_memory_ids = _get_allowed_memory_ids(principal, db)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
 
     pairs = tag_cooccurrence_in_graph(
         user_id=principal.user_id,
         allowed_memory_ids=allowed_memory_ids,
         limit=limit,
         min_count=min_count,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"pairs": pairs}
@@ -209,11 +230,14 @@ async def get_related_tags(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     related = get_related_tags_from_graph(
         tag_key=tag_key,
         user_id=principal.user_id,
         min_count=min_count,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"tag": tag_key, "related": related}
@@ -243,12 +267,15 @@ async def fulltext_search_memories(
 
     # Get allowed memory IDs based on access_entity grants
     allowed_memory_ids = _get_allowed_memory_ids(principal, db)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
 
     results = fulltext_search_memories_in_graph(
         search_text=query,
         user_id=principal.user_id,
         allowed_memory_ids=allowed_memory_ids,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"query": query, "results": results}
@@ -268,10 +295,13 @@ async def fulltext_search_entities(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     results = fulltext_search_entities_in_graph(
         search_text=query,
         user_id=principal.user_id,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"query": query, "results": results}
@@ -304,6 +334,7 @@ async def get_timeline(
     if event_types:
         types_list = [t.strip() for t in event_types.split(",") if t.strip()]
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     events = get_biography_timeline_from_graph(
         user_id=principal.user_id,
         entity_name=entity_name,
@@ -311,6 +342,8 @@ async def get_timeline(
         start_year=start_year,
         end_year=end_year,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"events": events}
@@ -339,7 +372,12 @@ async def get_entity_communities(
             detail="Neo4j GDS not available for community detection"
         )
 
-    result = detect_entity_communities(user_id=principal.user_id)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+    result = detect_entity_communities(
+        user_id=principal.user_id,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
 
     return result
 
@@ -362,7 +400,12 @@ async def get_memory_communities(
             detail="Neo4j GDS not available for community detection"
         )
 
-    result = detect_memory_communities(user_id=principal.user_id)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+    result = detect_memory_communities(
+        user_id=principal.user_id,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
 
     return result
 
@@ -387,10 +430,13 @@ async def get_similar_entities(
             detail="Neo4j GDS not available for similarity computation"
         )
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     result = find_similar_entities_gds(
         user_id=principal.user_id,
         entity_name=entity_name,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"pairs": result}
@@ -409,9 +455,12 @@ async def get_memory_connectivity(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     result = get_memory_connectivity_from_graph(
         user_id=principal.user_id,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     return {"memories": result}

@@ -498,13 +498,20 @@ def format_compact_relations(relations: List[Dict[str, Any]]) -> Dict[str, Any]:
         compact["similar"] = similar
 
     # Extract entity names from OM_ABOUT
-    entities = [
-        r["target_value"]
-        for r in relations
-        if r.get("type") == "OM_ABOUT" and r.get("target_value")
-    ]
+    entities = []
+    entity_display_names = []
+    for rel in relations:
+        if rel.get("type") != "OM_ABOUT":
+            continue
+        target_value = rel.get("target_value")
+        if not target_value:
+            continue
+        entities.append(target_value)
+        entity_display_names.append(rel.get("target_display_name") or target_value)
     if entities:
         compact["entities"] = entities
+        if any(d != e for d, e in zip(entity_display_names, entities)):
+            compact["entityDisplayNames"] = entity_display_names
 
     # Extract tags as dict from OM_TAGGED
     tags = {}

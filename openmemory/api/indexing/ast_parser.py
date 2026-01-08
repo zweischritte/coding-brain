@@ -1,4 +1,4 @@
-"""AST Parser with Tree-sitter for Python, TypeScript, and Java.
+"""AST Parser with Tree-sitter for Python, TypeScript, Java, and Go.
 
 This module provides:
 - Language enum for supported languages
@@ -19,6 +19,7 @@ from typing import Optional, Union
 import tree_sitter_python as ts_python
 import tree_sitter_typescript as ts_typescript
 import tree_sitter_java as ts_java
+import tree_sitter_go as ts_go
 from tree_sitter import Language as TSLanguage, Parser, Tree, Node
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class Language(Enum):
     TYPESCRIPT = "typescript"
     TSX = "tsx"
     JAVA = "java"
+    GO = "go"
 
     @classmethod
     def from_extension(cls, ext: str) -> Optional["Language"]:
@@ -62,6 +64,7 @@ class Language(Enum):
             ".ts": cls.TYPESCRIPT,
             ".tsx": cls.TSX,
             ".java": cls.JAVA,
+            ".go": cls.GO,
         }
         return ext_map.get(ext.lower())
 
@@ -1115,6 +1118,148 @@ class JavaPlugin(LanguagePlugin):
 
 
 # =============================================================================
+# Go Plugin
+# =============================================================================
+
+
+class GoPlugin(LanguagePlugin):
+    """Language plugin for Go."""
+
+    def __init__(self):
+        self._parser = Parser(TSLanguage(ts_go.language()))
+
+    @property
+    def supported_extensions(self) -> list[str]:
+        return [".go"]
+
+    def parse(self, source: bytes, **kwargs) -> Tree:
+        """Parse Go source code."""
+        return self._parser.parse(source)
+
+    def extract_symbols(self, tree: Tree, source: bytes) -> list[Symbol]:
+        """Extract symbols from Go AST."""
+        symbols = []
+        self._extract_from_node(tree.root_node, source, symbols, parent_name=None)
+        return symbols
+
+    def _extract_from_node(
+        self,
+        node: Node,
+        source: bytes,
+        symbols: list[Symbol],
+        parent_name: Optional[str],
+    ) -> None:
+        if node.type == "function_declaration":
+            self._extract_function(node, source, symbols)
+        elif node.type == "method_declaration":
+            self._extract_method(node, source, symbols)
+        elif node.type == "type_spec":
+            self._extract_type_spec(node, source, symbols)
+        elif node.type == "import_declaration":
+            self._extract_import(node, source, symbols)
+        else:
+            for child in node.children:
+                self._extract_from_node(child, source, symbols, parent_name)
+
+    def _extract_function(self, node: Node, source: bytes, symbols: list[Symbol]) -> None:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return
+        name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+        symbols.append(
+            Symbol(
+                name=name,
+                symbol_type=SymbolType.FUNCTION,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+                language=Language.GO,
+            )
+        )
+
+    def _extract_method(self, node: Node, source: bytes, symbols: list[Symbol]) -> None:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return
+        name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+
+        receiver_node = node.child_by_field_name("receiver")
+        receiver_type = self._extract_receiver_type(receiver_node, source) if receiver_node else None
+
+        symbols.append(
+            Symbol(
+                name=name,
+                symbol_type=SymbolType.METHOD,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+                language=Language.GO,
+                parent_name=receiver_type,
+            )
+        )
+
+    def _extract_receiver_type(self, node: Node, source: bytes) -> Optional[str]:
+        if not node:
+            return None
+        for child in node.children:
+            if child.type == "parameter_declaration":
+                type_node = child.child_by_field_name("type")
+                receiver = self._type_text(type_node, source) if type_node else None
+                if receiver:
+                    return receiver
+        return None
+
+    def _type_text(self, node: Optional[Node], source: bytes) -> Optional[str]:
+        if not node:
+            return None
+        if node.type in ("type_identifier", "identifier"):
+            return source[node.start_byte : node.end_byte].decode("utf-8")
+        if node.type == "pointer_type" and node.child_count:
+            return self._type_text(node.children[-1], source)
+        for child in node.children:
+            name = self._type_text(child, source)
+            if name:
+                return name
+        return None
+
+    def _extract_type_spec(self, node: Node, source: bytes, symbols: list[Symbol]) -> None:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return
+        name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+        type_node = node.child_by_field_name("type")
+        symbol_type = SymbolType.TYPE_ALIAS
+        if type_node and type_node.type == "struct_type":
+            symbol_type = SymbolType.CLASS
+        elif type_node and type_node.type == "interface_type":
+            symbol_type = SymbolType.INTERFACE
+
+        symbols.append(
+            Symbol(
+                name=name,
+                symbol_type=symbol_type,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+                language=Language.GO,
+            )
+        )
+
+    def _extract_import(self, node: Node, source: bytes, symbols: list[Symbol]) -> None:
+        for child in node.children:
+            if child.type == "import_spec":
+                for spec_child in child.children:
+                    if spec_child.type == "interpreted_string_literal":
+                        import_path = source[spec_child.start_byte : spec_child.end_byte].decode("utf-8")
+                        import_path = import_path.strip("\"")
+                        symbols.append(
+                            Symbol(
+                                name=import_path,
+                                symbol_type=SymbolType.IMPORT,
+                                line_start=node.start_point[0] + 1,
+                                line_end=node.end_point[0] + 1,
+                                language=Language.GO,
+                            )
+                        )
+
+# =============================================================================
 # Main AST Parser
 # =============================================================================
 
@@ -1140,6 +1285,7 @@ class ASTParser:
             self._register_plugin(PythonPlugin())
             self._register_plugin(TypeScriptPlugin())
             self._register_plugin(JavaPlugin())
+            self._register_plugin(GoPlugin())
 
     def _register_plugin(self, plugin: LanguagePlugin) -> None:
         """Register a language plugin."""
@@ -1301,7 +1447,7 @@ class ASTParser:
 
         # Determine extensions to scan
         if extensions is None:
-            extensions = [".py", ".ts", ".tsx", ".java"]
+            extensions = [".py", ".ts", ".tsx", ".java", ".go"]
 
         # Collect files
         if recursive:

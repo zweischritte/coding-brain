@@ -68,6 +68,7 @@ def backfill_tag_edges(
     min_count: int = 2,
     min_pmi: float = 0.0,
     dry_run: bool = False,
+    access_entity: str | None = None,
     log_file: str | None = None,
     verbose: bool = False,
 ) -> tuple[BackfillStats, str]:
@@ -92,7 +93,11 @@ def backfill_tag_edges(
     _configure_logging(log_file=chosen_log_file, verbose=verbose)
 
     logger.info("Starting tag edge backfill")
-    logger.info(f"user_id={user_id} min_count={min_count} min_pmi={min_pmi} dry_run={dry_run}")
+    access_entity = access_entity or f"user:{user_id}"
+    logger.info(
+        f"user_id={user_id} access_entity={access_entity} "
+        f"min_count={min_count} min_pmi={min_pmi} dry_run={dry_run}"
+    )
     logger.info(f"log_file={chosen_log_file}")
 
     if not is_neo4j_configured():
@@ -111,12 +116,18 @@ def backfill_tag_edges(
         try:
             with get_neo4j_session() as session:
                 result = session.run("""
-                    MATCH (t1:OM_Tag)<-[:OM_TAGGED]-(m:OM_Memory {user_id: $user_id})-[:OM_TAGGED]->(t2:OM_Tag)
-                    WHERE t1.key < t2.key
+                    MATCH (t1:OM_Tag)<-[:OM_TAGGED]-(m:OM_Memory)-[:OM_TAGGED]->(t2:OM_Tag)
+                    WHERE coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity
+                      AND t1.key < t2.key
                     WITH t1, t2, count(m) AS cnt
                     WHERE cnt >= $min_count
                     RETURN count(*) AS pair_count, sum(cnt) AS total_cooccurrences
-                """, {"user_id": user_id, "min_count": min_count})
+                """, {
+                    "user_id": user_id,
+                    "accessEntity": access_entity,
+                    "legacyAccessEntity": f"user:{user_id}",
+                    "min_count": min_count,
+                })
                 record = result.single()
                 if record:
                     stats.tag_pairs = record["pair_count"]
@@ -128,7 +139,7 @@ def backfill_tag_edges(
     else:
         # Actually create the edges
         try:
-            edges_created = projector.backfill_tag_edges(user_id, min_count, min_pmi)
+            edges_created = projector.backfill_tag_edges(user_id, min_count, min_pmi, access_entity=access_entity)
             stats.edges_created = edges_created
             logger.info(f"Created {edges_created} OM_COOCCURS edges")
         except Exception as e:
@@ -144,6 +155,7 @@ def main() -> None:
     parser.add_argument("--user-id", required=True, help="User ID to backfill")
     parser.add_argument("--min-count", type=int, default=2, help="Min co-occurrences for edge")
     parser.add_argument("--min-pmi", type=float, default=0.0, help="Min PMI score for edge")
+    parser.add_argument("--access-entity", default=None, help="Access entity scope (default: user scope)")
     parser.add_argument("--dry-run", action="store_true", help="Do not write to Neo4j")
     parser.add_argument("--log-file", default=None, help="Log file path")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -154,6 +166,7 @@ def main() -> None:
         min_count=args.min_count,
         min_pmi=args.min_pmi,
         dry_run=args.dry_run,
+        access_entity=args.access_entity,
         log_file=args.log_file,
         verbose=args.verbose,
     )

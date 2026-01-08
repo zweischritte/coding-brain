@@ -14,6 +14,7 @@ Key Capabilities:
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
+import hashlib
 import logging
 import math
 
@@ -23,6 +24,37 @@ except ImportError:
     from openmemory.api.app.graph.neo4j_client import get_neo4j_session, execute_with_retry
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_access_filters(
+    user_id: str,
+    access_entities: Optional[List[str]],
+    access_entity_prefixes: Optional[List[str]],
+) -> tuple[List[str], List[str]]:
+    if not access_entities:
+        access_entities = [f"user:{user_id}"] if user_id else []
+    if access_entity_prefixes is None:
+        access_entity_prefixes = []
+    return access_entities, access_entity_prefixes
+
+
+def _access_filter_clause(alias: str) -> str:
+    return (
+        f"(({alias}.accessEntity IS NOT NULL AND ("
+        f"{alias}.accessEntity IN $accessEntities "
+        f"OR any(prefix IN $accessEntityPrefixes WHERE {alias}.accessEntity STARTS WITH prefix)"
+        f")) OR ({alias}.accessEntity IS NULL AND {alias}.userId = $userId))"
+    )
+
+
+def _graph_name_for_scope(
+    base: str,
+    access_entities: List[str],
+    access_entity_prefixes: List[str],
+) -> str:
+    scope_key = "|".join(sorted(access_entities)) + "|" + "|".join(sorted(access_entity_prefixes))
+    digest = hashlib.sha256(scope_key.encode("utf-8")).hexdigest()[:8] if scope_key else "default"
+    return f"{base}-{digest}"
 
 
 @dataclass
@@ -110,14 +142,26 @@ class ConvergenceDetector:
         )
     """
 
-    def __init__(self, user_id: str):
+    def __init__(
+        self,
+        user_id: str,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
+    ):
         """
         Initialize convergence detector.
 
         Args:
             user_id: User ID for filtering concepts/memories
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
         """
         self.user_id = user_id
+        self.access_entities, self.access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
 
     def analyze_concept_convergence(
         self, concept_name: str, min_evidence: int = 3
@@ -139,13 +183,18 @@ class ConvergenceDetector:
             ConvergenceResult if sufficient evidence, None otherwise
         """
         # Fetch supporting memories with entity relationships
-        cypher = """
-        MATCH (concept:OM_Concept {userId: $userId, name: $conceptName})
-        MATCH (concept)<-[:SUPPORTS]-(m:OM_Memory)
+        cypher = f"""
+        MATCH (concept:OM_Concept {{name: $conceptName}})
+        WHERE {_access_filter_clause("concept")}
+        WITH concept, coalesce(concept.accessEntity, $legacyAccessEntity) AS accessEntity
+        MATCH (concept)<-[s:SUPPORTS]-(m:OM_Memory)
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s.accessEntity, $legacyAccessEntity) = accessEntity
 
         OPTIONAL MATCH (m)-[:OM_ABOUT]->(e:OM_Entity)
+        WHERE coalesce(e.accessEntity, $legacyAccessEntity) = accessEntity
 
-        WITH concept, m, COLLECT(DISTINCT e.name) AS entities
+        WITH m, COLLECT(DISTINCT e.name) AS entities
 
         RETURN
             m.id AS memory_id,
@@ -160,7 +209,14 @@ class ConvergenceDetector:
 
         try:
             results = execute_with_retry(
-                cypher, {"userId": self.user_id, "conceptName": concept_name}
+                cypher,
+                {
+                    "userId": self.user_id,
+                    "conceptName": concept_name,
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
+                },
             )
         except Exception as e:
             logger.error(f"Failed to fetch concept evidence: {e}")
@@ -250,12 +306,14 @@ class ConvergenceDetector:
         Returns:
             List of ConvergenceResult objects sorted by convergence score
         """
-        cypher = """
-        MATCH (concept:OM_Concept {userId: $userId})
-        MATCH (concept)<-[:SUPPORTS]-(m:OM_Memory)
-
-        // Filter by category if specified
-        WHERE $category IS NULL OR concept.category = $category
+        cypher = f"""
+        MATCH (concept:OM_Concept)
+        WHERE {_access_filter_clause("concept")}
+        WITH concept, coalesce(concept.accessEntity, $legacyAccessEntity) AS accessEntity
+        MATCH (concept)<-[s:SUPPORTS]-(m:OM_Memory)
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s.accessEntity, $legacyAccessEntity) = accessEntity
+          AND ($category IS NULL OR concept.category = $category)
 
         WITH concept,
              COLLECT({
@@ -304,6 +362,9 @@ class ConvergenceDetector:
                     "minTemporalSpread": min_temporal_spread,
                     "minCategoryDiversity": min_category_diversity,
                     "limit": limit,
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
                 },
             )
         except Exception as e:
@@ -385,14 +446,20 @@ class ConvergenceDetector:
             List of (concept_a, concept_b, adamic_adar_score, common_count) tuples
             sorted by adamic_adar_score descending
         """
-        cypher = """
+        cypher = f"""
         // Find concepts from different categories sharing supporting memories
-        MATCH (c1:OM_Concept {userId: $userId, category: $categoryA})
-        MATCH (c2:OM_Concept {userId: $userId, category: $categoryB})
-        MATCH (c1)<-[:SUPPORTS]-(m:OM_Memory)-[:SUPPORTS]->(c2)
-
+        MATCH (c1:OM_Concept {{category: $categoryA}})
+        WHERE {_access_filter_clause("c1")}
+        MATCH (c2:OM_Concept {{category: $categoryB}})
+        WHERE {_access_filter_clause("c2")}
+        WITH c1, c2, coalesce(c1.accessEntity, $legacyAccessEntity) AS accessEntity
         WHERE c1 <> c2
-          AND NOT EXISTS { (c1)-[:BRIDGES]-(c2) }
+          AND coalesce(c2.accessEntity, $legacyAccessEntity) = accessEntity
+          AND NOT EXISTS {{ (c1)-[:BRIDGES]-(c2) }}
+        MATCH (c1)<-[s1:SUPPORTS]-(m:OM_Memory)-[s2:SUPPORTS]->(c2)
+        WHERE coalesce(m.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s2.accessEntity, $legacyAccessEntity) = accessEntity
 
         WITH c1, c2, COLLECT(DISTINCT m) AS common_memories
         WHERE SIZE(common_memories) >= $minCommon
@@ -422,6 +489,9 @@ class ConvergenceDetector:
                     "categoryA": category_a,
                     "categoryB": category_b,
                     "minCommon": min_common_memories,
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
                 },
             )
 
@@ -458,6 +528,12 @@ class ConvergenceDetector:
             List of (concept_name, pagerank_score, evidence_count) tuples
             sorted by PageRank descending
         """
+        projection_name = _graph_name_for_scope(
+            projection_name,
+            self.access_entities,
+            self.access_entity_prefixes,
+        )
+
         # Check if projection exists
         if not force_recreate:
             try:
@@ -491,20 +567,49 @@ class ConvergenceDetector:
                 """
                 execute_with_retry(drop_cypher, {"projectionName": projection_name})
 
-                # Create projection
+                # Create scoped projection
+                node_query = f"""
+                MATCH (n)
+                WHERE (n:OM_Concept OR n:OM_Memory)
+                  AND {_access_filter_clause("n")}
+                RETURN id(n) AS id, labels(n) AS labels, n.confidence AS confidence
+                """
+                relationship_query = f"""
+                MATCH (m:OM_Memory)-[r:SUPPORTS]->(c:OM_Concept)
+                WHERE {_access_filter_clause("c")}
+                  AND {_access_filter_clause("m")}
+                  AND coalesce(m.accessEntity, $legacyAccessEntity) = coalesce(c.accessEntity, $legacyAccessEntity)
+                  AND coalesce(r.accessEntity, $legacyAccessEntity) = coalesce(c.accessEntity, $legacyAccessEntity)
+                RETURN id(m) AS source, id(c) AS target
+                """
                 project_cypher = """
-                CALL gds.graph.project(
+                CALL gds.graph.project.cypher(
                     $projectionName,
-                    ['OM_Concept', 'OM_Memory'],
+                    $nodeQuery,
+                    $relationshipQuery,
                     {
-                        SUPPORTS: {orientation: 'UNDIRECTED'}
-                    },
-                    {
+                        parameters: {
+                            userId: $userId,
+                            accessEntities: $accessEntities,
+                            accessEntityPrefixes: $accessEntityPrefixes,
+                            legacyAccessEntity: $legacyAccessEntity
+                        },
                         nodeProperties: ['confidence']
                     }
                 )
                 """
-                execute_with_retry(project_cypher, {"projectionName": projection_name})
+                execute_with_retry(
+                    project_cypher,
+                    {
+                        "projectionName": projection_name,
+                        "nodeQuery": node_query,
+                        "relationshipQuery": relationship_query,
+                        "userId": self.user_id,
+                        "accessEntities": self.access_entities,
+                        "accessEntityPrefixes": self.access_entity_prefixes,
+                        "legacyAccessEntity": f"user:{self.user_id}",
+                    },
+                )
                 logger.info(f"Created graph projection '{projection_name}'")
 
             except Exception as e:
@@ -520,7 +625,7 @@ class ConvergenceDetector:
             })
             YIELD nodeId, score
             WITH gds.util.asNode(nodeId) AS node, score
-            WHERE node:OM_Concept AND node.userId = $userId
+            WHERE node:OM_Concept
 
             // Get evidence count
             MATCH (node)<-[:SUPPORTS]-(m:OM_Memory)
@@ -536,7 +641,7 @@ class ConvergenceDetector:
 
             results = execute_with_retry(
                 pagerank_cypher,
-                {"projectionName": projection_name, "userId": self.user_id},
+                {"projectionName": projection_name},
             )
 
             rankings = [
@@ -751,16 +856,32 @@ class ContradictionDetector:
         ("overvalued", "undervalued"),
     ]
 
-    def __init__(self, user_id: str, similarity_threshold: float = 0.7):
+    def __init__(
+        self,
+        user_id: str,
+        similarity_threshold: float = 0.7,
+        access_entities: Optional[List[str]] = None,
+        access_entity_prefixes: Optional[List[str]] = None,
+        access_entity: Optional[str] = None,
+    ):
         """
         Initialize contradiction detector.
 
         Args:
             user_id: User ID for filtering concepts
             similarity_threshold: Minimum similarity for concepts to be compared (0.0-1.0)
+            access_entities: Explicit access_entity matches
+            access_entity_prefixes: Access_entity prefixes (without % wildcards)
+            access_entity: Explicit access_entity scope for writes (optional)
         """
         self.user_id = user_id
         self.similarity_threshold = similarity_threshold
+        self.access_entities, self.access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
+        self.access_entity = access_entity
 
     def detect_for_concept(
         self,
@@ -827,9 +948,13 @@ class ContradictionDetector:
             List of ContradictionResult objects
         """
         # Query existing CONTRADICTS relationships
-        cypher = """
-        MATCH (c1:OM_Concept {userId: $userId})-[r:CONTRADICTS]-(c2:OM_Concept {userId: $userId})
-        WHERE ($category IS NULL OR c1.category = $category OR c2.category = $category)
+        cypher = f"""
+        MATCH (c1:OM_Concept)-[r:CONTRADICTS]-(c2:OM_Concept)
+        WHERE {_access_filter_clause("c1")}
+          AND {_access_filter_clause("c2")}
+          AND coalesce(c1.accessEntity, $legacyAccessEntity) = coalesce(c2.accessEntity, $legacyAccessEntity)
+          AND coalesce(r.accessEntity, $legacyAccessEntity) = coalesce(c1.accessEntity, $legacyAccessEntity)
+          AND ($category IS NULL OR c1.category = $category OR c2.category = $category)
           AND r.severity >= $minSeverity
           AND r.resolved = false
         RETURN
@@ -850,6 +975,9 @@ class ContradictionDetector:
                     "category": category,
                     "minSeverity": min_severity,
                     "limit": limit,
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
                 },
             )
 
@@ -886,11 +1014,14 @@ class ContradictionDetector:
         Finds concepts that are semantically similar but contain opposing terms.
         """
         # Find concepts with high textual similarity
-        cypher = """
-        MATCH (target:OM_Concept {userId: $userId, name: $conceptName})
-        MATCH (other:OM_Concept {userId: $userId})
+        cypher = f"""
+        MATCH (target:OM_Concept {{name: $conceptName}})
+        WHERE {_access_filter_clause("target")}
+        WITH target, coalesce(target.accessEntity, $legacyAccessEntity) AS accessEntity
+        MATCH (other:OM_Concept)
         WHERE other <> target
-          AND NOT EXISTS { (target)-[:CONTRADICTS]-(other) }
+          AND coalesce(other.accessEntity, $legacyAccessEntity) = accessEntity
+          AND NOT EXISTS {{ (target)-[:CONTRADICTS]-(other) }}
 
         // Calculate simple token overlap as similarity proxy
         WITH target, other,
@@ -907,8 +1038,12 @@ class ContradictionDetector:
         WHERE similarity > 0.2
 
         // Get evidence for both concepts
-        OPTIONAL MATCH (m1:OM_Memory)-[:SUPPORTS]->(target)
-        OPTIONAL MATCH (m2:OM_Memory)-[:SUPPORTS]->(other)
+        OPTIONAL MATCH (m1:OM_Memory)-[s1:SUPPORTS]->(target)
+        WHERE coalesce(m1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s1.accessEntity, $legacyAccessEntity) = accessEntity
+        OPTIONAL MATCH (m2:OM_Memory)-[s2:SUPPORTS]->(other)
+        WHERE coalesce(m2.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s2.accessEntity, $legacyAccessEntity) = accessEntity
 
         RETURN
             target.name AS concept_a,
@@ -927,6 +1062,9 @@ class ContradictionDetector:
                     "userId": self.user_id,
                     "conceptName": concept_name,
                     "limit": limit * 3,  # Fetch more, filter later
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
                 },
             )
 
@@ -968,19 +1106,29 @@ class ContradictionDetector:
 
         Finds concepts that discuss the same entities but reach opposite conclusions.
         """
-        cypher = """
-        MATCH (target:OM_Concept {userId: $userId, name: $conceptName})
-        MATCH (target)-[:INVOLVES]->(e:OM_BizEntity)<-[:INVOLVES]-(other:OM_Concept {userId: $userId})
+        cypher = f"""
+        MATCH (target:OM_Concept {{name: $conceptName}})
+        WHERE {_access_filter_clause("target")}
+        WITH target, coalesce(target.accessEntity, $legacyAccessEntity) AS accessEntity
+        MATCH (target)-[inv1:INVOLVES]->(e:OM_BizEntity)<-[inv2:INVOLVES]-(other:OM_Concept)
         WHERE other <> target
-          AND NOT EXISTS { (target)-[:CONTRADICTS]-(other) }
+          AND coalesce(other.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(e.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(inv1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(inv2.accessEntity, $legacyAccessEntity) = accessEntity
+          AND NOT EXISTS {{ (target)-[:CONTRADICTS]-(other) }}
 
-        WITH target, other, COLLECT(DISTINCT e.name) AS shared_entities
+        WITH target, other, COLLECT(DISTINCT e.name) AS shared_entities, accessEntity
 
         WHERE SIZE(shared_entities) >= 1
 
         // Get evidence
-        OPTIONAL MATCH (m1:OM_Memory)-[:SUPPORTS]->(target)
-        OPTIONAL MATCH (m2:OM_Memory)-[:SUPPORTS]->(other)
+        OPTIONAL MATCH (m1:OM_Memory)-[s1:SUPPORTS]->(target)
+        WHERE coalesce(m1.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s1.accessEntity, $legacyAccessEntity) = accessEntity
+        OPTIONAL MATCH (m2:OM_Memory)-[s2:SUPPORTS]->(other)
+        WHERE coalesce(m2.accessEntity, $legacyAccessEntity) = accessEntity
+          AND coalesce(s2.accessEntity, $legacyAccessEntity) = accessEntity
 
         RETURN
             target.name AS concept_a,
@@ -1000,6 +1148,9 @@ class ContradictionDetector:
                     "userId": self.user_id,
                     "conceptName": concept_name,
                     "limit": limit * 2,
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
                 },
             )
 
@@ -1063,12 +1214,41 @@ class ContradictionDetector:
 
         return None
 
+    def _resolve_access_entity_for_concept(self, concept_name: str) -> Optional[str]:
+        """Resolve the access_entity for a concept within allowed scopes."""
+        cypher = f"""
+        MATCH (c:OM_Concept {{name: $conceptName}})
+        WHERE {_access_filter_clause("c")}
+        RETURN coalesce(c.accessEntity, $legacyAccessEntity) AS accessEntity
+        ORDER BY c.updatedAt DESC, c.createdAt DESC
+        LIMIT 1
+        """
+        try:
+            results = execute_with_retry(
+                cypher,
+                {
+                    "conceptName": concept_name,
+                    "userId": self.user_id,
+                    "accessEntities": self.access_entities,
+                    "accessEntityPrefixes": self.access_entity_prefixes,
+                    "legacyAccessEntity": f"user:{self.user_id}",
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to resolve access entity for concept: {e}")
+            return None
+
+        if results:
+            return results[0].get("accessEntity")
+        return None
+
     def store_contradiction(
         self,
         concept_a: str,
         concept_b: str,
         severity: float,
         evidence: List[str],
+        access_entity: Optional[str] = None,
     ) -> bool:
         """
         Store a detected contradiction in the graph.
@@ -1087,12 +1267,14 @@ class ContradictionDetector:
 
             projector = get_projector()
             if projector:
+                effective_access_entity = access_entity or self.access_entity
                 return projector.create_contradiction(
                     user_id=self.user_id,
                     concept_name1=concept_a,
                     concept_name2=concept_b,
                     severity=severity,
                     evidence=evidence,
+                    access_entity=effective_access_entity,
                 )
             return False
 
@@ -1110,6 +1292,9 @@ def detect_contradictions_for_concept(
     user_id: str,
     concept_name: str,
     store: bool = True,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+    access_entity: Optional[str] = None,
 ) -> List[Dict]:
     """
     Detect and optionally store contradictions for a concept.
@@ -1118,14 +1303,23 @@ def detect_contradictions_for_concept(
         user_id: User ID for scoping
         concept_name: Name of the concept
         store: Whether to store detected contradictions in the graph
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
+        access_entity: Explicit access_entity scope for writes
 
     Returns:
         List of contradiction dicts
     """
-    detector = ContradictionDetector(user_id)
+    detector = ContradictionDetector(
+        user_id,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+        access_entity=access_entity,
+    )
     contradictions = detector.detect_for_concept(concept_name)
 
     if store:
+        effective_access_entity = access_entity or detector._resolve_access_entity_for_concept(concept_name)
         for c in contradictions:
             if c.severity >= 0.5:  # Only store significant contradictions
                 detector.store_contradiction(
@@ -1133,6 +1327,7 @@ def detect_contradictions_for_concept(
                     concept_b=c.concept_b,
                     severity=c.severity,
                     evidence=c.evidence_a[:2] + c.evidence_b[:2],
+                    access_entity=effective_access_entity,
                 )
 
     return [c.to_dict() for c in contradictions]
@@ -1142,6 +1337,8 @@ def find_all_contradictions(
     user_id: str,
     category: Optional[str] = None,
     min_severity: float = 0.5,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Dict]:
     """
     Find all stored contradictions for a user.
@@ -1150,11 +1347,17 @@ def find_all_contradictions(
         user_id: User ID for scoping
         category: Optional category filter
         min_severity: Minimum severity threshold
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of contradiction dicts
     """
-    detector = ContradictionDetector(user_id)
+    detector = ContradictionDetector(
+        user_id,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
     contradictions = detector.find_all_contradictions(
         category=category,
         min_severity=min_severity,

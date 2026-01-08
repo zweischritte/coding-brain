@@ -1,0 +1,182 @@
+{
+  "started_at": "2026-01-07T22:41:29.853269+00:00",
+  "steps": {
+    "co_mentions": {
+      "org:default_org": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:38.358157+00:00",
+        "edges_created": 0
+      },
+      "project:cloudfactory/shared": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:38.629132+00:00",
+        "edges_created": 0
+      },
+      "project:cloudfactory/vgbk": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:40.144333+00:00",
+        "edges_created": 0
+      },
+      "project:default_org/coding-brain": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:43.768827+00:00",
+        "edges_created": 0
+      },
+      "project:default_org/presentation": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:44.150177+00:00",
+        "edges_created": 0
+      },
+      "team:default_org/coding-brain": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.150576+00:00",
+        "edges_created": 0
+      },
+      "user:default_user": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.160869+00:00",
+        "edges_created": 0
+      },
+      "user:grischadallmer": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.169931+00:00",
+        "edges_created": 0
+      }
+    },
+    "drop_legacy_entity_constraint": {
+      "done": true,
+      "done_at": "2026-01-07T22:41:30.303588+00:00"
+    },
+    "metadata_projection": {
+      "done": true,
+      "done_at": "2026-01-07T22:41:36.798436+00:00",
+      "failed": 0,
+      "last_created_at": "2026-01-07T22:34:25.768077",
+      "last_id": "4a694352-2c69-4260-a923-56a0f746850f",
+      "processed": 392
+    },
+    "relation_access_entity_update": {
+      "done": true,
+      "done_at": "2026-01-07T22:41:36.822334+00:00",
+      "updated": 0
+    },
+    "similarity": {
+      "org:default_org": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:38.627066+00:00",
+        "edges_created": 18,
+        "failed": 0,
+        "last_created_at": "2025-12-31T19:38:42.184987",
+        "last_id": "ee1a8b34-6d55-4bf5-8500-06b7ba7e102b",
+        "processed": 5
+      },
+      "project:cloudfactory/shared": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:40.140087+00:00",
+        "edges_created": 1177,
+        "failed": 0,
+        "last_created_at": "2026-01-06T21:33:49.055343",
+        "last_id": "6b41cdc6-e769-489d-a94f-40c3a7adb5a1",
+        "processed": 68
+      },
+      "project:cloudfactory/vgbk": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:43.766433+00:00",
+        "edges_created": 1484,
+        "failed": 0,
+        "last_created_at": "2026-01-06T21:52:53.281306",
+        "last_id": "11079fa0-224d-483c-b970-8d2f8eebf065",
+        "processed": 180
+      },
+      "project:default_org/coding-brain": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:44.148312+00:00",
+        "edges_created": 90,
+        "failed": 0,
+        "last_created_at": "2026-01-03T18:43:39.133689",
+        "last_id": "cbf0c71f-5cac-47b7-94eb-1349952aa1b1",
+        "processed": 45
+      },
+      "project:default_org/presentation": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.148585+00:00",
+        "edges_created": 422,
+        "failed": 0,
+        "last_created_at": "2026-01-07T22:34:25.768077",
+        "last_id": "4a694352-2c69-4260-a923-56a0f746850f",
+        "processed": 67
+      },
+      "team:default_org/coding-brain": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.158784+00:00",
+        "edges_created": 0,
+        "failed": 0,
+        "last_created_at": "2025-12-31T07:37:42.584557",
+        "last_id": "2f98d55d-8173-4372-89e3-ac886159ae93",
+        "processed": 1
+      },
+      "user:default_user": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.167691+00:00",
+        "edges_created": 0,
+        "failed": 0,
+        "last_created_at": null,
+        "last_id": null,
+        "processed": 0
+      },
+      "user:grischadallmer": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.945401+00:00",
+        "edges_created": 246,
+        "failed": 0,
+        "last_created_at": "2026-01-02T15:55:51.499992",
+        "last_id": "b61b59f6-0f33-42a4-8b20-a1aff129fe6b",
+        "processed": 22
+      }
+    },
+    "tag_cooccurs": {
+      "org:default_org": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:38.472186+00:00",
+        "edges_created": 1
+      },
+      "project:cloudfactory/shared": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:38.641358+00:00",
+        "edges_created": 50
+      },
+      "project:cloudfactory/vgbk": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:40.164705+00:00",
+        "edges_created": 88
+      },
+      "project:default_org/coding-brain": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:43.771910+00:00",
+        "edges_created": 3
+      },
+      "project:default_org/presentation": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:44.156895+00:00",
+        "edges_created": 29
+      },
+      "team:default_org/coding-brain": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.152043+00:00",
+        "edges_created": 0
+      },
+      "user:default_user": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.163205+00:00",
+        "edges_created": 1
+      },
+      "user:grischadallmer": {
+        "done": true,
+        "done_at": "2026-01-07T22:41:45.172032+00:00",
+        "edges_created": 1
+      }
+    }
+  },
+  "updated_at": "2026-01-07T22:41:45.945415+00:00",
+  "version": 1
+}

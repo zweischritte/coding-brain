@@ -32,7 +32,10 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 
 ### Code Intelligence Modules
 - Tree-sitter + SCIP indexing pipeline with CODE_* graph projection to Neo4j
+- NestJS/Angular decorator extraction for event-based call graph generation (60+ decorators)
+- Event registry for publisher/subscriber discovery (TRIGGERS_EVENT edges)
 - Tri-hybrid retrieval (lexical + vector + graph) powering code search
+- Tool fallback cascade preventing AI hallucination on "Symbol not found" errors
 - Code tools are exposed via REST (`/api/v1/code`); MCP currently exposes
   index/search/explain/callers/callees/impact (ADR/test/pr are REST-only)
 
@@ -42,6 +45,7 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - MCP SSE session binding with memory or Valkey stores
 - Health probes, circuit breakers, rate limiting, audit logging
 - Backup/export and GDPR endpoints
+- Backup and restore shell scripts for full stack (database dumps + volumes)
 - Prometheus metrics endpoint at `/metrics`
 
 ### Guidance
@@ -259,6 +263,60 @@ Returns all fields including `access_entity`, useful for:
 - Following evidence chains between memories
 - Exploring similar memories from search results (via `OM_SIMILAR` edges)
 
+#### add_memories with code_refs
+
+Link memories directly to source code locations:
+
+```text
+add_memories(
+  text="Auth tokens cached for 5 minutes",
+  category="decision",
+  scope="project",
+  entity="AuthService",
+  access_entity="project:default_org/coding-brain",
+  code_refs=[{"file_path": "/src/auth/token-cache.ts", "line_start": 42, "line_end": 55}]
+)
+```
+
+#### search_memory with relation_detail
+
+Control output verbosity for token efficiency:
+
+```text
+search_memory(query="auth caching", relation_detail="minimal")
+```
+
+Levels:
+
+- `none`: No meta_relations (minimal tokens)
+- `minimal`: Only artifact + similar IDs
+- `standard`: + entities + tags + evidence (default)
+- `full`: Verbose format with all OM_* relations
+
+### Code Intelligence Tools (MCP)
+
+#### find_callers with fallback cascade
+
+The `find_callers` tool includes a 4-stage fallback cascade to prevent AI hallucination:
+
+1. **Graph Search (SCIP)** - Primary call graph traversal
+2. **Grep Fallback** - Pattern matching for symbol name
+3. **Semantic Search** - search_code_hybrid with keywords
+4. **Structured Error** - Returns suggestions and next actions
+
+When results come from a fallback stage, the response includes:
+
+- `degraded_mode: true` - Indicates non-primary source
+- `fallback_stage: N` - Which fallback stage was used
+- `suggestions: [...]` - Recommended next actions
+
+Common reasons for fallback activation:
+
+- Event handlers with decorators (@OnEvent, @Subscribe)
+- Dependency Injection (constructor injection, @Inject)
+- Dynamic function calls (eval, getattr, reflection)
+- Stale index (re-index with `index_codebase(reset=true)`)
+
 ### Claude Code Configuration
 
 On macOS, Claude Code stores MCP settings in `~/.claude.json`. Add the following to connect to Coding Brain:
@@ -345,8 +403,9 @@ Key directories:
 - `openmemory/run.sh` - simplified bootstrap for memory-only installs
 - `openmemory/api/indexing` - code indexing and CODE_* graph projection
 - `openmemory/api/retrieval` - tri-hybrid retrieval and reranking
-- `openmemory/api/tools` - code intelligence tooling modules
+- `openmemory/api/tools` - code intelligence tooling modules (including fallback cascade)
 - `openmemory/api/cross_repo` - cross-repo registry and analysis
+- `openmemory/backup-scripts` - backup and restore shell scripts for full stack
 
 ---
 

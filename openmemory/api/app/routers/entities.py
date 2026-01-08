@@ -19,8 +19,15 @@ from app.database import get_db
 from app.models import User
 from app.security.dependencies import require_scopes
 from app.security.types import Principal, Scope
+from app.security.access import build_access_entity_patterns
 
 router = APIRouter(prefix="/api/v1/entities", tags=["entities"])
+
+
+def _get_graph_access_filters(principal: Principal) -> tuple[list[str], list[str]]:
+    exact, like_patterns = build_access_entity_patterns(principal)
+    prefixes = [p[:-1] for p in like_patterns if p.endswith("%")]
+    return exact, prefixes
 
 
 # =============================================================================
@@ -48,7 +55,13 @@ async def get_centrality(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    centrality = get_entity_centrality_from_graph(user_id=principal.user_id, limit=limit)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+    centrality = get_entity_centrality_from_graph(
+        user_id=principal.user_id,
+        limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
 
     return {"entities": centrality}
 
@@ -72,7 +85,13 @@ async def get_pagerank(
             detail="Neo4j GDS not available for PageRank"
         )
 
-    pagerank = get_entity_pagerank(user_id=principal.user_id, limit=limit)
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+    pagerank = get_entity_pagerank(
+        user_id=principal.user_id,
+        limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
 
     return {"entities": pagerank}
 
@@ -87,11 +106,13 @@ class NormalizeRequest(BaseModel):
     variants: Optional[List[str]] = None
     auto: bool = False
     dry_run: bool = True
+    access_entity: Optional[str] = None
 
 
 @router.get("/normalization/duplicates")
 async def find_duplicates(
     principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
+    access_entity: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Find duplicate entity candidates."""
@@ -101,7 +122,10 @@ async def find_duplicates(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    duplicates = find_duplicate_entities_in_graph(user_id=principal.user_id)
+    duplicates = find_duplicate_entities_in_graph(
+        user_id=principal.user_id,
+        access_entity=access_entity,
+    )
 
     return {"duplicates": duplicates}
 
@@ -125,6 +149,7 @@ async def normalize_entities_endpoint(
         variant_names=request.variants,
         auto=request.auto,
         dry_run=request.dry_run,
+        access_entity=request.access_entity,
     )
 
     return result
@@ -134,6 +159,7 @@ async def normalize_entities_endpoint(
 async def find_semantic_duplicates_endpoint(
     principal: Principal = Depends(require_scopes(Scope.ENTITIES_READ)),
     threshold: float = Query(default=0.7, ge=0.0, le=1.0),
+    access_entity: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """Find semantic entity duplicates using advanced detection."""
@@ -146,6 +172,7 @@ async def find_semantic_duplicates_endpoint(
     duplicates = await find_semantic_duplicates(
         user_id=principal.user_id,
         threshold=threshold,
+        access_entity=access_entity,
     )
 
     return {"duplicates": duplicates}
@@ -271,12 +298,16 @@ async def get_entity(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+
     # Get network (co-mentions)
     network = get_entity_network_from_graph(
         entity_name=entity_name,
         user_id=principal.user_id,
         min_count=1,
         limit=50,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     # Get typed relations
@@ -285,6 +316,8 @@ async def get_entity(
         user_id=principal.user_id,
         direction="both",
         limit=50,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     # Get memory count for this entity
@@ -292,15 +325,22 @@ async def get_entity(
         user_id=principal.user_id,
         group_by="entity",
         limit=1000,  # High limit to find the entity
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
     memory_count = 0
+    display_name = None
     for e in entities:
         if e.get("key") == entity_name:
             memory_count = e.get("count", 0)
+            display_name = e.get("displayName")
             break
+    if not display_name and network and network.get("entityDisplayName"):
+        display_name = network.get("entityDisplayName")
 
     return {
         "name": entity_name,
+        "displayName": display_name or entity_name,
         "memory_count": memory_count,
         "network": network,
         "relations": relations,
@@ -322,11 +362,14 @@ async def get_entity_network(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     network = get_entity_network_from_graph(
         entity_name=entity_name,
         user_id=principal.user_id,
         min_count=min_count,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     if network is None:
@@ -346,11 +389,16 @@ async def get_entity_relations(
     db: Session = Depends(get_db),
 ):
     """Get typed relations for an entity."""
-    from app.graph.graph_ops import get_entity_relations_from_graph
+    from app.graph.graph_ops import (
+        get_entity_relations_from_graph,
+        get_entity_display_name_from_graph,
+    )
 
     user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
 
     # Parse relation_types if provided
     types_list = None
@@ -364,9 +412,22 @@ async def get_entity_relations(
         category=category,
         direction=direction,
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
-    return {"entity": entity_name, "relations": relations}
+    display_name = get_entity_display_name_from_graph(
+        entity_name=entity_name,
+        user_id=principal.user_id,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
+    )
+
+    return {
+        "entity": entity_name,
+        "entityDisplayName": display_name or entity_name,
+        "relations": relations,
+    }
 
 
 @router.get("/{entity_name}/memories")
@@ -383,10 +444,34 @@ async def get_entity_memories(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
     memories = retrieve_via_entity_graph(
         user_id=principal.user_id,
         entity_names=[entity_name],
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
-    return {"entity": entity_name, "memories": memories}
+    display_name = None
+    for memory in memories:
+        for detail in memory.get("entityDetails", []) or []:
+            if detail.get("name") == entity_name and detail.get("displayName"):
+                display_name = detail["displayName"]
+                break
+        if display_name:
+            break
+    if not display_name:
+        from app.graph.graph_ops import get_entity_display_name_from_graph
+        display_name = get_entity_display_name_from_graph(
+            entity_name=entity_name,
+            user_id=principal.user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
+
+    return {
+        "entity": entity_name,
+        "entityDisplayName": display_name or entity_name,
+        "memories": memories,
+    }

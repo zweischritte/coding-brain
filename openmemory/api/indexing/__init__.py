@@ -1,7 +1,7 @@
 """Code indexing module for AST parsing and symbol extraction.
 
 This module provides:
-- AST parsing with Tree-sitter (Python, TypeScript, Java)
+- AST parsing with Tree-sitter (Python, TypeScript, Java, Go)
 - Incremental indexing with Merkle tree
 - SCIP symbol ID format extraction
 - Bootstrap state and priority queue for tiered indexing
@@ -25,6 +25,7 @@ from openmemory.api.indexing.ast_parser import (
     PythonPlugin,
     TypeScriptPlugin,
     JavaPlugin,
+    GoPlugin,
     # Factory
     create_parser,
     # Exceptions

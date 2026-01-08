@@ -90,6 +90,19 @@ add_memories(
 search_memory(query="pytest before merge", limit=5)
 ```
 
+### Search memories (time window)
+```text
+search_memory(
+  query="Project XXX",
+  scope="project",
+  entity="XXX",
+  created_after="2025-02-14T12:10:00Z",
+  created_before="2025-02-14T12:30:00Z",
+  limit=50
+)
+```
+Note: `list_memories()` always returns everything; use `created_after`/`created_before` with `search_memory` to avoid noise. `search_memory` caps at 50 results, so narrow the window to page if needed.
+
 ### List memories
 ```text
 list_memories()

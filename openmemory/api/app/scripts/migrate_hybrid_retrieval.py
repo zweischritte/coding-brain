@@ -105,7 +105,11 @@ def create_fulltext_index(dry_run: bool = False) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def refresh_cluster_sizes(user_id: Optional[str], dry_run: bool = False) -> Dict[str, Any]:
+def refresh_cluster_sizes(
+    user_id: Optional[str],
+    dry_run: bool = False,
+    access_entity: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Refresh similarityClusterSize on OM_Memory nodes.
 
@@ -118,10 +122,15 @@ def refresh_cluster_sizes(user_id: Optional[str], dry_run: bool = False) -> Dict
             # First, check how many need updating
             count_query = """
             MATCH (m:OM_Memory)
-            WHERE ($userId IS NULL OR m.userId = $userId)
+            WHERE ($accessEntity IS NULL OR coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity)
             RETURN count(m) AS total
             """
-            result = session.run(count_query, userId=user_id)
+            result = session.run(
+                count_query,
+                userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}" if user_id else None,
+            )
             record = result.single()
             total = record["total"] if record else 0
 
@@ -132,13 +141,18 @@ def refresh_cluster_sizes(user_id: Optional[str], dry_run: bool = False) -> Dict
             # Update cluster sizes
             update_query = """
             MATCH (m:OM_Memory)
-            WHERE ($userId IS NULL OR m.userId = $userId)
+            WHERE ($accessEntity IS NULL OR coalesce(m.accessEntity, $legacyAccessEntity) = $accessEntity)
             OPTIONAL MATCH (m)-[r:OM_SIMILAR]->()
             WITH m, count(r) AS clusterSize
             SET m.similarityClusterSize = clusterSize
             RETURN count(m) AS updated
             """
-            result = session.run(update_query, userId=user_id)
+            result = session.run(
+                update_query,
+                userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}" if user_id else None,
+            )
             record = result.single()
             updated = record["updated"] if record else 0
 
@@ -150,7 +164,11 @@ def refresh_cluster_sizes(user_id: Optional[str], dry_run: bool = False) -> Dict
         return {"success": False, "error": str(e)}
 
 
-def refresh_entity_degrees(user_id: Optional[str], dry_run: bool = False) -> Dict[str, Any]:
+def refresh_entity_degrees(
+    user_id: Optional[str],
+    dry_run: bool = False,
+    access_entity: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Refresh degree property on OM_Entity nodes.
 
@@ -163,10 +181,15 @@ def refresh_entity_degrees(user_id: Optional[str], dry_run: bool = False) -> Dic
             # Count entities
             count_query = """
             MATCH (e:OM_Entity)
-            WHERE ($userId IS NULL OR e.userId = $userId)
+            WHERE ($accessEntity IS NULL OR coalesce(e.accessEntity, $legacyAccessEntity) = $accessEntity)
             RETURN count(e) AS total
             """
-            result = session.run(count_query, userId=user_id)
+            result = session.run(
+                count_query,
+                userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}" if user_id else None,
+            )
             record = result.single()
             total = record["total"] if record else 0
 
@@ -177,13 +200,19 @@ def refresh_entity_degrees(user_id: Optional[str], dry_run: bool = False) -> Dic
             # Update degrees
             update_query = """
             MATCH (e:OM_Entity)
-            WHERE ($userId IS NULL OR e.userId = $userId)
+            WHERE ($accessEntity IS NULL OR coalesce(e.accessEntity, $legacyAccessEntity) = $accessEntity)
             OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED]-()
+            WHERE ($accessEntity IS NULL OR coalesce(r.accessEntity, $legacyAccessEntity) = $accessEntity)
             WITH e, count(r) AS degree
             SET e.degree = degree
             RETURN count(e) AS updated
             """
-            result = session.run(update_query, userId=user_id)
+            result = session.run(
+                update_query,
+                userId=user_id,
+                accessEntity=access_entity,
+                legacyAccessEntity=f"user:{user_id}" if user_id else None,
+            )
             record = result.single()
             updated = record["updated"] if record else 0
 
@@ -195,7 +224,11 @@ def refresh_entity_degrees(user_id: Optional[str], dry_run: bool = False) -> Dic
         return {"success": False, "error": str(e)}
 
 
-def refresh_pagerank(user_id: Optional[str], dry_run: bool = False) -> Dict[str, Any]:
+def refresh_pagerank(
+    user_id: Optional[str],
+    dry_run: bool = False,
+    access_entity: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Compute and store PageRank on OM_Entity nodes.
 
@@ -208,7 +241,13 @@ def refresh_pagerank(user_id: Optional[str], dry_run: bool = False) -> Dict[str,
             logger.info("[DRY RUN] Would compute PageRank for entities")
             return {"success": True, "action": "would_compute", "dry_run": True}
 
-        result = entity_pagerank(user_id=user_id, write_to_nodes=True, limit=10000)
+        access_entities = [access_entity] if access_entity else None
+        result = entity_pagerank(
+            user_id=user_id,
+            write_to_nodes=True,
+            limit=10000,
+            access_entities=access_entities,
+        )
         updated = len(result) if result else 0
 
         logger.info(f"Computed PageRank for {updated} entities")
@@ -222,7 +261,11 @@ def refresh_pagerank(user_id: Optional[str], dry_run: bool = False) -> Dict[str,
         return {"success": False, "error": str(e)}
 
 
-def run_migration(user_id: Optional[str] = None, dry_run: bool = False) -> Dict[str, Any]:
+def run_migration(
+    user_id: Optional[str] = None,
+    dry_run: bool = False,
+    access_entity: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Run the complete hybrid retrieval migration.
 
@@ -232,8 +275,10 @@ def run_migration(user_id: Optional[str] = None, dry_run: bool = False) -> Dict[
     3. Refresh degree on entities
     4. Compute PageRank on entities (if GDS available)
     """
+    access_entity = access_entity or (f"user:{user_id}" if user_id else None)
     results = {
         "user_id": user_id or "all",
+        "access_entity": access_entity,
         "dry_run": dry_run,
         "steps": {}
     }
@@ -244,15 +289,27 @@ def run_migration(user_id: Optional[str] = None, dry_run: bool = False) -> Dict[
 
     # Step 2: Refresh cluster sizes
     logger.info("Step 2/4: Refreshing memory similarity cluster sizes...")
-    results["steps"]["cluster_sizes"] = refresh_cluster_sizes(user_id, dry_run)
+    results["steps"]["cluster_sizes"] = refresh_cluster_sizes(
+        user_id,
+        dry_run,
+        access_entity=access_entity,
+    )
 
     # Step 3: Refresh entity degrees
     logger.info("Step 3/4: Refreshing entity degrees...")
-    results["steps"]["entity_degrees"] = refresh_entity_degrees(user_id, dry_run)
+    results["steps"]["entity_degrees"] = refresh_entity_degrees(
+        user_id,
+        dry_run,
+        access_entity=access_entity,
+    )
 
     # Step 4: Compute PageRank
     logger.info("Step 4/4: Computing entity PageRank...")
-    results["steps"]["pagerank"] = refresh_pagerank(user_id, dry_run)
+    results["steps"]["pagerank"] = refresh_pagerank(
+        user_id,
+        dry_run,
+        access_entity=access_entity,
+    )
 
     # Summary
     all_success = all(
@@ -278,6 +335,11 @@ def main():
         help="Migrate all users (explicit flag)"
     )
     parser.add_argument(
+        "--access-entity",
+        default=None,
+        help="Access entity scope (default: user scope when --user-id is set)"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show what would be done without making changes"
@@ -288,6 +350,12 @@ def main():
     # Validate arguments
     if args.user_id and args.all_users:
         logger.error("Cannot specify both --user-id and --all-users")
+        sys.exit(1)
+    if args.access_entity and args.all_users:
+        logger.error("Cannot specify --access-entity with --all-users")
+        sys.exit(1)
+    if args.access_entity and not args.user_id:
+        logger.error("--access-entity requires --user-id for legacy fallback")
         sys.exit(1)
 
     user_id = args.user_id if args.user_id else None
@@ -305,7 +373,11 @@ def main():
     if args.dry_run:
         logger.info("DRY RUN MODE - no changes will be made")
 
-    results = run_migration(user_id=user_id, dry_run=args.dry_run)
+    results = run_migration(
+        user_id=user_id,
+        dry_run=args.dry_run,
+        access_entity=args.access_entity,
+    )
 
     # Print summary
     logger.info("=" * 60)

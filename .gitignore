@@ -197,3 +197,5 @@ testing.ipynb
 # neo4j/
 .gemini/settings.json
 .history/
+CLAUDE.md
+AGENTS.md

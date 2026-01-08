@@ -100,6 +100,7 @@ indexing = [
     "tree-sitter-python>=0.23.0,<0.24.0",  # Python grammar
     "tree-sitter-typescript>=0.23.0,<0.24.0",  # TypeScript/TSX grammar
     "tree-sitter-java>=0.23.0,<0.24.0",  # Java grammar
+    "tree-sitter-go>=0.23.0,<0.24.0",  # Go grammar
 ]
 retrieval = [
     "opensearch-py>=2.0.0",  # OpenSearch client for lexical and hybrid search

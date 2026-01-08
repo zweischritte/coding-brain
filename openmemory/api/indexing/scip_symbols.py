@@ -52,6 +52,7 @@ class SCIPScheme(Enum):
     SCIP_PYTHON = "scip-python"
     SCIP_TYPESCRIPT = "scip-typescript"
     SCIP_JAVA = "scip-java"
+    SCIP_GO = "scip-go"
 
     @classmethod
     def for_language(cls, language: Language) -> "SCIPScheme":
@@ -61,6 +62,7 @@ class SCIPScheme(Enum):
             Language.TYPESCRIPT: cls.SCIP_TYPESCRIPT,
             Language.TSX: cls.SCIP_TYPESCRIPT,
             Language.JAVA: cls.SCIP_JAVA,
+            Language.GO: cls.SCIP_GO,
         }
         return mapping.get(language, cls.LOCAL)
 
@@ -357,6 +359,43 @@ class JavaPackageResolver(PackageResolver):
         return ""  # Default package
 
 
+class GoPackageResolver(PackageResolver):
+    """Go package resolver."""
+
+    def __init__(self):
+        self._module_path: Optional[str] = None
+
+    def _read_module_path(self, root_path: Path) -> Optional[str]:
+        go_mod = root_path / "go.mod"
+        if not go_mod.exists():
+            return None
+        try:
+            for line in go_mod.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("module "):
+                    return line.split(" ", 1)[1].strip()
+        except IOError:
+            return None
+        return None
+
+    def resolve(self, file_path: Path, root_path: Path) -> str:
+        """Resolve Go package from source file."""
+        if self._module_path is None:
+            self._module_path = self._read_module_path(root_path)
+
+        try:
+            rel_path = file_path.relative_to(root_path)
+        except ValueError:
+            rel_path = file_path
+
+        rel_dir = rel_path.parent
+        if str(rel_dir) in (".", ""):
+            return self._module_path or ""
+        if self._module_path:
+            return f"{self._module_path}/{rel_dir.as_posix()}"
+        return rel_dir.as_posix()
+
+
 # =============================================================================
 # SCIP Symbol Extractor
 # =============================================================================
@@ -372,6 +411,7 @@ class SCIPSymbolExtractor:
             Language.TYPESCRIPT: TypeScriptPackageResolver(),
             Language.TSX: TypeScriptPackageResolver(),
             Language.JAVA: JavaPackageResolver(),
+            Language.GO: GoPackageResolver(),
         }
 
     def extract(self, symbol: Symbol, file_path: Path) -> SCIPSymbolID:

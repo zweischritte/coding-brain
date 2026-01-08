@@ -76,6 +76,7 @@ async def run_normalization(
     dry_run: bool = True,
     phases: Optional[List[str]] = None,
     threshold: float = 0.7,
+    access_entity: Optional[str] = None,
     skip_mem0_sync: bool = False,
     skip_gds_refresh: bool = False,
     logger: Optional[logging.Logger] = None,
@@ -107,13 +108,19 @@ async def run_normalization(
         logger.error("Neo4j is not healthy")
         return {"error": "Neo4j unhealthy"}
 
+    access_entity = access_entity or f"user:{user_id}"
     logger.info(f"Starting semantic normalization for user: {user_id}")
+    logger.info(f"Access entity: {access_entity}")
     logger.info(f"Mode: {'DRY RUN' if dry_run else 'EXECUTE'}")
     logger.info(f"Threshold: {threshold}")
 
     # 1. Collect all entities
     logger.info("Phase 0: Collecting entities...")
-    entities = await get_all_user_entities(user_id)
+    entities = await get_all_user_entities(
+        user_id,
+        access_entities=[access_entity],
+        access_entity_prefixes=None,
+    )
     logger.info(f"Found {len(entities)} unique entities")
 
     if len(entities) < 2:
@@ -169,6 +176,7 @@ async def run_normalization(
                 user_id=user_id,
                 canonical=group.canonical,
                 variants=group.variants,
+                access_entity=access_entity,
             )
 
             results["merges"].append({
@@ -189,6 +197,7 @@ async def run_normalization(
                 group=group,
                 allowed_memory_ids=None,  # No ACL restriction
                 dry_run=False,
+                access_entity=access_entity,
             )
 
             results["merges"].append(merge_result)
@@ -204,7 +213,14 @@ async def run_normalization(
         # Refresh GDS signals
         if not skip_gds_refresh:
             logger.info("\n=== Refreshing Graph Signals ===")
-            gds_stats = await refresh_all_signals_for_user(user_id)
+            if access_entity.startswith("user:"):
+                gds_stats = await refresh_all_signals_for_user(user_id)
+            else:
+                from app.graph.gds_signal_refresh import refresh_graph_signals
+                gds_stats = await refresh_graph_signals(
+                    user_id,
+                    access_entities=[access_entity],
+                )
             results["gds_refresh"] = gds_stats
             logger.info(f"GDS refresh: {gds_stats}")
 
@@ -250,6 +266,11 @@ def main():
         type=float,
         default=0.7,
         help="Minimum confidence threshold for merge (default: 0.7)"
+    )
+    parser.add_argument(
+        "--access-entity",
+        default=None,
+        help="Access entity scope (default: user scope)"
     )
     parser.add_argument(
         "--skip-mem0-sync",
@@ -298,6 +319,7 @@ def main():
             dry_run=args.dry_run,
             phases=args.phases,
             threshold=args.threshold,
+            access_entity=args.access_entity,
             skip_mem0_sync=args.skip_mem0_sync,
             skip_gds_refresh=args.skip_gds_refresh,
             logger=logger,

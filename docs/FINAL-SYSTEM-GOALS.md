@@ -15,17 +15,22 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 
 ## 2. Memory and Context Goals
 - Store structured memories (category, scope, artifacts, entities, tags, evidence).
+- Support code_refs to link memories directly to source code locations.
 - Enforce multi-tenant isolation (org- and user-scoped access).
 - Project memory metadata into a Neo4j graph for aggregation and relation queries.
 - Maintain similarity edges, tag co-occurrence, and typed entity relations.
+- Provide configurable output verbosity (relation_detail) to optimize token usage.
 - Support optional business concept extraction and semantic search in a separate graph.
 
 ---
 
 ## 3. Code Intelligence Goals
 - Build a CODE_* graph from source code using Tree-sitter and SCIP symbols.
+- Extract NestJS/Angular decorators for framework-aware indexing (60+ decorators).
 - Detect API boundaries and link clients to endpoints.
+- Discover event publishers/subscribers and generate TRIGGERS_EVENT edges.
 - Provide tri-hybrid retrieval (lexical + vector + graph) for code search.
+- Implement tool fallback cascade to prevent AI hallucination on missing symbols.
 - Maintain library tools for explain-code, call graph, impact analysis, ADR automation,
   test generation, and PR analysis.
 
@@ -50,6 +55,7 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 - Provide health probes for liveness, readiness, and dependency checks.
 - Implement circuit breaker utilities for external dependencies.
 - Provide backup/export tooling and documented runbooks.
+- Offer shell scripts for full-stack backup and restore (database dumps + volumes).
 
 ---
 
@@ -69,6 +75,7 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 
 ## 9. Near-Term Gaps (Explicit)
 - Expose remaining code-intel tools via MCP (ADR automation, test generation, PR analysis).
-- Wire incremental indexing modules (Merkle tree + bootstrap queue) into the indexer and add status endpoints.
+- Wire incremental indexing modules (Merkle tree + bootstrap queue) into the indexer.
 - Expand REST hybrid memory search to include on-the-fly query embeddings.
 - Replace CLI stubs with real API calls for search/memory/index/graph.
+- Wire reranker module into REST/MCP endpoints (currently library-only).

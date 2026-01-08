@@ -65,6 +65,7 @@ class TestLanguageEnum:
         assert Language.TYPESCRIPT.value == "typescript"
         assert Language.TSX.value == "tsx"
         assert Language.JAVA.value == "java"
+        assert Language.GO.value == "go"
 
     def test_language_from_extension(self):
         """Language can be determined from file extension."""
@@ -72,6 +73,7 @@ class TestLanguageEnum:
         assert Language.from_extension(".ts") == Language.TYPESCRIPT
         assert Language.from_extension(".tsx") == Language.TSX
         assert Language.from_extension(".java") == Language.JAVA
+        assert Language.from_extension(".go") == Language.GO
         assert Language.from_extension(".js") is None
         assert Language.from_extension(".unknown") is None
 
@@ -80,6 +82,7 @@ class TestLanguageEnum:
         assert Language.from_path(Path("foo/bar.py")) == Language.PYTHON
         assert Language.from_path(Path("src/component.tsx")) == Language.TSX
         assert Language.from_path(Path("Main.java")) == Language.JAVA
+        assert Language.from_path(Path("pkg/main.go")) == Language.GO
         assert Language.from_path(Path("README.md")) is None
 
 
@@ -1460,6 +1463,7 @@ class TestASTParser:
         assert Language.PYTHON in parser.plugins
         assert Language.TYPESCRIPT in parser.plugins
         assert Language.JAVA in parser.plugins
+        assert Language.GO in parser.plugins
 
     def test_parse_python_file(self, parser, tmp_path):
         """Parse a Python file."""

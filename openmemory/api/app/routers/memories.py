@@ -748,11 +748,14 @@ async def update_memory(
 
     # --- Graph: collect old entities for precise co-mention refresh (best-effort) ---
     old_entities: List[str] = []
+    access_entity = (memory.metadata_ or {}).get("access_entity") if memory.metadata_ else None
+
     if is_graph_enabled():
         try:
             old_entities = get_entities_for_memory_from_graph(
                 memory_id=str(memory_id),
                 user_id=principal.user_id,
+                access_entities=[access_entity] if access_entity else None,
             )
         except Exception as e:
             sync_warnings.append(f"graph_old_entities_failed:{e}")
@@ -901,12 +904,14 @@ async def update_memory(
             new_entities = get_entities_for_memory_from_graph(
                 memory_id=str(memory_id),
                 user_id=principal.user_id,
+                access_entities=[access_entity] if access_entity else None,
             )
             affected_entities = sorted({*(old_entities or []), *(new_entities or [])})
             if affected_entities:
                 refresh_co_mention_edges_for_entities(
                     user_id=principal.user_id,
                     entity_names=affected_entities,
+                    access_entity=access_entity,
                 )
                 co_mentions_refreshed = True
         except Exception as e:

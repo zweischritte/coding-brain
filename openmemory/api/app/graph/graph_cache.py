@@ -46,7 +46,7 @@ class GraphContext:
             - similarityClusterSize: Count of OM_SIMILAR edges
             - maxEntityPageRank: Highest PageRank of connected entities
             - maxEntityDegree: Highest co-mention degree of connected entities
-        entity_cache: Map of entity_name to properties
+        entity_cache: Map of access-scoped entity key (accessEntity:name) to properties
             - pageRank: Pre-computed PageRank score
             - degree: Count of OM_CO_MENTIONED edges
         tag_pmi_cache: Map of (tag1, tag2) to PMI score
@@ -79,6 +79,8 @@ def fetch_graph_context(
     memory_ids: List[str],
     user_id: str,
     context_tags: Optional[List[str]] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> GraphContext:
     """
     Batch-fetch graph signals for all memories in the search pool.
@@ -112,24 +114,40 @@ def fetch_graph_context(
             # This combines multiple lookups into a single round-trip
             query = """
             UNWIND $memoryIds AS memId
-            MATCH (m:OM_Memory {id: memId, userId: $userId})
+            MATCH (m:OM_Memory {id: memId})
+            WHERE (
+              (m.accessEntity IS NOT NULL AND (
+                m.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+              ))
+              OR (m.accessEntity IS NULL AND m.userId = $userId)
+            )
             OPTIONAL MATCH (m)-[:OM_ABOUT]->(e:OM_Entity)
             WITH m,
                  coalesce(m.similarityClusterSize, 0) AS clusterSize,
                  max(coalesce(e.pageRank, 0)) AS maxPageRank,
                  max(coalesce(e.degree, 0)) AS maxDegree,
-                 collect(DISTINCT e.name) AS entityNames
+                 collect(DISTINCT {name: e.name, accessEntity: coalesce(e.accessEntity, $legacyAccessEntity)}) AS entityRefs
             RETURN m.id AS memoryId,
                    clusterSize,
                    maxPageRank,
                    maxDegree,
-                   entityNames
+                   entityRefs
             """
 
-            result = session.run(query, memoryIds=memory_ids, userId=user_id)
+            access_entities = access_entities or [f"user:{user_id}"]
+            access_entity_prefixes = access_entity_prefixes or []
+            result = session.run(
+                query,
+                memoryIds=memory_ids,
+                userId=user_id,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+                legacyAccessEntity=f"user:{user_id}",
+            )
 
             memory_cache: Dict[str, Dict[str, Any]] = {}
-            entity_names: Set[str] = set()
+            entity_refs: Set[Tuple[str, str]] = set()
             max_pagerank = 0.001  # Avoid division by zero
             max_degree = 1
             max_cluster_size = 1
@@ -149,27 +167,36 @@ def fetch_graph_context(
                 max_cluster_size = max(max_cluster_size, record["clusterSize"] or 0)
 
                 # Collect entity names for potential further lookup
-                if record["entityNames"]:
-                    entity_names.update(n for n in record["entityNames"] if n)
+                if record["entityRefs"]:
+                    for ref in record["entityRefs"]:
+                        name = ref.get("name") if isinstance(ref, dict) else None
+                        access_entity = ref.get("accessEntity") if isinstance(ref, dict) else None
+                        if name and access_entity:
+                            entity_refs.add((access_entity, name))
 
             # Fetch entity cache for detected entities
             entity_cache: Dict[str, Dict[str, Any]] = {}
-            if entity_names:
+            if entity_refs:
                 entity_query = """
-                UNWIND $entityNames AS name
-                MATCH (e:OM_Entity {userId: $userId, name: name})
+                UNWIND $entityRefs AS ref
+                MATCH (e:OM_Entity {name: ref.name})
+                WHERE coalesce(e.accessEntity, $legacyAccessEntity) = ref.accessEntity
                 RETURN e.name AS name,
+                       ref.accessEntity AS accessEntity,
                        coalesce(e.pageRank, 0) AS pageRank,
                        coalesce(e.degree, 0) AS degree
                 """
                 entity_result = session.run(
                     entity_query,
-                    entityNames=list(entity_names),
-                    userId=user_id
+                    entityRefs=[{"name": name, "accessEntity": access_entity} for access_entity, name in entity_refs],
+                    legacyAccessEntity=f"user:{user_id}",
                 )
                 for record in entity_result:
-                    if record["name"]:
-                        entity_cache[record["name"]] = {
+                    name = record.get("name")
+                    access_entity = record.get("accessEntity")
+                    if name and access_entity:
+                        key = f"{access_entity}:{name}"
+                        entity_cache[key] = {
                             "pageRank": record["pageRank"] or 0,
                             "degree": record["degree"] or 0,
                         }
@@ -179,13 +206,22 @@ def fetch_graph_context(
             if context_tags:
                 pmi_query = """
                 UNWIND $tags AS tag1
-                MATCH (t1:OM_Tag {key: tag1})-[r:OM_COOCCURS {userId: $userId}]-(t2:OM_Tag)
+                MATCH (t1:OM_Tag {key: tag1})-[r:OM_COOCCURS]-(t2:OM_Tag)
+                WHERE (
+                  (r.accessEntity IS NOT NULL AND (
+                    r.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (r.accessEntity IS NULL AND r.userId = $userId)
+                )
                 RETURN t1.key AS tag1, t2.key AS tag2, r.pmi AS pmi
                 """
                 pmi_result = session.run(
                     pmi_query,
                     tags=context_tags,
-                    userId=user_id
+                    userId=user_id,
+                    accessEntities=access_entities,
+                    accessEntityPrefixes=access_entity_prefixes,
                 )
                 for record in pmi_result:
                     if record["tag1"] and record["tag2"]:
@@ -207,7 +243,11 @@ def fetch_graph_context(
         return GraphContext(available=False)
 
 
-def refresh_pagerank_cache(user_id: str) -> Dict[str, Any]:
+def refresh_pagerank_cache(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Refresh PageRank values for all entities (batch operation).
 
@@ -215,7 +255,9 @@ def refresh_pagerank_cache(user_id: str) -> Dict[str, Any]:
     Uses Neo4j GDS PageRank algorithm if available.
 
     Args:
-        user_id: User ID to refresh PageRank for
+        user_id: User ID to refresh PageRank for (legacy fallback)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Statistics about the refresh operation:
@@ -226,7 +268,13 @@ def refresh_pagerank_cache(user_id: str) -> Dict[str, Any]:
     try:
         from app.graph.gds_operations import entity_pagerank
 
-        result = entity_pagerank(user_id=user_id, write_to_nodes=True, limit=10000)
+        result = entity_pagerank(
+            user_id=user_id,
+            write_to_nodes=True,
+            limit=10000,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
         return {
             "success": True,
             "entities_updated": len(result) if result else 0,
@@ -239,7 +287,11 @@ def refresh_pagerank_cache(user_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def refresh_cluster_sizes(user_id: str) -> Dict[str, Any]:
+def refresh_cluster_sizes(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Refresh similarityClusterSize on all OM_Memory nodes.
 
@@ -248,7 +300,9 @@ def refresh_cluster_sizes(user_id: str) -> Dict[str, Any]:
     in the similarity graph.
 
     Args:
-        user_id: User ID to refresh cluster sizes for
+        user_id: User ID to refresh cluster sizes for (legacy fallback)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Statistics about the refresh operation
@@ -263,13 +317,34 @@ def refresh_cluster_sizes(user_id: str) -> Dict[str, Any]:
 
         with get_neo4j_session() as session:
             query = """
-            MATCH (m:OM_Memory {userId: $userId})
+            MATCH (m:OM_Memory)
+            WHERE (
+              (m.accessEntity IS NOT NULL AND (
+                m.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+              ))
+              OR (m.accessEntity IS NULL AND m.userId = $userId)
+            )
             OPTIONAL MATCH (m)-[r:OM_SIMILAR]->()
+            WHERE (
+              (r.accessEntity IS NOT NULL AND (
+                r.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+              ))
+              OR (r.accessEntity IS NULL AND r.userId = $userId)
+            )
             WITH m, count(r) AS clusterSize
             SET m.similarityClusterSize = clusterSize
             RETURN count(m) AS updated
             """
-            result = session.run(query, userId=user_id)
+            access_entities = access_entities or [f"user:{user_id}"]
+            access_entity_prefixes = access_entity_prefixes or []
+            result = session.run(
+                query,
+                userId=user_id,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             record = result.single()
             return {
                 "success": True,
@@ -280,7 +355,11 @@ def refresh_cluster_sizes(user_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def refresh_entity_degrees(user_id: str) -> Dict[str, Any]:
+def refresh_entity_degrees(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Refresh degree property on all OM_Entity nodes.
 
@@ -289,7 +368,9 @@ def refresh_entity_degrees(user_id: str) -> Dict[str, Any]:
     user's memory network.
 
     Args:
-        user_id: User ID to refresh entity degrees for
+        user_id: User ID to refresh entity degrees for (legacy fallback)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Statistics about the refresh operation
@@ -304,13 +385,34 @@ def refresh_entity_degrees(user_id: str) -> Dict[str, Any]:
 
         with get_neo4j_session() as session:
             query = """
-            MATCH (e:OM_Entity {userId: $userId})
+            MATCH (e:OM_Entity)
+            WHERE (
+              (e.accessEntity IS NOT NULL AND (
+                e.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+              ))
+              OR (e.accessEntity IS NULL AND e.userId = $userId)
+            )
             OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED]-()
+            WHERE (
+              (r.accessEntity IS NOT NULL AND (
+                r.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+              ))
+              OR (r.accessEntity IS NULL AND r.userId = $userId)
+            )
             WITH e, count(r) AS degree
             SET e.degree = degree
             RETURN count(e) AS updated
             """
-            result = session.run(query, userId=user_id)
+            access_entities = access_entities or [f"user:{user_id}"]
+            access_entity_prefixes = access_entity_prefixes or []
+            result = session.run(
+                query,
+                userId=user_id,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             record = result.single()
             return {
                 "success": True,
@@ -321,7 +423,11 @@ def refresh_entity_degrees(user_id: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-def refresh_all_graph_properties(user_id: str) -> Dict[str, Any]:
+def refresh_all_graph_properties(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> Dict[str, Any]:
     """
     Refresh all cached graph properties for a user.
 
@@ -329,15 +435,29 @@ def refresh_all_graph_properties(user_id: str) -> Dict[str, Any]:
     Use after major data changes or as a scheduled maintenance task.
 
     Args:
-        user_id: User ID to refresh properties for
+        user_id: User ID to refresh properties for (legacy fallback)
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Combined results from all refresh operations
     """
     results = {
-        "pagerank": refresh_pagerank_cache(user_id),
-        "cluster_sizes": refresh_cluster_sizes(user_id),
-        "entity_degrees": refresh_entity_degrees(user_id),
+        "pagerank": refresh_pagerank_cache(
+            user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        ),
+        "cluster_sizes": refresh_cluster_sizes(
+            user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        ),
+        "entity_degrees": refresh_entity_degrees(
+            user_id,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        ),
     }
 
     all_success = all(r.get("success", False) for r in results.values())

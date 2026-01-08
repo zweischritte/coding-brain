@@ -593,6 +593,7 @@ def extract_from_memory(
     max_tokens_per_chunk: int = 8000,
     min_confidence: float = 0.5,
     store_in_graph: bool = True,
+    access_entity: Optional[str] = None,
 ) -> Dict:
     """
     Extract and store business concepts from a memory.
@@ -602,7 +603,7 @@ def extract_from_memory(
 
     Args:
         memory_id: UUID of the source memory
-        user_id: User ID for scoping
+        user_id: User ID for legacy fallback
         content: Memory content to extract from
         category: Optional category for concept scoping
         model: Model for extraction (defaults to config or qwen3:8b)
@@ -610,6 +611,7 @@ def extract_from_memory(
         max_tokens_per_chunk: Max tokens per chunk
         min_confidence: Minimum confidence for storage
         store_in_graph: Whether to store in Neo4j graph
+        access_entity: Access entity scope (defaults to user)
 
     Returns:
         Dict with extraction results:
@@ -662,6 +664,7 @@ def extract_from_memory(
                     stored_concepts = 0
 
                     # Store entities
+                    access_entity = access_entity or f"user:{user_id}"
                     for entity in extraction.entities:
                         if entity.importance >= min_confidence:
                             entity_result = projector.upsert_bizentity(
@@ -671,6 +674,7 @@ def extract_from_memory(
                                 importance=entity.importance,
                                 context=entity.context,
                                 mention_count=entity.mention_count,
+                                access_entity=access_entity,
                             )
                             if entity_result:
                                 projector.link_memory_to_bizentity(
@@ -678,6 +682,7 @@ def extract_from_memory(
                                     user_id=user_id,
                                     entity_name=entity.entity,
                                     importance=entity.importance,
+                                    access_entity=access_entity,
                                 )
                                 stored_entities += 1
 
@@ -692,6 +697,7 @@ def extract_from_memory(
                                 category=category,
                                 source_type=concept.source_type,
                                 evidence_count=len(concept.evidence),
+                                access_entity=access_entity,
                             )
                             if concept_result:
                                 projector.link_memory_to_concept(
@@ -699,6 +705,7 @@ def extract_from_memory(
                                     user_id=user_id,
                                     concept_name=concept.concept,
                                     confidence=concept.confidence,
+                                    access_entity=access_entity,
                                 )
                                 # Link to entities
                                 for entity_name in concept.entities:
@@ -706,6 +713,7 @@ def extract_from_memory(
                                         user_id=user_id,
                                         concept_name=concept.concept,
                                         entity_name=entity_name,
+                                        access_entity=access_entity,
                                     )
                                 stored_concepts += 1
 
@@ -753,6 +761,7 @@ def batch_extract_from_memories(
         memory_id = memory.get("id")
         content = memory.get("content")
         category = memory.get("category")
+        access_entity = memory.get("access_entity")
 
         if not memory_id or not content:
             results["errors"] += 1
@@ -765,6 +774,7 @@ def batch_extract_from_memories(
             category=category,
             ollama_base_url=ollama_base_url,
             store_in_graph=store_in_graph,
+            access_entity=access_entity,
         )
 
         if "error" in extraction:

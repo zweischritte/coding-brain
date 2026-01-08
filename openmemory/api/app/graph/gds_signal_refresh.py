@@ -14,12 +14,61 @@ boosting search results.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, Dict, List, Optional
 
 from app.graph.neo4j_client import get_neo4j_session, is_neo4j_configured
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_access_filters(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> tuple[List[str], List[str]]:
+    return (
+        access_entities or [f"user:{user_id}"],
+        access_entity_prefixes or [],
+    )
+
+
+def _escape_cypher(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _cypher_list(values: List[str]) -> str:
+    return "[" + ", ".join(f"'{_escape_cypher(v)}'" for v in values) + "]"
+
+
+def _access_filter_clause(
+    alias: str,
+    access_entities_literal: str,
+    access_entity_prefixes_literal: str,
+    escaped_user_id: str,
+) -> str:
+    return (
+        "("
+        f"({alias}.accessEntity IS NOT NULL AND ("
+        f"{alias}.accessEntity IN {access_entities_literal} "
+        f"OR any(prefix IN {access_entity_prefixes_literal} "
+        f"WHERE {alias}.accessEntity STARTS WITH prefix)"
+        ")) "
+        f"OR ({alias}.accessEntity IS NULL AND {alias}.userId = '{escaped_user_id}')"
+        ")"
+    )
+
+
+def _projection_suffix(
+    user_id: str,
+    access_entities: List[str],
+    access_entity_prefixes: List[str],
+) -> str:
+    if access_entities == [f"user:{user_id}"] and not access_entity_prefixes:
+        return ""
+    key = "|".join(sorted(access_entities) + [f"{p}*" for p in sorted(access_entity_prefixes)])
+    return "_" + hashlib.md5(key.encode()).hexdigest()[:8]
 
 
 def is_gds_available() -> bool:
@@ -44,14 +93,18 @@ def is_gds_available() -> bool:
 async def refresh_graph_signals(
     user_id: str,
     canonical: Optional[str] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Refresh graph-derived signals after entity normalization.
 
     Args:
-        user_id: User ID
+        user_id: User ID (legacy fallback)
         canonical: Optional - if provided, only refresh signals for
                    this entity and its neighbors. If None, refresh all.
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         Statistics about refreshed signals
@@ -72,16 +125,31 @@ async def refresh_graph_signals(
 
     try:
         # 1. Refresh degree counts (always available)
-        degree_stats = await _refresh_degree_counts(user_id, canonical)
+        degree_stats = await _refresh_degree_counts(
+            user_id,
+            canonical,
+            access_entities=access_entities,
+            access_entity_prefixes=access_entity_prefixes,
+        )
         stats["degree_updated"] = degree_stats.get("updated", 0)
 
         # 2. Refresh PageRank (requires GDS)
         if stats["gds_available"]:
-            pagerank_stats = await _refresh_pagerank(user_id, canonical)
+            pagerank_stats = await _refresh_pagerank(
+                user_id,
+                canonical,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            )
             stats["pagerank_updated"] = pagerank_stats.get("updated", 0)
 
             # 3. Refresh memory similarity cluster size
-            cluster_stats = await _refresh_cluster_sizes(user_id, canonical)
+            cluster_stats = await _refresh_cluster_sizes(
+                user_id,
+                canonical,
+                access_entities=access_entities,
+                access_entity_prefixes=access_entity_prefixes,
+            )
             stats["cluster_updated"] = cluster_stats.get("updated", 0)
         else:
             logger.info("GDS not available, skipping PageRank refresh")
@@ -96,6 +164,8 @@ async def refresh_graph_signals(
 async def _refresh_degree_counts(
     user_id: str,
     canonical: Optional[str] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Refresh entity degree (OM_CO_MENTIONED edge count).
@@ -104,34 +174,106 @@ async def _refresh_degree_counts(
     Used for entity_density boost in hybrid retrieval.
     """
     try:
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         with get_neo4j_session() as session:
             if canonical:
                 # Only refresh canonical and its neighbors
                 query = """
-                MATCH (e:OM_Entity {userId: $userId, name: $canonical})
+                MATCH (e:OM_Entity {name: $canonical})
+                WHERE (
+                  (e.accessEntity IS NOT NULL AND (
+                    e.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (e.accessEntity IS NULL AND e.userId = $userId)
+                )
                 OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED]-(neighbor:OM_Entity)
+                WHERE (
+                  (r.accessEntity IS NOT NULL AND (
+                    r.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (r.accessEntity IS NULL AND r.userId = $userId)
+                )
+                  AND (
+                    (neighbor.accessEntity IS NOT NULL AND (
+                      neighbor.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE neighbor.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (neighbor.accessEntity IS NULL AND neighbor.userId = $userId)
+                  )
                 WITH e, count(r) AS degree
                 SET e.degree = degree
                 WITH e
 
                 // Also refresh neighbors' degrees
-                MATCH (e)-[:OM_CO_MENTIONED]-(neighbor:OM_Entity {userId: $userId})
+                MATCH (e)-[rel:OM_CO_MENTIONED]-(neighbor:OM_Entity)
+                WHERE (
+                  (rel.accessEntity IS NOT NULL AND (
+                    rel.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE rel.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (rel.accessEntity IS NULL AND rel.userId = $userId)
+                )
+                  AND (
+                    (neighbor.accessEntity IS NOT NULL AND (
+                      neighbor.accessEntity IN $accessEntities
+                      OR any(prefix IN $accessEntityPrefixes WHERE neighbor.accessEntity STARTS WITH prefix)
+                    ))
+                    OR (neighbor.accessEntity IS NULL AND neighbor.userId = $userId)
+                  )
                 OPTIONAL MATCH (neighbor)-[r2:OM_CO_MENTIONED]-()
+                WHERE (
+                  (r2.accessEntity IS NOT NULL AND (
+                    r2.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE r2.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (r2.accessEntity IS NULL AND r2.userId = $userId)
+                )
                 WITH neighbor, count(r2) AS neighborDegree
                 SET neighbor.degree = neighborDegree
                 RETURN count(neighbor) + 1 AS updated
                 """
-                result = session.run(query, userId=user_id, canonical=canonical)
+                result = session.run(
+                    query,
+                    userId=user_id,
+                    canonical=canonical,
+                    accessEntities=access_entities,
+                    accessEntityPrefixes=access_entity_prefixes,
+                )
             else:
                 # Refresh all entities
                 query = """
-                MATCH (e:OM_Entity {userId: $userId})
+                MATCH (e:OM_Entity)
+                WHERE (
+                  (e.accessEntity IS NOT NULL AND (
+                    e.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (e.accessEntity IS NULL AND e.userId = $userId)
+                )
                 OPTIONAL MATCH (e)-[r:OM_CO_MENTIONED]-()
+                WHERE (
+                  (r.accessEntity IS NOT NULL AND (
+                    r.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (r.accessEntity IS NULL AND r.userId = $userId)
+                )
                 WITH e, count(r) AS degree
                 SET e.degree = degree
                 RETURN count(e) AS updated
                 """
-                result = session.run(query, userId=user_id)
+                result = session.run(
+                    query,
+                    userId=user_id,
+                    accessEntities=access_entities,
+                    accessEntityPrefixes=access_entity_prefixes,
+                )
 
             record = result.single()
             return {"updated": record["updated"] if record else 0}
@@ -144,6 +286,8 @@ async def _refresh_degree_counts(
 async def _refresh_pagerank(
     user_id: str,
     canonical: Optional[str] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Recalculate PageRank for entities using GDS.
@@ -155,11 +299,17 @@ async def _refresh_pagerank(
     since PageRank is a global algorithm. We just scope to user's graph.
     """
     try:
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         with get_neo4j_session() as session:
             # Create a temporary in-memory graph projection
             # Sanitize user_id for use in projection name (only alphanumeric and underscore)
             safe_user_id = "".join(c if c.isalnum() else "_" for c in user_id)
-            projection_name = f"entity_pagerank_{safe_user_id}"
+            projection_suffix = _projection_suffix(user_id, access_entities, access_entity_prefixes)
+            projection_name = f"entity_pagerank_{safe_user_id}{projection_suffix}"
 
             # Drop existing projection if it exists
             try:
@@ -169,10 +319,22 @@ async def _refresh_pagerank(
 
             # First, check if there are any entities to project
             count_query = """
-            MATCH (e:OM_Entity {userId: $userId})
+            MATCH (e:OM_Entity)
+            WHERE (
+              (e.accessEntity IS NOT NULL AND (
+                e.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+              ))
+              OR (e.accessEntity IS NULL AND e.userId = $userId)
+            )
             RETURN count(e) AS entityCount
             """
-            count_result = session.run(count_query, userId=user_id)
+            count_result = session.run(
+                count_query,
+                userId=user_id,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             count_record = count_result.single()
 
             if not count_record or count_record["entityCount"] == 0:
@@ -185,11 +347,30 @@ async def _refresh_pagerank(
             #
             # SECURITY NOTE: user_id is validated/controlled by the application,
             # so string interpolation is safe here. The escaped quotes prevent injection.
-            escaped_user_id = user_id.replace("'", "\\'").replace("\\", "\\\\")
+            escaped_user_id = _escape_cypher(user_id)
+            access_entities_literal = _cypher_list(access_entities)
+            access_entity_prefixes_literal = _cypher_list(access_entity_prefixes)
 
-            node_query = f"MATCH (e:OM_Entity {{userId: '{escaped_user_id}'}}) RETURN id(e) AS id"
-            rel_query = f"""MATCH (e1:OM_Entity {{userId: '{escaped_user_id}'}})-[r:OM_CO_MENTIONED]-(e2:OM_Entity {{userId: '{escaped_user_id}'}})
-                 RETURN id(e1) AS source, id(e2) AS target, coalesce(r.count, 1) AS weight"""
+            def access_filter(alias: str) -> str:
+                return _access_filter_clause(
+                    alias,
+                    access_entities_literal,
+                    access_entity_prefixes_literal,
+                    escaped_user_id,
+                )
+
+            node_query = f"""
+            MATCH (e:OM_Entity)
+            WHERE {access_filter("e")}
+            RETURN id(e) AS id
+            """
+            rel_query = f"""
+            MATCH (e1:OM_Entity)-[r:OM_CO_MENTIONED]-(e2:OM_Entity)
+            WHERE {access_filter("r")}
+              AND {access_filter("e1")}
+              AND {access_filter("e2")}
+            RETURN id(e1) AS source, id(e2) AS target, coalesce(r.count, 1) AS weight
+            """
 
             create_projection_query = """
             CALL gds.graph.project.cypher(
@@ -250,6 +431,8 @@ async def _refresh_pagerank(
 async def _refresh_cluster_sizes(
     user_id: str,
     canonical: Optional[str] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Refresh memory similarity cluster sizes.
@@ -258,28 +441,79 @@ async def _refresh_cluster_sizes(
     in the similarity graph. Used for similarity_cluster boost.
     """
     try:
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         with get_neo4j_session() as session:
             if canonical:
                 # Refresh memories connected to canonical entity
                 query = """
-                MATCH (e:OM_Entity {userId: $userId, name: $canonical})
+                MATCH (e:OM_Entity {name: $canonical})
+                WHERE (
+                  (e.accessEntity IS NOT NULL AND (
+                    e.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (e.accessEntity IS NULL AND e.userId = $userId)
+                )
                 MATCH (m:OM_Memory)-[:OM_ABOUT]->(e)
+                WHERE (
+                  (m.accessEntity IS NOT NULL AND (
+                    m.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (m.accessEntity IS NULL AND m.userId = $userId)
+                )
                 OPTIONAL MATCH (m)-[r:OM_SIMILAR]-()
+                WHERE (
+                  (r.accessEntity IS NOT NULL AND (
+                    r.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (r.accessEntity IS NULL AND r.userId = $userId)
+                )
                 WITH m, count(r) AS clusterSize
                 SET m.similarityClusterSize = clusterSize
                 RETURN count(m) AS updated
                 """
-                result = session.run(query, userId=user_id, canonical=canonical)
+                result = session.run(
+                    query,
+                    userId=user_id,
+                    canonical=canonical,
+                    accessEntities=access_entities,
+                    accessEntityPrefixes=access_entity_prefixes,
+                )
             else:
                 # Refresh all memories
                 query = """
-                MATCH (m:OM_Memory {userId: $userId})
+                MATCH (m:OM_Memory)
+                WHERE (
+                  (m.accessEntity IS NOT NULL AND (
+                    m.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (m.accessEntity IS NULL AND m.userId = $userId)
+                )
                 OPTIONAL MATCH (m)-[r:OM_SIMILAR]-()
+                WHERE (
+                  (r.accessEntity IS NOT NULL AND (
+                    r.accessEntity IN $accessEntities
+                    OR any(prefix IN $accessEntityPrefixes WHERE r.accessEntity STARTS WITH prefix)
+                  ))
+                  OR (r.accessEntity IS NULL AND r.userId = $userId)
+                )
                 WITH m, count(r) AS clusterSize
                 SET m.similarityClusterSize = clusterSize
                 RETURN count(m) AS updated
                 """
-                result = session.run(query, userId=user_id)
+                result = session.run(
+                    query,
+                    userId=user_id,
+                    accessEntities=access_entities,
+                    accessEntityPrefixes=access_entity_prefixes,
+                )
 
             record = result.single()
             return {"updated": record["updated"] if record else 0}
@@ -292,6 +526,8 @@ async def _refresh_cluster_sizes(
 async def get_entity_signals(
     user_id: str,
     entity_name: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Get current graph signals for an entity.
@@ -302,12 +538,45 @@ async def get_entity_signals(
         return {"error": "Neo4j not configured"}
 
     try:
+        access_entities, access_entity_prefixes = _normalize_access_filters(
+            user_id,
+            access_entities,
+            access_entity_prefixes,
+        )
         with get_neo4j_session() as session:
             query = """
-            MATCH (e:OM_Entity {userId: $userId, name: $entityName})
+            MATCH (e:OM_Entity {name: $entityName})
+            WHERE (
+              (e.accessEntity IS NOT NULL AND (
+                e.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE e.accessEntity STARTS WITH prefix)
+              ))
+              OR (e.accessEntity IS NULL AND e.userId = $userId)
+            )
             OPTIONAL MATCH (e)-[co:OM_CO_MENTIONED]-()
+            WHERE (
+              (co.accessEntity IS NOT NULL AND (
+                co.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE co.accessEntity STARTS WITH prefix)
+              ))
+              OR (co.accessEntity IS NULL AND co.userId = $userId)
+            )
             OPTIONAL MATCH (e)-[rel:OM_RELATION]-()
+            WHERE (
+              (rel.accessEntity IS NOT NULL AND (
+                rel.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE rel.accessEntity STARTS WITH prefix)
+              ))
+              OR (rel.accessEntity IS NULL AND rel.userId = $userId)
+            )
             OPTIONAL MATCH (e)<-[:OM_ABOUT]-(m:OM_Memory)
+            WHERE (
+              (m.accessEntity IS NOT NULL AND (
+                m.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE m.accessEntity STARTS WITH prefix)
+              ))
+              OR (m.accessEntity IS NULL AND m.userId = $userId)
+            )
             RETURN
                 e.name AS name,
                 coalesce(e.degree, 0) AS degree,
@@ -317,7 +586,13 @@ async def get_entity_signals(
                 count(DISTINCT m) AS memory_count
             """
 
-            result = session.run(query, userId=user_id, entityName=entity_name)
+            result = session.run(
+                query,
+                userId=user_id,
+                entityName=entity_name,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             record = result.single()
 
             if record:

@@ -77,6 +77,7 @@ def backfill_similarity_edges(
     limit: Optional[int] = None,
     batch_size: int = 50,
     dry_run: bool = False,
+    access_entity: str | None = None,
     log_file: str | None = None,
     verbose: bool = False,
 ) -> tuple[BackfillStats, str]:
@@ -104,7 +105,11 @@ def backfill_similarity_edges(
 
     config = SimilarityConfig.from_env()
     logger.info("Starting similarity edge backfill")
-    logger.info(f"user_id={user_id} limit={limit} batch_size={batch_size} dry_run={dry_run}")
+    access_entity = access_entity or f"user:{user_id}"
+    logger.info(
+        f"user_id={user_id} access_entity={access_entity} limit={limit} "
+        f"batch_size={batch_size} dry_run={dry_run}"
+    )
     logger.info(f"config: k={config.k_neighbors} threshold={config.min_similarity_threshold} max_edges={config.max_edges_per_memory}")
     logger.info(f"log_file={chosen_log_file}")
 
@@ -124,17 +129,25 @@ def backfill_similarity_edges(
     try:
         from app.models import User
 
-        # Find the user by user_id string
+        # Find the user by user_id string (for legacy scope fallback)
         user = db.query(User).filter(User.user_id == user_id).first()
         if not user:
             logger.error(f"User not found: {user_id}")
             raise SystemExit(1)
 
-        # Get active memories
-        query = db.query(Memory).filter(
-            Memory.user_id == user.id,
-            Memory.state == MemoryState.active,
-        ).order_by(Memory.created_at.asc())
+        # Get active memories scoped by access_entity
+        if access_entity.startswith("user:"):
+            query = db.query(Memory).filter(
+                Memory.user_id == user.id,
+                Memory.state == MemoryState.active,
+            )
+        else:
+            access_entity_col = Memory.metadata_["access_entity"].as_string()
+            query = db.query(Memory).filter(
+                Memory.state == MemoryState.active,
+                access_entity_col == access_entity,
+            )
+        query = query.order_by(Memory.created_at.asc())
 
         if limit:
             query = query.limit(limit)
@@ -176,7 +189,7 @@ def backfill_similarity_edges(
 
         # Log edge count per user
         try:
-            edge_count = projector.count_similarity_edges(user_id)
+            edge_count = projector.count_similarity_edges(user_id, access_entity=access_entity)
             logger.info(f"Total OM_SIMILAR edges for user '{user_id}': {edge_count}")
         except Exception:
             pass
@@ -192,6 +205,7 @@ def main() -> None:
     parser.add_argument("--user-id", required=True, help="User ID to backfill")
     parser.add_argument("--limit", type=int, default=None, help="Max memories to process")
     parser.add_argument("--batch-size", type=int, default=50, help="Progress log interval")
+    parser.add_argument("--access-entity", default=None, help="Access entity scope (default: user scope)")
     parser.add_argument("--dry-run", action="store_true", help="Do not write to Neo4j")
     parser.add_argument("--log-file", default=None, help="Log file path")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -202,6 +216,7 @@ def main() -> None:
         limit=args.limit,
         batch_size=args.batch_size,
         dry_run=args.dry_run,
+        access_entity=args.access_entity,
         log_file=args.log_file,
         verbose=args.verbose,
     )

@@ -190,6 +190,8 @@ services:
       # Valkey connection
       - VALKEY_HOST=valkey
       - VALKEY_PORT=6379
+      # Code intelligence defaults (production)
+      - CODE_INTEL_INCLUDE_INFERRED_EDGES=false
       # Auto-migration for development (runs Alembic migrations on startup)
       - AUTO_MIGRATE=true
     env_file:

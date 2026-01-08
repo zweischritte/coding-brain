@@ -80,6 +80,7 @@ def backfill_entity_bridge(
     limit: Optional[int] = None,
     batch_size: int = 10,
     dry_run: bool = False,
+    access_entity: Optional[str] = None,
     log_file: Optional[str] = None,
     verbose: bool = False,
     memory_ids: Optional[List[str]] = None,
@@ -112,7 +113,11 @@ def backfill_entity_bridge(
     _configure_logging(log_file=chosen_log_file, verbose=verbose)
 
     logger.info("Starting entity bridge backfill")
-    logger.info(f"user_id={user_id} limit={limit} batch_size={batch_size} dry_run={dry_run}")
+    access_entity = access_entity or f"user:{user_id}"
+    logger.info(
+        f"user_id={user_id} access_entity={access_entity} "
+        f"limit={limit} batch_size={batch_size} dry_run={dry_run}"
+    )
     logger.info(f"log_file={chosen_log_file}")
 
     if not is_neo4j_configured():
@@ -134,10 +139,17 @@ def backfill_entity_bridge(
             raise SystemExit(1)
 
         # Build query for memories
-        query = db.query(Memory).filter(
-            Memory.user_id == user.id,
-            Memory.state == MemoryState.active,
-        )
+        if access_entity.startswith("user:"):
+            query = db.query(Memory).filter(
+                Memory.user_id == user.id,
+                Memory.state == MemoryState.active,
+            )
+        else:
+            access_entity_col = Memory.metadata_["access_entity"].as_string()
+            query = db.query(Memory).filter(
+                Memory.state == MemoryState.active,
+                access_entity_col == access_entity,
+            )
 
         if memory_ids:
             import uuid
@@ -249,6 +261,7 @@ def main() -> None:
     parser.add_argument("--user-id", required=True, help="User ID to backfill")
     parser.add_argument("--limit", type=int, default=None, help="Max memories to process")
     parser.add_argument("--batch-size", type=int, default=10, help="Progress log interval")
+    parser.add_argument("--access-entity", default=None, help="Access entity scope (default: user scope)")
     parser.add_argument("--dry-run", action="store_true", help="Extract but don't write")
     parser.add_argument("--log-file", default=None, help="Log file path")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
@@ -264,6 +277,7 @@ def main() -> None:
         limit=args.limit,
         batch_size=args.batch_size,
         dry_run=args.dry_run,
+        access_entity=args.access_entity,
         log_file=args.log_file,
         verbose=args.verbose,
         memory_ids=memory_ids,

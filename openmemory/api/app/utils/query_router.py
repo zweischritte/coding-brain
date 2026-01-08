@@ -117,6 +117,8 @@ def detect_entities_in_query(
     user_id: str,
     min_score: float = 0.7,
     limit: int = 10,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> List[Tuple[str, float]]:
     """
     Detect entities in query using Neo4j fulltext search.
@@ -126,9 +128,11 @@ def detect_entities_in_query(
 
     Args:
         query: Search query text
-        user_id: User ID for filtering
+        user_id: User ID for legacy fallback filtering
         min_score: Minimum fulltext score for entity match
         limit: Max entities to return
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         List of (entity_name, score) tuples, sorted by score descending
@@ -152,7 +156,13 @@ def detect_entities_in_query(
             cypher = """
             CALL db.index.fulltext.queryNodes('om_entity_name', $queryText)
             YIELD node, score
-            WHERE node.userId = $userId AND score >= $minScore
+            WHERE score >= $minScore AND (
+              (node.accessEntity IS NOT NULL AND (
+                node.accessEntity IN $accessEntities
+                OR any(prefix IN $accessEntityPrefixes WHERE node.accessEntity STARTS WITH prefix)
+              ))
+              OR (node.accessEntity IS NULL AND node.userId = $userId)
+            )
             RETURN node.name AS name, score
             ORDER BY score DESC
             LIMIT $limit
@@ -164,6 +174,8 @@ def detect_entities_in_query(
                 userId=user_id,
                 minScore=min_score,
                 limit=limit,
+                accessEntities=access_entities or [f"user:{user_id}"],
+                accessEntityPrefixes=access_entity_prefixes or [],
             )
 
             return [(r["name"], r["score"]) for r in result]
@@ -243,6 +255,8 @@ def analyze_query(
     query: str,
     user_id: str,
     config: Optional[RoutingConfig] = None,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
 ) -> QueryAnalysis:
     """
     Analyze query to determine optimal search route.
@@ -252,8 +266,10 @@ def analyze_query(
 
     Args:
         query: Search query text
-        user_id: User ID for entity filtering
+        user_id: User ID for legacy fallback filtering
         config: Routing configuration
+        access_entities: Explicit access_entity matches
+        access_entity_prefixes: Access_entity prefixes (without % wildcards)
 
     Returns:
         QueryAnalysis with route decision and confidence
@@ -282,6 +298,8 @@ def analyze_query(
         query=query,
         user_id=user_id,
         min_score=config.min_entity_score,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     # Detect keywords (regex, <1ms)

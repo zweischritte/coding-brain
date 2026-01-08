@@ -196,6 +196,10 @@ class CallGraphRequest(BaseModel):
     symbol_id: Optional[str] = None
     symbol_name: Optional[str] = None
     depth: int = Field(default=2, ge=1, le=5)
+    include_inferred_edges: Optional[bool] = Field(
+        default=None,
+        description="Override default inferred-edge behavior",
+    )
 
     @model_validator(mode="after")
     def require_symbol_identifier(self) -> "CallGraphRequest":
@@ -221,6 +225,7 @@ class ImpactAnalysisRequest(BaseModel):
     changed_files: Optional[List[str]] = None
     symbol_id: Optional[str] = None
     include_cross_language: bool = False
+    include_inferred_edges: Optional[bool] = None
     max_depth: int = Field(default=3, ge=1, le=10)
     confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 

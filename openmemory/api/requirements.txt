@@ -29,6 +29,7 @@ tree-sitter>=0.23.0
 tree-sitter-python>=0.23.0
 tree-sitter-typescript>=0.23.0
 tree-sitter-java>=0.23.0
+tree-sitter-go>=0.23.0
 # JWT/OAuth2 authentication
 python-jose[cryptography]>=3.3.0
 redis>=5.0.0,<6.0.0

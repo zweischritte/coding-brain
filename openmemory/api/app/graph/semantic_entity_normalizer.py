@@ -29,6 +29,27 @@ from app.graph.entity_normalizer import normalize_entity_name
 logger = logging.getLogger(__name__)
 
 
+def _normalize_access_filters(
+    user_id: str,
+    access_entities: Optional[List[str]],
+    access_entity_prefixes: Optional[List[str]],
+) -> tuple[List[str], List[str]]:
+    if not access_entities:
+        access_entities = [f"user:{user_id}"] if user_id else []
+    if access_entity_prefixes is None:
+        access_entity_prefixes = []
+    return access_entities, access_entity_prefixes
+
+
+def _access_filter_clause(alias: str) -> str:
+    return (
+        f"(({alias}.accessEntity IS NOT NULL AND ("
+        f"{alias}.accessEntity IN $accessEntities "
+        f"OR any(prefix IN $accessEntityPrefixes WHERE {alias}.accessEntity STARTS WITH prefix)"
+        f")) OR ({alias}.accessEntity IS NULL AND {alias}.userId = $userId))"
+    )
+
+
 @dataclass
 class MergeCandidate:
     """A merge candidate pair with confidence score."""
@@ -316,6 +337,7 @@ class SemanticEntityNormalizer:
         group: SemanticCanonicalEntity,
         allowed_memory_ids: Optional[List[str]] = None,
         dry_run: bool = False,
+        access_entity: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute an entity merge with ACL enforcement.
@@ -351,6 +373,7 @@ class SemanticEntityNormalizer:
                 variants=group.variants,
                 allowed_memory_ids=allowed_memory_ids,
                 dry_run=dry_run,
+                access_entity=access_entity,
             )
             result["edge_migration"] = {
                 "om_about_migrated": edge_stats.om_about_migrated,
@@ -376,6 +399,7 @@ class SemanticEntityNormalizer:
                 gds_stats = await refresh_graph_signals(
                     user_id=user_id,
                     canonical=group.canonical,
+                    access_entities=[access_entity] if access_entity else None,
                 )
                 result["gds_refresh"] = gds_stats
 
@@ -386,7 +410,11 @@ class SemanticEntityNormalizer:
         return result
 
 
-async def get_all_user_entities(user_id: str) -> List[str]:
+async def get_all_user_entities(
+    user_id: str,
+    access_entities: Optional[List[str]] = None,
+    access_entity_prefixes: Optional[List[str]] = None,
+) -> List[str]:
     """
     Collect ALL entity names for a user from all sources.
 
@@ -406,26 +434,43 @@ async def get_all_user_entities(user_id: str) -> List[str]:
         return []
 
     entities: Set[str] = set()
+    access_entities, access_entity_prefixes = _normalize_access_filters(
+        user_id,
+        access_entities,
+        access_entity_prefixes,
+    )
 
     try:
         with get_neo4j_session() as session:
             # 1. From OM_Entity nodes
-            query1 = """
-            MATCH (e:OM_Entity {userId: $userId})
+            query1 = f"""
+            MATCH (e:OM_Entity)
+            WHERE {_access_filter_clause("e")}
             RETURN DISTINCT e.name AS name
             """
-            result1 = session.run(query1, userId=user_id)
+            result1 = session.run(
+                query1,
+                userId=user_id,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             for record in result1:
                 if record["name"]:
                     entities.add(record["name"])
 
             # 2. From metadata.re (single-entity legacy field)
-            query2 = """
-            MATCH (m:OM_Memory {userId: $userId})
-            WHERE m.metadata_re IS NOT NULL AND m.metadata_re <> ''
+            query2 = f"""
+            MATCH (m:OM_Memory)
+            WHERE {_access_filter_clause("m")}
+              AND m.metadata_re IS NOT NULL AND m.metadata_re <> ''
             RETURN DISTINCT m.metadata_re AS name
             """
-            result2 = session.run(query2, userId=user_id)
+            result2 = session.run(
+                query2,
+                userId=user_id,
+                accessEntities=access_entities,
+                accessEntityPrefixes=access_entity_prefixes,
+            )
             for record in result2:
                 if record["name"]:
                     entities.add(record["name"])
