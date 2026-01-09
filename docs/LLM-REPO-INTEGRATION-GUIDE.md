@@ -16,7 +16,7 @@ Make repo knowledge discoverable and actionable by:
   - `memories:read`, `memories:write` (and `memories:delete` if needed)
   - `code:read`, `code:write`
   - `graph:read`, `entities:read` for graph use
-- For shared scope, set `access_entity` explicitly.
+- Set `access_entity` explicitly for any shared data; scope is legacy metadata only.
 
 ## Step 1: Index the repo (code tools)
 
@@ -60,8 +60,9 @@ Suggested entities for this repo:
 
 Metadata rules (required):
 - Always set `entity` (required by system rules).
-- Use `scope="project"` and `access_entity="project:default_org/coding-brain"` for repo knowledge.
+- Use `access_entity="project:default_org/coding-brain"` for repo knowledge.
 - Use `artifact_type="repo"` and `artifact_ref="coding-brain"` for repo-level memories.
+- Scope is optional legacy metadata only.
 - Tag important items consistently (e.g., `decision`, `runbook`, `workflow`, `security`).
 
 ## Step 3: Ingest repo knowledge as structured memories
@@ -85,7 +86,6 @@ Memory template:
 add_memories(
   text="<1-2 sentence summary>",
   category="architecture|decision|runbook|workflow|dependency|security|performance|testing|convention",
-  scope="project",
   entity="<one of the defined entities>",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -93,6 +93,8 @@ add_memories(
   tags={"source":"docs/README-CODING-BRAIN.md"}
 )
 ```
+Async note: `add_memories` defaults to async and returns a `job_id`. Use `add_memories_status(job_id)` to fetch the
+result or set `async_mode=false` if you need the memory ID immediately.
 
 Guidance:
 - Keep each memory short and atomic (one idea per memory).
@@ -146,8 +148,8 @@ Typical flow:
 ## Anti-patterns
 
 - Storing entire files or large code blocks as memories.
-- Creating memories without `entity` or without `access_entity` for shared scopes.
-- Mixing team-specific and org-wide knowledge in the same scope.
+- Creating memories without `entity` or without `access_entity` for shared data.
+- Mixing team-specific and org-wide knowledge in the same access_entity.
 - Relying on recency weighting for long-lived architectural facts.
 
 ## References

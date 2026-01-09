@@ -28,14 +28,15 @@ How these map to Coding Brain now:
 ### 1) Memory capture as structured knowledge
 - Store decisions and conventions with categories and evidence links (PRs, ADRs, issues).
 - Use entity labels to create a navigable knowledge graph (components, teams, services, projects).
-- Capture short-lived learnings (debug notes, incident notes) with scope=session or scope=user.
+- Capture short-lived learnings (debug notes, incident notes) with `access_entity=user:<id>`.
 - Tag memories by lifecycle stage (draft, validated, deprecated) and update, not delete, when they evolve.
 - Save prompts that work well as memory entries so they can be reused by the team.
 
 ### 2) Access control as a usage feature
-- Keep personal workflows private with scope=user while sharing runbooks and decisions with scope=project.
+- Keep personal workflows private with `access_entity=user:<id>` while sharing runbooks and decisions with project/team/org access entities.
 - Use access_entity to share just enough: project-level for repo knowledge, team-level for broader practices.
-- When a question spans teams, use org scope for common standards and policies.
+- Scope is legacy metadata only; do not rely on it for visibility.
+- When a question spans teams, use `access_entity=org:<org>` for common standards and policies.
 
 ### 3) Retrieval patterns that improve answers
 - Use hybrid search for ambiguous terms (lexical + vector) to capture both jargon and meaning.
@@ -64,7 +65,7 @@ How these map to Coding Brain now:
 ### Individual developer workflows
 - Maintain a personal "debug diary" with each issue, reproduction steps, root cause, and fix.
 - Store daily notes about code areas touched and tag them by component for later retrieval.
-- Build a personal glossary of acronyms and internal terms with scope=user.
+- Build a personal glossary of acronyms and internal terms with `access_entity=user:<id>`.
 - Ask the LLM to explain a symbol, then store the explanation as memory with evidence links.
 - Use the LLM to draft a change plan and link it to relevant code call graphs.
 
@@ -94,7 +95,7 @@ How these map to Coding Brain now:
 - Build a living docs index by storing summaries and linking to canonical docs.
 - Use graph queries to find missing documentation for high-centrality entities.
 - Track deprecated APIs by tagging memories and boosting them in retrieval.
-- Create a rolling "tech debt list" with scope=project and update it monthly.
+- Create a rolling "tech debt list" with `access_entity=project:<org>/<repo>` and update it monthly.
 
 ### Architecture and design
 - Capture constraints and tradeoffs as structured decisions, not freeform notes.

@@ -427,6 +427,22 @@ docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "
 docker compose exec postgres psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c "\dt"
 ```
 
+### Graph Backfills After Access Changes
+
+If migrations or configuration changes affect `access_entity`, rebuild graph edges and metadata:
+
+```bash
+cd openmemory/api
+python -m app.scripts.backfill_graph_access_entity_hybrid --use-host-ports
+python -m app.scripts.backfill_entity_bridge_access_entity --user-id <user_id> --use-host-ports
+python -m app.scripts.backfill_entity_display_names
+```
+
+Notes:
+- Run the hybrid backfill first to restore OM_Memory metadata and edges.
+- Entity bridge backfill uses LLM extraction and can take time.
+- displayName backfill is optional but recommended for UI correctness.
+
 ---
 
 ## Health Check Verification

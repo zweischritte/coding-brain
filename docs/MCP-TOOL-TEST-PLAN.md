@@ -3,7 +3,7 @@
 Purpose
 - Provide a complete, step-by-step MCP tool test plan for another LLM instance.
 - Cover all MCP tools currently implemented in this repository.
-- Use realistic memory content with correct scope and access_entity.
+- Use realistic memory content with correct access_entity (scope is legacy metadata only).
 
 Prerequisites
 - MCP server running and reachable by the client.
@@ -23,25 +23,27 @@ Prerequisites
   - root_path (local dev): /Users/grischadallmer/git/coding-brain
 - Default access_entity for this repo:
   - access_entity="project:default_org/coding-brain"
-  - scope="project"
   - artifact_type="repo"
   - artifact_ref="coding-brain"
+- Note: scope is legacy metadata only and does not control visibility.
 - For access_entity auto-resolution tests, have a user with:
-  - Exactly one grant for a shared scope (e.g., team:default_org/dev)
-  - Multiple grants for the same scope (e.g., team:default_org/dev and team:default_org/ops)
+  - Exactly one grant for a shared access_entity (e.g., team:default_org/dev)
+  - Multiple grants for the same access_entity prefix (e.g., team:default_org/dev and team:default_org/ops)
 
 ---
 
 ## 1) Seed Dataset (Memories)
 Create a small, coherent memory set for graph and search tests. Capture IDs from the response or via list_memories.
+Scope is optional legacy metadata; access is controlled by access_entity.
 
 Add the following memories one by one:
+Note: `add_memories` defaults to async and returns a `job_id`. Poll `add_memories_status(job_id)` until
+status is `succeeded`, then record the memory IDs from the `result` field.
 
 ```
 add_memories(
   text="SearchService uses OpenSearch for lexical search and Qdrant for vectors.",
   category="architecture",
-  scope="project",
   entity="SearchService",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -54,7 +56,6 @@ add_memories(
 add_memories(
   text="Cache search embeddings in memory_client for 15 minutes to reduce latency.",
   category="performance",
-  scope="project",
   entity="SearchService",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -67,7 +68,6 @@ add_memories(
 add_memories(
   text="Use ADR automation whenever a new dependency is added in requirements.txt.",
   category="workflow",
-  scope="project",
   entity="ADRTool",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -80,7 +80,6 @@ add_memories(
 add_memories(
   text="Project memories must use access_entity project:default_org/coding-brain.",
   category="decision",
-  scope="project",
   entity="AccessControl",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -93,7 +92,6 @@ add_memories(
 add_memories(
   text="Rotate JWT signing keys quarterly; follow SECRET-ROTATION.md.",
   category="security",
-  scope="project",
   entity="SecurityOps",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -106,7 +104,6 @@ add_memories(
 add_memories(
   text="MCP is the Model Context Protocol used for tool access and automation.",
   category="glossary",
-  scope="project",
   entity="MCP",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -119,7 +116,6 @@ add_memories(
 add_memories(
   text="If OpenSearch is down, restart the container and re-run the /api/v1/search health check.",
   category="runbook",
-  scope="project",
   entity="OpsRunbook",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -132,7 +128,6 @@ add_memories(
 add_memories(
   text="searchservice is a legacy alias for SearchService in old docs.",
   category="architecture",
-  scope="project",
   entity="searchservice",
   access_entity="project:default_org/coding-brain",
   artifact_type="repo",
@@ -152,19 +147,38 @@ Record the memory IDs for the eight new entries.
 ## 2) Memory CRUD Tools
 
 ### add_memories
-- Already exercised in the seed dataset. Confirm each response returns an ID or is visible via list_memories.
+- Already exercised in the seed dataset. Confirm each response returns a `job_id`, then poll
+  `add_memories_status(job_id)` until it returns a result with memory IDs.
 - evidence must be a list of strings.
 - tags must be a dictionary of key/value pairs.
 - access_entity can be omitted or set to "auto" when exactly one matching grant exists.
-- If multiple matching grants exist for the scope, the response should include:
+- If multiple matching grants exist for auto resolution, the response should include:
   - code="ACCESS_ENTITY_AMBIGUOUS" with an options array.
 
 Extra add_memories cases:
 ```
 add_memories(
+  text="Async default test (should return job_id)",
+  category="workflow",
+  entity="Normalization",
+  access_entity="project:default_org/coding-brain"
+)
+```
+
+```
+add_memories(
+  text="Sync path test (returns memory immediately)",
+  category="workflow",
+  entity="Normalization",
+  access_entity="project:default_org/coding-brain",
+  async_mode=false
+)
+```
+
+```
+add_memories(
   text="Test evidence/tags standard format",
   category="workflow",
-  scope="project",
   entity="Normalization",
   access_entity="project:default_org/coding-brain",
   evidence=["ADR-100", "ADR-101"],
@@ -176,7 +190,6 @@ add_memories(
 add_memories(
   text="Auto access_entity with single team grant",
   category="decision",
-  scope="team",
   entity="AccessControl",
   access_entity="auto"
 )
@@ -186,7 +199,6 @@ add_memories(
 add_memories(
   text="Auto access_entity with multiple team grants",
   category="decision",
-  scope="team",
   entity="AccessControl",
   access_entity="auto"
 )
@@ -196,7 +208,14 @@ Expected: error with code ACCESS_ENTITY_AMBIGUOUS and options list.
 Expected results (examples):
 ```
 {
-  "error": "access_entity is required for scope='team'. Multiple grants available.",
+  "status": "queued",
+  "job_id": "<job-id>"
+}
+```
+
+```
+{
+  "error": "access_entity is required for shared data. Multiple grants available.",
   "code": "ACCESS_ENTITY_AMBIGUOUS",
   "options": [
     "team:default_org/dev",
@@ -221,6 +240,14 @@ Expected results (examples):
 }
 ```
 
+### add_memories_status
+Poll a queued job until it completes:
+```
+add_memories_status(job_id="<job-id>")
+```
+Expected: status transitions `queued` -> `running` -> `succeeded` (or `failed`), and `result` includes
+the memory payload and IDs when successful.
+
 ### list_memories
 - Verify all seed memories appear and collect IDs.
 
@@ -232,6 +259,7 @@ search_memory(query="OpenSearch lexical search", limit=5)
 ```
 search_memory(query="ADR dependency", entity="ADRTool", limit=5)
 ```
+If relation_detail includes entities and casing differs, expect `entityDisplayNames` (compact) or `targetDisplayName` (verbose).
 
 ### update_memory
 - Update one memory (e.g., the ADRTool memory) to add a tag and tweak wording.
@@ -319,12 +347,14 @@ Expected: similar memories if OM_SIMILAR edges exist; empty is acceptable if sim
 graph_entity_network(entity_name="SearchService", limit=10)
 ```
 Expected: co-mention network if entity co-mention extraction is enabled; empty is acceptable otherwise.
+If entities have displayName, expect `entityDisplayName` and per-connection `displayName`.
 
 ### graph_entity_relations
 ```
 graph_entity_relations(entity_name="SecurityOps", direction="both", limit=10)
 ```
 Expected: typed relations if LLM graph extraction is enabled; empty is acceptable otherwise.
+If available, expect `targetDisplayName` fields in relations.
 
 ### graph_biography_timeline
 ```
@@ -387,10 +417,19 @@ Expected: explanation with callers/callees.
 ```
 find_callers(repo_id="coding-brain", symbol_id="<symbol-id>", depth=2)
 ```
+Control inferred edges (strict mode):
+```
+find_callers(repo_id="coding-brain", symbol_id="<symbol-id>", depth=2, include_inferred_edges=false)
+```
+Expected: fewer edges if inferred edges were previously included.
 
 ### find_callees
 ```
 find_callees(repo_id="coding-brain", symbol_id="<symbol-id>", depth=2)
+```
+Control inferred edges (strict mode):
+```
+find_callees(repo_id="coding-brain", symbol_id="<symbol-id>", depth=2, include_inferred_edges=false)
 ```
 
 ### impact_analysis
@@ -398,6 +437,10 @@ find_callees(repo_id="coding-brain", symbol_id="<symbol-id>", depth=2)
 impact_analysis(repo_id="coding-brain", changed_files=["openmemory/api/app/code_toolkit.py"], max_depth=3)
 ```
 Expected: affected_files list (may be empty if graph not built).
+Control inferred edges (strict mode):
+```
+impact_analysis(repo_id="coding-brain", changed_files=["openmemory/api/app/code_toolkit.py"], max_depth=3, include_inferred_edges=false)
+```
 
 ---
 

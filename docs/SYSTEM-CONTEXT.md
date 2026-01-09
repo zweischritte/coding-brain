@@ -10,7 +10,7 @@ Current runtime shape
 - Next.js UI in `openmemory/ui`
 
 Implemented capabilities
-- Structured memory CRUD with categories, scopes, artifacts, entities, tags, and evidence
+- Structured memory CRUD with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only)
 - Memory state tracking and access logs in PostgreSQL
 - Vector search via Mem0 (default Qdrant)
 - Neo4j metadata graph (OM_*), similarity edges, tag co-occurrence, typed relations, timeline queries
@@ -18,7 +18,7 @@ Implemented capabilities
 - OpenSearch-backed memory search endpoints (lexical; semantic when clients supply query vectors)
 - Security: JWT + scopes, optional DPoP binding, MCP SSE session binding (memory or Valkey)
 - Ops and governance: backup/export, GDPR SAR and deletion, circuit breakers, rate limiting, audit logging
-- Code intelligence: indexing pipeline + CODE_* graph, tri-hybrid retrieval, and code tools exposed via REST (`/api/v1/code`) with a smaller MCP subset (index/search/explain/callers/callees/impact)
+- Code intelligence: indexing pipeline + CODE_* graph, tri-hybrid retrieval, deterministic edges, and code tools exposed via REST (`/api/v1/code`) with a smaller MCP subset (index/search/explain/callers/callees/impact)
 - Cross-repo utilities and graph visualization modules are present as libraries but are not exposed via REST/MCP
 
 Where to look in the repo
@@ -32,3 +32,5 @@ Where to look in the repo
 Notes
 - If PostgreSQL is not configured, the API falls back to a local SQLite database (`openmemory.db`) for development.
 - Prometheus metrics endpoint is mounted at `/metrics` by default.
+- Access control is governed by `access_entity`; userId is audit-only and scope does not affect visibility.
+- Entity names are normalized for matching with `displayName` preserved for UI.

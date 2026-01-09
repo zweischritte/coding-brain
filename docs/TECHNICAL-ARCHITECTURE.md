@@ -57,7 +57,7 @@ Clients (IDE/MCP/REST)            UI (Next.js)
 Structured memory metadata is validated in `app/utils/structured_memory.py`.
 
 - Categories: decision, convention, architecture, dependency, workflow, testing, security, performance, runbook, glossary
-- Scopes: session, user, team, project, org, enterprise
+- Scope is legacy metadata only and does not control visibility
 - Artifact types: repo, service, module, component, api, db, infra, file
 - Additional fields: artifact_ref, entity, evidence, tags, source, source_app
 
@@ -83,6 +83,7 @@ Optional similarity edges, entity bridge, tag co-occurrence
 ```
 
 The Mem0 client configuration is stored in Postgres and exposed via `/api/v1/config`.
+Access control is enforced via `access_entity`; userId is audit-only.
 
 ### 4.3 Neo4j Metadata Graph (OM_*)
 
@@ -105,6 +106,10 @@ Key relationships:
 - `OM_COOCCURS` (tag co-occurrence)
 - `OM_SIMILAR` (memory similarity)
 - `OM_TEMPORAL` (entity -> temporal event)
+
+Entity naming:
+- `OM_Entity.name` is normalized (lowercase + underscores) for matching.
+- `OM_Entity.displayName` preserves original casing for UI/output.
 
 ### 4.4 Mem0 Graph Bridge
 
@@ -129,11 +134,17 @@ The `search_memory` tool supports a `relation_detail` parameter to control outpu
 - `standard`: + entities + tags + evidence (default, ~60% token reduction vs full)
 - `full`: Verbose format with all OM_* relations
 
+When entity casing differs from normalized names, relation outputs may include
+`targetDisplayName` (per relation) or `entityDisplayNames` (compact form).
+
 ### 5.2 Memory Retrieval and Metadata Sync
 
 The `get_memory` tool retrieves a single memory by UUID with all fields including `access_entity`.
 A Qdrant `set_payload` method enables metadata-only updates without altering vectors, and a
 backfill script (`app/scripts/backfill_qdrant_metadata.py`) synchronizes metadata from PostgreSQL to Qdrant.
+The `add_memories` tool runs asynchronously by default and returns a `job_id`; use
+`add_memories_status(job_id)` to fetch the final result. Graph projections happen in the background,
+so `meta_relations` may appear after a short delay.
 
 ### 5.3 Code References in Memories
 
@@ -176,6 +187,7 @@ The indexing modules provide:
 - API boundary detection for REST client/server links
 - NestJS/Angular decorator extraction (60+ decorators mapped in KNOWN_DECORATORS)
 - Event registry for publisher/subscriber discovery
+- Deterministic call/import edges for TypeScript, Java, Go, and Python
 - Merkle tree and bootstrap/priority queue modules exist but are not wired into the indexer yet
 
 Primary modules:
@@ -236,6 +248,10 @@ when symbols are not found in the graph:
 When results come from a fallback stage, ResponseMeta includes `degraded_mode`, `fallback_stage`,
 `fallback_strategy`, and `suggestions` fields.
 
+Edge inclusion controls:
+- Call graph and impact endpoints accept `include_inferred_edges`.
+- Default behavior is governed by `CODE_INTEL_INCLUDE_INFERRED_EDGES=true|false`.
+
 ### 7.6 Visualization and Cross-Repo Utilities
 
 - Graph export to JSON, DOT, and Mermaid (`openmemory/api/visualization`)
@@ -291,6 +307,9 @@ Key routers under `/api/v1`:
 - `BUSINESS_CONCEPTS_ENABLED`
 - `BUSINESS_CONCEPTS_AUTO_EXTRACT`
 - `BUSINESS_CONCEPTS_EMBEDDING_ENABLED`
+
+### Code intelligence
+- `CODE_INTEL_INCLUDE_INFERRED_EDGES` (default: true)
 
 ### Mem0 configuration
 - Stored in Postgres, managed via `/api/v1/config`

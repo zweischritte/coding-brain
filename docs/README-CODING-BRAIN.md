@@ -18,12 +18,13 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 ## Major Capabilities (Current)
 
 ### Memory and Knowledge
-- Structured memory schema with categories, scopes, artifacts, entities, tags, and evidence
+- Structured memory schema with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only)
 - CRUD, state changes, and access logging in PostgreSQL
 - Vector search via Mem0 (default: Qdrant)
 - Neo4j metadata graph (OM_*), similarity edges, typed relations, tag co-occurrence
 - Optional business concept extraction with a separate concept graph and vector store
 - Multi-user memory routing via access_entity with grant-based visibility and group-editable writes
+- Entity names are normalized for matching, with displayName preserved for UI and responses
 
 ### Search and Retrieval
 - REST search endpoints backed by OpenSearch (lexical; semantic when clients supply query vectors)
@@ -32,6 +33,7 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 
 ### Code Intelligence Modules
 - Tree-sitter + SCIP indexing pipeline with CODE_* graph projection to Neo4j
+- Deterministic call/import edges for TypeScript, Java, Go, and Python; inferred edges optional
 - NestJS/Angular decorator extraction for event-based call graph generation (60+ decorators)
 - Event registry for publisher/subscriber discovery (TRIGGERS_EVENT edges)
 - Tri-hybrid retrieval (lexical + vector + graph) powering code search
@@ -57,15 +59,16 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 
 Coding Brain uses `access_entity` to control read/write access to shared memories.
 Shared memories are visible to all holders of matching grants; writes are group-editable.
+Scope is legacy metadata and does not drive visibility.
 
 ### Access Entity Formats
 Allowed prefixes (client/service removed):
-- `user:<user_id>` (default for `scope=user` and `scope=session`)
+- `user:<user_id>` (default for personal data)
 - `team:<org>/<team>`
 - `project:<org>/<path>`
 - `org:<org>`
 
-Shared scopes (`team`, `project`, `org`, `enterprise`) require `access_entity`.
+Shared data requires `access_entity`. Scope is optional legacy metadata only.
 
 ### Grant Hierarchy
 JWT grants drive access, with hierarchical expansion:
@@ -75,14 +78,14 @@ JWT grants drive access, with hierarchical expansion:
 - `user:X` grants only that user
 
 ### Defaults and Auto-Resolution
-- Personal scopes (`user`, `session`) default to `user:<sub>` if `access_entity` is omitted.
-- For shared scopes, `access_entity="auto"` (or omitted) will default **only** when there is exactly one matching grant.
+- Personal data defaults to `user:<sub>` if `access_entity` is omitted.
+- `access_entity="auto"` (or omitted) will default **only** when there is exactly one matching grant.
 - If multiple matching grants exist, the request is rejected with an ambiguity error and options list.
 
 ### Behavior by Surface
 - REST list/filter/related/search use `access_entity` (not creator `user_id`)
 - MCP search/list/update/delete use `access_entity` (group-editable policy)
-- Graph queries use the accessible memory IDs instead of user-only filtering
+- Graph queries and relations are filtered by `access_entity` (userId is audit-only)
 - OpenSearch filtering supports exact + prefix matching for org/project grants
 - Legacy memories without `access_entity` remain owner-only
 
@@ -100,7 +103,10 @@ python scripts/generate_jwt.py --user alice --org cloudfactory \
 Multi-user routing relies on the following migrations and scripts:
 - Access entity index (Postgres): `openmemory/api/alembic/versions/add_access_entity_index.py`
 - RLS disabled for shared access: `openmemory/api/alembic/versions/disable_rls_for_shared_access.py`
-- Personal-scope backfill script: `openmemory/api/app/scripts/backfill_access_entity.py`
+- Legacy memory backfill script: `openmemory/api/app/scripts/backfill_access_entity.py`
+- Graph access_entity backfill (metadata + edges): `openmemory/api/app/scripts/backfill_graph_access_entity_hybrid.py`
+- Entity bridge per access_entity (LLM extraction): `openmemory/api/app/scripts/backfill_entity_bridge_access_entity.py`
+- Entity displayName backfill from repo sources: `openmemory/api/app/scripts/backfill_entity_display_names.py`
 
 Backfill usage:
 ```bash
@@ -271,11 +277,20 @@ Link memories directly to source code locations:
 add_memories(
   text="Auth tokens cached for 5 minutes",
   category="decision",
-  scope="project",
   entity="AuthService",
   access_entity="project:default_org/coding-brain",
   code_refs=[{"file_path": "/src/auth/token-cache.ts", "line_start": 42, "line_end": 55}]
 )
+```
+Note: `add_memories` defaults to async and returns a `job_id`. Use `add_memories_status(job_id)` to fetch the result
+or set `async_mode=false` when you need the memory ID immediately.
+
+#### add_memories_status
+
+Poll the status of an async add job:
+
+```text
+add_memories_status(job_id="7f2a5b3f-8f6b-4d4a-9d1e-10f3a2b5c7d9")
 ```
 
 #### search_memory with relation_detail
@@ -292,6 +307,9 @@ Levels:
 - `minimal`: Only artifact + similar IDs
 - `standard`: + entities + tags + evidence (default)
 - `full`: Verbose format with all OM_* relations
+
+When entity casing differs from normalized names, `standard` and `full` may include
+`entityDisplayNames` for UI-friendly output.
 
 ### Code Intelligence Tools (MCP)
 
@@ -316,6 +334,10 @@ Common reasons for fallback activation:
 - Dependency Injection (constructor injection, @Inject)
 - Dynamic function calls (eval, getattr, reflection)
 - Stale index (re-index with `index_codebase(reset=true)`)
+
+Edge inclusion:
+- `include_inferred_edges` can be set on callers/callees/impact to exclude heuristic edges.
+- Default behavior is controlled by `CODE_INTEL_INCLUDE_INFERRED_EDGES=true|false`.
 
 ### Claude Code Configuration
 
@@ -384,6 +406,8 @@ If you are calling a secured API, add `NEXT_PUBLIC_API_TOKEN` to
 ## Troubleshooting
 - `401/403` on REST or MCP: check JWT issuer/audience/secret and required scopes.
 - Shared memories not visible: ensure `access_entity` is set and the JWT includes matching grants.
+- Missing graph relations after access changes: run `backfill_graph_access_entity_hybrid.py` and `backfill_entity_bridge_access_entity.py`.
+- Entity casing looks wrong: run `backfill_entity_display_names.py`.
 - UI shows empty lists or 403s: ensure `NEXT_PUBLIC_API_TOKEN` includes
   `memories:read`, `apps:read`, `stats:read`, `entities:read`, and `graph:read`
   (plus `memories:write/delete` or `apps:write` if you edit data).

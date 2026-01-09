@@ -14,10 +14,11 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 ---
 
 ## 2. Memory and Context Goals
-- Store structured memories (category, scope, artifacts, entities, tags, evidence).
+- Store structured memories (category, artifacts, entities, tags, evidence; scope is legacy metadata only).
 - Support code_refs to link memories directly to source code locations.
-- Enforce multi-tenant isolation (org- and user-scoped access).
-- Project memory metadata into a Neo4j graph for aggregation and relation queries.
+- Enforce multi-tenant isolation via access_entity-driven visibility.
+- Project memory metadata into a Neo4j graph for aggregation and relation queries (accessEntity-filtered).
+- Preserve entity displayName for UI while normalizing entity keys for matching.
 - Maintain similarity edges, tag co-occurrence, and typed entity relations.
 - Provide configurable output verbosity (relation_detail) to optimize token usage.
 - Support optional business concept extraction and semantic search in a separate graph.
@@ -30,6 +31,7 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 - Detect API boundaries and link clients to endpoints.
 - Discover event publishers/subscribers and generate TRIGGERS_EVENT edges.
 - Provide tri-hybrid retrieval (lexical + vector + graph) for code search.
+- Support deterministic and inferred edges with explicit include_inferred_edges control.
 - Implement tool fallback cascade to prevent AI hallucination on missing symbols.
 - Maintain library tools for explain-code, call graph, impact analysis, ADR automation,
   test generation, and PR analysis.

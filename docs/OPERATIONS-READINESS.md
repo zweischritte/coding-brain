@@ -19,18 +19,20 @@ This document lists what needs to be in place for the existing system to work we
   - Memories: `memories:read`, `memories:write`, `memories:delete` (as needed)
   - Code tools: `code:read`, `code:write`
   - Graph/UI: `graph:read`, `entities:read`, `apps:read`, `stats:read`
-- JWT grants match intended visibility (user/team/project/org), and `access_entity` is set for shared scopes.
+- JWT grants match intended visibility (user/team/project/org), and `access_entity` is set for shared data.
 - If you migrated legacy data, run the backfill and re-sync vector and graph stores afterward.
 - Avoid ambiguous `access_entity="auto"` if multiple grants exist.
 
 ## 3) Memory ingestion quality
 
-- Every memory includes `category`, `scope`, `entity` (required), and the correct `access_entity`.
+- Every memory includes `category`, `entity` (required), and the correct `access_entity`.
 - Use `artifact_type` and `artifact_ref` for repo, file, or component references.
 - Use consistent entity naming across the team to avoid graph fragmentation.
+- Entity names are normalized; use displayName for UI outputs.
 - Prefer updates over deletes to preserve history and keep graph links stable.
 - Attach evidence links (ADR, PR, issue) for decisions and conventions.
 - Define a simple tag taxonomy (e.g., `decision`, `deprecated`, `flaky`, `runbook`) and use it consistently.
+- `add_memories` is async by default; poll `add_memories_status(job_id)` before assuming the memory is searchable.
 
 ## 4) Indexing readiness (code tools)
 
@@ -40,6 +42,7 @@ This document lists what needs to be in place for the existing system to work we
 - For large repos, use async indexing and monitor job status.
 - Check queue and cancellation behavior if `MAX_QUEUED_JOBS` is low.
 - If indexing is slow or failing, verify Tree-sitter/SCIP dependencies and resource limits.
+- For strict call graphs, set `include_inferred_edges=false` (or `CODE_INTEL_INCLUDE_INFERRED_EDGES=false`).
 
 ## 5) Search and retrieval quality
 
@@ -55,6 +58,7 @@ This document lists what needs to be in place for the existing system to work we
 - Graph queries depend on memory metadata; ensure `entity` and `tags` are populated.
 - After bulk updates or access_entity backfill, re-sync graph and vector stores.
 - Use graph tools for multi-hop questions and relationship-heavy queries.
+- Run `backfill_graph_access_entity_hybrid.py` before entity bridge backfill.
 
 ## 7) MCP and client readiness
 
@@ -86,6 +90,7 @@ This document lists what needs to be in place for the existing system to work we
 - Shared memories not visible: `access_entity` missing or wrong grant.
 - Search returns stale results: re-sync vector/graph after backfill or migration.
 - Code tools return nothing: index not built or index path invalid.
+- Entity casing looks wrong: run `backfill_entity_display_names.py`.
 
 ## References
 

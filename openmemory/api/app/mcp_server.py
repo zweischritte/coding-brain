@@ -96,6 +96,7 @@ from app.graph.graph_ops import (
     get_biography_timeline_from_graph,
 )
 from app.graph.entity_bridge import bridge_entities_to_om_graph
+from app.memory_jobs import create_memory_job, get_memory_job, update_memory_job
 from app.path_utils import resolve_repo_root
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -123,6 +124,271 @@ def get_memory_client_safe():
     except Exception as e:
         logging.warning(f"Failed to get memory client: {e}")
         return None
+
+
+def _project_graph_for_results(
+    valid_results: list[dict],
+    user_id: str,
+    combined_metadata: dict,
+) -> None:
+    """Project memory updates into graph stores (best-effort)."""
+    logging.info(f"Graph projection: checking {len(valid_results)} results, graph_enabled={is_graph_enabled()}")
+    for result in valid_results:
+        logging.info(f"Graph projection: result id={result.get('id')}, event={result.get('event')}")
+        if 'id' in result and result.get('event') == 'ADD':
+            try:
+                logging.info(f"Graph projection: projecting {result['id']}")
+                project_memory_to_graph(
+                    memory_id=result['id'],
+                    user_id=user_id,  # Use string user_id for graph scoping
+                    content=result.get('memory', ''),
+                    metadata=combined_metadata,
+                    state="active",
+                )
+                # Bridge multi-entity extraction from Mem0 to OM graph
+                # This creates OM_ABOUT edges for ALL extracted entities (not just metadata.re)
+                # and typed OM_RELATION edges between related entities
+                if is_mem0_graph_enabled():
+                    try:
+                        bridge_result = bridge_entities_to_om_graph(
+                            memory_id=result['id'],
+                            user_id=user_id,
+                            content=result.get('memory', ''),
+                            existing_entity=combined_metadata.get('entity'),
+                        )
+                        logging.info(
+                            "Entity bridge: %s entities, %s relations",
+                            bridge_result.get('entities_bridged', 0),
+                            bridge_result.get('relations_created', 0),
+                        )
+                    except Exception as bridge_error:
+                        logging.warning(f"Entity bridge failed for {result['id']}: {bridge_error}")
+                # Update entity-to-entity co-mention edges (now works with multi-entity bridging)
+                update_entity_edges_on_memory_add(result['id'], user_id)
+                # Update tag-to-tag co-occurrence edges
+                update_tag_edges_on_memory_add(result['id'], user_id)
+                # Project similarity edges (K nearest neighbors)
+                project_similarity_edges_for_memory(result['id'], user_id)
+            except Exception as graph_error:
+                logging.warning(f"Graph projection failed for {result['id']}: {graph_error}")
+        elif 'id' in result and result.get('event') == 'DELETE':
+            try:
+                # Update entity edges before deleting memory
+                update_entity_edges_on_memory_delete(result['id'], user_id)
+                # Delete similarity edges
+                delete_similarity_edges_for_memory(result['id'], user_id)
+                # Delete the memory node
+                delete_memory_from_graph(result['id'])
+            except Exception as graph_error:
+                logging.warning(f"Graph deletion failed for {result['id']}: {graph_error}")
+
+
+async def _run_graph_projection_async(
+    valid_results: list[dict],
+    user_id: str,
+    combined_metadata: dict,
+) -> None:
+    """Run graph projection in a background thread to avoid blocking the response."""
+    try:
+        await asyncio.to_thread(_project_graph_for_results, valid_results, user_id, combined_metadata)
+    except Exception as e:
+        logging.warning(f"Graph projection task failed: {e}")
+
+
+def _summarize_add_job(
+    structured_metadata: dict,
+    valid_results: list[dict],
+) -> dict:
+    return {
+        "category": structured_metadata.get("category"),
+        "scope": structured_metadata.get("scope"),
+        "entity": structured_metadata.get("entity"),
+        "access_entity": structured_metadata.get("access_entity"),
+        "memory_ids": [r.get("id") for r in valid_results if r.get("id")],
+        "count": len(valid_results),
+    }
+
+
+def _add_memories_core(
+    *,
+    memory_client: object,
+    user_id: str,
+    client_name: str,
+    clean_text: str,
+    structured_metadata: dict,
+    combined_metadata: dict,
+    infer: bool,
+) -> tuple[dict, list[dict]]:
+    """Run the add_memories logic and return (response, valid_results)."""
+    try:
+        db = SessionLocal()
+        try:
+            # Get or create user and app
+            user, app = get_user_and_app(db, user_id=user_id, app_id=client_name)
+
+            # Check if app is active
+            if not app.is_active:
+                return (
+                    {"error": f"App {app.name} is currently paused on OpenMemory. Cannot create new memories."},
+                    [],
+                )
+
+            response = memory_client.add(
+                clean_text,
+                user_id=user_id,
+                metadata=combined_metadata,
+                infer=infer,
+            )
+
+            # Process the response and update database
+            if isinstance(response, dict) and 'results' in response:
+                results = response.get('results', [])
+                if not results:
+                    return (
+                        {
+                            "error": "Memory client returned no results",
+                            "code": "MEMORY_ADD_EMPTY_RESULT",
+                            "hint": "If you expect raw storage, set infer=false",
+                        },
+                        [],
+                    )
+
+                valid_results = [
+                    result for result in results
+                    if result.get("id") and result.get("memory")
+                ]
+                invalid_results = [
+                    result for result in results
+                    if not result.get("id") or not result.get("memory")
+                ]
+                if not valid_results:
+                    return (
+                        {
+                            "error": "Memory creation failed",
+                            "code": "MEMORY_ADD_FAILED",
+                            "details": invalid_results,
+                        },
+                        [],
+                    )
+
+                for result in valid_results:
+                    if 'id' not in result:
+                        continue
+
+                    memory_id = uuid.UUID(result['id'])
+                    memory = db.query(Memory).filter(Memory.id == memory_id).first()
+
+                    if result['event'] == 'ADD':
+                        if not memory:
+                            memory = Memory(
+                                id=memory_id,
+                                user_id=user.id,
+                                app_id=app.id,
+                                content=result['memory'],
+                                metadata_=combined_metadata,
+                                state=MemoryState.active,
+                            )
+                            db.add(memory)
+                        else:
+                            memory.state = MemoryState.active
+                            memory.content = result['memory']
+                            memory.metadata_ = combined_metadata
+
+                        # Create history entry
+                        history = MemoryStatusHistory(
+                            memory_id=memory_id,
+                            changed_by=user.id,
+                            old_state=MemoryState.deleted if memory else None,
+                            new_state=MemoryState.active
+                        )
+                        db.add(history)
+
+                    elif result['event'] == 'DELETE':
+                        if memory:
+                            memory.state = MemoryState.deleted
+                            memory.deleted_at = datetime.datetime.now(datetime.UTC)
+                            # Create history entry
+                            history = MemoryStatusHistory(
+                                memory_id=memory_id,
+                                changed_by=user.id,
+                                old_state=MemoryState.active,
+                                new_state=MemoryState.deleted
+                            )
+                            db.add(history)
+
+                db.commit()
+
+                # Format response using the new lean format
+                formatted_response = format_add_memories_response(
+                    results=valid_results,
+                    structured_metadata=structured_metadata,
+                )
+                if invalid_results:
+                    formatted_response["error"] = "Some memories failed to save"
+                    formatted_response["failed"] = invalid_results
+                return formatted_response, valid_results
+
+            # Handle case where response is not in expected format
+            return {"error": "Unexpected response format from memory client"}, []
+        finally:
+            db.close()
+    except Exception as e:
+        logging.exception(f"Error adding to memory: {e}")
+        return {"error": f"Error adding to memory: {e}"}, []
+
+
+async def _run_add_memories_job(
+    *,
+    job_id: str,
+    memory_client: object,
+    user_id: str,
+    client_name: str,
+    clean_text: str,
+    structured_metadata: dict,
+    combined_metadata: dict,
+    infer: bool,
+) -> None:
+    update_memory_job(job_id, status="running", started_at=datetime.datetime.now(datetime.UTC).isoformat())
+    response, valid_results = await asyncio.to_thread(
+        _add_memories_core,
+        memory_client=memory_client,
+        user_id=user_id,
+        client_name=client_name,
+        clean_text=clean_text,
+        structured_metadata=structured_metadata,
+        combined_metadata=combined_metadata,
+        infer=infer,
+    )
+
+    summary = _summarize_add_job(structured_metadata, valid_results)
+    if valid_results:
+        status = "succeeded"
+        if response.get("error"):
+            status = "partial"
+        update_memory_job(
+            job_id,
+            status=status,
+            finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            result=response,
+            summary=summary,
+        )
+        asyncio.create_task(
+            _run_graph_projection_async(
+                valid_results=list(valid_results),
+                user_id=user_id,
+                combined_metadata=dict(combined_metadata),
+            )
+        )
+        return
+
+    update_memory_job(
+        job_id,
+        status="failed",
+        finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+        result=response,
+        error=response.get("error"),
+        summary=summary,
+    )
 
 # Context variables for user_id, client_name, and org_id
 user_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("user_id")
@@ -647,6 +913,7 @@ Parameters:
 - tags: Key-value metadata (e.g., {"priority": "high"})
 - evidence: References (e.g., ["ADR-014", "PR-123"])
 - code_refs: Link to source code (e.g., [{"file_path": "/src/auth.ts", "line_start": 42}])
+- async_mode: When true, return immediately with job_id and process in background (default: true)
 
 Returns: id of created memory, plus saved metadata.
 
@@ -668,6 +935,7 @@ async def add_memories(
     access_entity: str = None,
     code_refs: list = None,
     infer: bool = False,
+    async_mode: bool = True,
 ) -> str:
     # Check scope - requires memories:write
     scope_error = _check_tool_scope("memories:write")
@@ -773,160 +1041,81 @@ async def add_memories(
     if not memory_client:
         return json.dumps({"error": "Memory system is currently unavailable. Please try again later."})
 
-    try:
-        db = SessionLocal()
-        try:
-            # Get or create user and app
-            user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
-
-            # Check if app is active
-            if not app.is_active:
-                return json.dumps({"error": f"App {app.name} is currently paused on OpenMemory. Cannot create new memories."})
-
-            response = memory_client.add(
-                clean_text,
+    if async_mode:
+        summary = _summarize_add_job(structured_metadata, [])
+        job_id = create_memory_job(requested_by=uid, summary=summary)
+        asyncio.create_task(
+            _run_add_memories_job(
+                job_id=job_id,
+                memory_client=memory_client,
                 user_id=uid,
-                metadata=combined_metadata,
+                client_name=client_name,
+                clean_text=clean_text,
+                structured_metadata=structured_metadata,
+                combined_metadata=combined_metadata,
                 infer=infer,
             )
+        )
+        return json.dumps({
+            "status": "queued",
+            "job_id": job_id,
+        })
 
-            # Process the response and update database
-            if isinstance(response, dict) and 'results' in response:
-                results = response.get('results', [])
-                if not results:
-                    return json.dumps({
-                        "error": "Memory client returned no results",
-                        "code": "MEMORY_ADD_EMPTY_RESULT",
-                        "hint": "If you expect raw storage, set infer=false",
-                    })
+    formatted_response, valid_results = await asyncio.to_thread(
+        _add_memories_core,
+        memory_client=memory_client,
+        user_id=uid,
+        client_name=client_name,
+        clean_text=clean_text,
+        structured_metadata=structured_metadata,
+        combined_metadata=combined_metadata,
+        infer=infer,
+    )
+    if valid_results:
+        asyncio.create_task(
+            _run_graph_projection_async(
+                valid_results=list(valid_results),
+                user_id=uid,
+                combined_metadata=dict(combined_metadata),
+            )
+        )
+    return json.dumps(formatted_response)
 
-                valid_results = [
-                    result for result in results
-                    if result.get("id") and result.get("memory")
-                ]
-                invalid_results = [
-                    result for result in results
-                    if not result.get("id") or not result.get("memory")
-                ]
-                if not valid_results:
-                    return json.dumps({
-                        "error": "Memory creation failed",
-                        "code": "MEMORY_ADD_FAILED",
-                        "details": invalid_results,
-                    })
 
-                for result in valid_results:
-                    if 'id' not in result:
-                        continue
+@mcp.tool(
+    description="""Get status for an async add_memories job.
 
-                    memory_id = uuid.UUID(result['id'])
-                    memory = db.query(Memory).filter(Memory.id == memory_id).first()
+Use when: add_memories was called with async_mode=true and returned a job_id.
 
-                    if result['event'] == 'ADD':
-                        if not memory:
-                            memory = Memory(
-                                id=memory_id,
-                                user_id=user.id,
-                                app_id=app.id,
-                                content=result['memory'],
-                                metadata_=combined_metadata,
-                                state=MemoryState.active,
-                            )
-                            db.add(memory)
-                        else:
-                            memory.state = MemoryState.active
-                            memory.content = result['memory']
-                            memory.metadata_ = combined_metadata
+Parameters:
+- job_id: Job UUID returned from add_memories
 
-                        # Create history entry
-                        history = MemoryStatusHistory(
-                            memory_id=memory_id,
-                            changed_by=user.id,
-                            old_state=MemoryState.deleted if memory else None,
-                            new_state=MemoryState.active
-                        )
-                        db.add(history)
+Returns: job status, timestamps, summary, and result if available.
+""",
+    annotations=ToolAnnotations(readOnlyHint=True, title="Add Memory Job Status")
+)
+async def add_memories_status(job_id: str) -> str:
+    # Check scope - requires memories:read
+    scope_error = _check_tool_scope("memories:read")
+    if scope_error:
+        return scope_error
 
-                    elif result['event'] == 'DELETE':
-                        if memory:
-                            memory.state = MemoryState.deleted
-                            memory.deleted_at = datetime.datetime.now(datetime.UTC)
-                            # Create history entry
-                            history = MemoryStatusHistory(
-                                memory_id=memory_id,
-                                changed_by=user.id,
-                                old_state=MemoryState.active,
-                                new_state=MemoryState.deleted
-                            )
-                            db.add(history)
+    uid = user_id_var.get(None)
+    if not uid:
+        return json.dumps({"error": "user_id not provided"})
 
-                db.commit()
+    job = get_memory_job(job_id)
+    if not job:
+        return json.dumps({"error": "job_id not found", "code": "JOB_NOT_FOUND"})
 
-                # Project to Neo4j graph (non-blocking - failures are logged but don't fail the operation)
-                logging.info(f"Graph projection: checking {len(results)} results, graph_enabled={is_graph_enabled()}")
-                for result in valid_results:
-                    logging.info(f"Graph projection: result id={result.get('id')}, event={result.get('event')}")
-                    if 'id' in result and result.get('event') == 'ADD':
-                        try:
-                            logging.info(f"Graph projection: projecting {result['id']}")
-                            project_memory_to_graph(
-                                memory_id=result['id'],
-                                user_id=uid,  # Use string user_id for graph scoping
-                                content=result.get('memory', ''),
-                                metadata=combined_metadata,
-                                state="active",
-                            )
-                            # Bridge multi-entity extraction from Mem0 to OM graph
-                            # This creates OM_ABOUT edges for ALL extracted entities (not just metadata.re)
-                            # and typed OM_RELATION edges between related entities
-                            if is_mem0_graph_enabled():
-                                try:
-                                    bridge_result = bridge_entities_to_om_graph(
-                                        memory_id=result['id'],
-                                        user_id=uid,
-                                        content=result.get('memory', ''),
-                                        existing_entity=combined_metadata.get('entity'),
-                                    )
-                                    logging.info(f"Entity bridge: {bridge_result.get('entities_bridged', 0)} entities, "
-                                                f"{bridge_result.get('relations_created', 0)} relations")
-                                except Exception as bridge_error:
-                                    logging.warning(f"Entity bridge failed for {result['id']}: {bridge_error}")
-                            # Update entity-to-entity co-mention edges (now works with multi-entity bridging)
-                            update_entity_edges_on_memory_add(result['id'], uid)
-                            # Update tag-to-tag co-occurrence edges
-                            update_tag_edges_on_memory_add(result['id'], uid)
-                            # Project similarity edges (K nearest neighbors)
-                            project_similarity_edges_for_memory(result['id'], uid)
-                        except Exception as graph_error:
-                            logging.warning(f"Graph projection failed for {result['id']}: {graph_error}")
-                    elif 'id' in result and result.get('event') == 'DELETE':
-                        try:
-                            # Update entity edges before deleting memory
-                            update_entity_edges_on_memory_delete(result['id'], uid)
-                            # Delete similarity edges
-                            delete_similarity_edges_for_memory(result['id'], uid)
-                            # Delete the memory node
-                            delete_memory_from_graph(result['id'])
-                        except Exception as graph_error:
-                            logging.warning(f"Graph deletion failed for {result['id']}: {graph_error}")
+    principal = principal_var.get(None)
+    if principal and job.get("requested_by") != principal.user_id:
+        return json.dumps({
+            "error": "Access denied: you don't have permission to view this job",
+            "code": "FORBIDDEN",
+        })
 
-                # Format response using the new lean format
-                formatted_response = format_add_memories_response(
-                    results=valid_results,
-                    structured_metadata=structured_metadata,
-                )
-                if invalid_results:
-                    formatted_response["error"] = "Some memories failed to save"
-                    formatted_response["failed"] = invalid_results
-                return json.dumps(formatted_response)
-
-            # Handle case where response is not in expected format
-            return json.dumps({"error": "Unexpected response format from memory client"})
-        finally:
-            db.close()
-    except Exception as e:
-        logging.exception(f"Error adding to memory: {e}")
-        return json.dumps({"error": f"Error adding to memory: {e}"})
+    return json.dumps(job)
 
 
 @mcp.tool(

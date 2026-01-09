@@ -5,10 +5,7 @@
 
 
 - **Project Root**
-  - [AGENTS.bak](/AGENTS.bak.md)
   - [AGENTS](/AGENTS.md)
-  - [AGENTS2](/AGENTS2.md)
-  - [AGENTS3](/AGENTS3.md)
   - [CLAUDE](/CLAUDE.md)
   - [CONTRIBUTING](/CONTRIBUTING.md)
   - [GEMINI](/GEMINI.md)
@@ -16,19 +13,10 @@
   - [MIGRATION GUIDE v1.0](/MIGRATION_GUIDE_v1.0.md)
   - [Overview](/README.md)
   - [SYSTEM PROMPT](/SYSTEM-PROMPT.md)
-  - [alternative embedding claude researcher good](/alternative-embedding-claude-researcher-good.md)
-  - [alternative embedding claude researcher](/alternative-embedding-claude-researcher.md)
-  - [alternative embedding codex researcher](/alternative-embedding-codex-researcher.md)
-  - [antwort1](/antwort1.md)
-  - [antwort2](/antwort2.md)
-  - [antwort3](/antwort3.md)
   - [openmemory](/openmemory.md)
 
 - **Documentation**
-  - [ADHD TEACHING TECHNICAL TOPICS](/docs/ADHD-TEACHING-TECHNICAL-TOPICS.md)
-  - [ANALYSIS GRAPH RAG NEO4J BEST PRACTICES](/docs/ANALYSIS-GRAPH-RAG-NEO4J-BEST-PRACTICES.md)
   - [FINAL SYSTEM GOALS](/docs/FINAL-SYSTEM-GOALS.md)
-  - [Graph RAG Implementierungs Best Practices](/docs/Graph RAG Implementierungs-Best-Practices.md)
   - [LLM IMAGINED GAP ANALYSIS](/docs/LLM-IMAGINED-GAP-ANALYSIS.md)
   - [LLM REPO INTEGRATION GUIDE GENERIC](/docs/LLM-REPO-INTEGRATION-GUIDE-GENERIC.md)
   - [LLM REPO INTEGRATION GUIDE](/docs/LLM-REPO-INTEGRATION-GUIDE.md)
@@ -36,11 +24,9 @@
   - [LOCAL OLLAMA SETUP](/docs/LOCAL-OLLAMA-SETUP.md)
   - [MCP TOOL TEST PLAN](/docs/MCP-TOOL-TEST-PLAN.md)
   - [OPERATIONS READINESS](/docs/OPERATIONS-READINESS.md)
-  - [PRD ADHS OPTIMIERTES CODING BRAIN TRAINING](/docs/PRD-ADHS-OPTIMIERTES-CODING-BRAIN-TRAINING.md)
-  - [PROMPT GENERATE ADHS TRAINING](/docs/PROMPT-GENERATE-ADHS-TRAINING.md)
+  - [PRD DOCS REFRESH](/docs/PRD-DOCS-REFRESH.md)
   - [Overview CODING BRAIN](/docs/README-CODING-BRAIN.md)
   - [Overview](/docs/README.md)
-  - [RESEARCH PROMPT GRAPH RAG IMPROVEMENTS](/docs/RESEARCH-PROMPT-GRAPH-RAG-IMPROVEMENTS.md)
   - [RUNBOOK DEPLOYMENT](/docs/RUNBOOK-DEPLOYMENT.md)
   - [SECRET ROTATION](/docs/SECRET-ROTATION.md)
   - [SYSTEM CONTEXT](/docs/SYSTEM-CONTEXT.md)

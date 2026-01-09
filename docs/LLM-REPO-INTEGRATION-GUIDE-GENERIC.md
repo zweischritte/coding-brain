@@ -16,11 +16,11 @@ You have access to Coding Brain, a long-term memory system via MCP tools.
 ## Memory Config for This Repo
 
 When storing memories:
-- **scope**: `project`
 - **access_entity**: `project:[YOUR_ORG]/[YOUR_REPO]`
 - **artifact_type**: `repo`
 - **artifact_ref**: `[YOUR_REPO]`
 - **entity**: Always specify (e.g., "API", "Frontend", "AuthService")
+- Scope is legacy metadata only; do not rely on it for access control.
 
 ## Key Rules
 
@@ -33,7 +33,7 @@ When storing memories:
 | Task | Tool | Notes |
 |------|------|-------|
 | Find past decisions | `search_memory` | Add entity/category filters |
-| Store new knowledge | `add_memories` | Always include entity |
+| Store new knowledge | `add_memories` | Always include entity; async by default (poll `add_memories_status`) |
 | Find similar context | `graph_similar_memories` | Semantic similarity |
 | Code discovery | `search_code_hybrid` | Then use Read for full context |
 
@@ -51,12 +51,13 @@ When storing memories:
 add_memories(
   text="Use Tailwind for styling, avoid custom CSS",
   category="convention",
-  scope="project",
   entity="Frontend",
   access_entity="project:[YOUR_ORG]/[YOUR_REPO]",
   evidence=["PR-123"]
 )
 ```
+Note: `add_memories` defaults to async and returns a `job_id`. Use `add_memories_status(job_id)` to fetch the result,
+or set `async_mode=false` when you need the memory ID immediately.
 
 ## Example: Find Context
 
@@ -88,7 +89,7 @@ Make repo knowledge discoverable and actionable by:
   - Memories: read/write (and delete if needed)
   - Code tools: read/write
   - Graph/UI: graph and entity read permissions
-- For shared scope, set `access_entity` explicitly.
+- Set `access_entity` explicitly for any shared data; scope is legacy metadata only.
 
 ## Step 1: Index the repo (code tools)
 
@@ -124,8 +125,7 @@ Suggested entity categories:
 
 Metadata rules (required):
 - Always set `entity` (required by most systems for graph linking).
-- Use the narrowest `scope` that fits (user, team, project, org).
-- Use `access_entity` for any shared scope.
+- Use `access_entity` for any shared data.
 - Use `artifact_type` and `artifact_ref` for repo/file/component references.
 - Keep tags consistent across the team.
 
@@ -149,7 +149,6 @@ Memory template (example):
 add_memories(
   text="<1-2 sentence summary>",
   category="architecture|decision|runbook|workflow|dependency|security|performance|testing|convention",
-  scope="project",
   entity="<entity>",
   access_entity="<access-entity>",
   artifact_type="repo",
@@ -157,6 +156,8 @@ add_memories(
   tags={"source":"docs/README.md"}
 )
 ```
+Async note: `add_memories` returns a `job_id` by default; call `add_memories_status(job_id)` to retrieve the result
+before relying on it in searches.
 
 Guidance:
 - Keep each memory short and atomic (one idea per memory).
@@ -209,6 +210,6 @@ Typical flow:
 ## Anti-patterns
 
 - Storing entire files or large code blocks as memories.
-- Creating memories without `entity` or without `access_entity` for shared scopes.
-- Mixing team-specific and org-wide knowledge in the same scope.
+- Creating memories without `entity` or without `access_entity` for shared data.
+- Mixing team-specific and org-wide knowledge in the same access_entity.
 - Relying on recency weighting for long-lived architectural facts.
