@@ -16,7 +16,7 @@ Make repo knowledge discoverable and actionable by:
   - `memories:read`, `memories:write` (and `memories:delete` if needed)
   - `code:read`, `code:write`
   - `graph:read`, `entities:read` for graph use
-- Set `access_entity` explicitly for any shared data; scope is legacy metadata only.
+- Set `access_entity` explicitly for any shared data; scope is legacy metadata only and can be omitted (derived from access_entity).
 
 ## Step 1: Index the repo (code tools)
 

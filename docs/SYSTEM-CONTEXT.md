@@ -10,7 +10,7 @@ Current runtime shape
 - Next.js UI in `openmemory/ui`
 
 Implemented capabilities
-- Structured memory CRUD with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only)
+- Structured memory CRUD with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only and can be derived from access_entity when omitted)
 - Memory state tracking and access logs in PostgreSQL
 - Vector search via Mem0 (default Qdrant)
 - Neo4j metadata graph (OM_*), similarity edges, tag co-occurrence, typed relations, timeline queries

@@ -18,7 +18,7 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 ## Major Capabilities (Current)
 
 ### Memory and Knowledge
-- Structured memory schema with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only)
+- Structured memory schema with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only and can be derived from access_entity when omitted)
 - CRUD, state changes, and access logging in PostgreSQL
 - Vector search via Mem0 (default: Qdrant)
 - Neo4j metadata graph (OM_*), similarity edges, typed relations, tag co-occurrence
@@ -359,7 +359,7 @@ On macOS, Claude Code stores MCP settings in `~/.claude.json`. Add the following
 
 Replace `<user_id>` with your configured user (default: `default_user`) and `<your-jwt-token>` with the token from `openmemory/.env` (`NEXT_PUBLIC_API_TOKEN`).
 
-After adding this configuration, restart Claude Code. You should then have access to memory tools like `add_memories`, `search_memory`, `list_memories`, and the `graph_*` tools.
+After adding this configuration, restart Claude Code. You should then have access to memory tools like `add_memories`, `add_memories_status`, `search_memory`, `list_memories`, and the `graph_*` tools.
 
 ---
 

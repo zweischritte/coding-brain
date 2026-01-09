@@ -3,7 +3,7 @@
 Purpose
 - Provide a complete, step-by-step MCP tool test plan for another LLM instance.
 - Cover all MCP tools currently implemented in this repository.
-- Use realistic memory content with correct access_entity (scope is legacy metadata only).
+- Use realistic memory content with correct access_entity (scope is legacy metadata only and can be derived from access_entity when omitted).
 
 Prerequisites
 - MCP server running and reachable by the client.
@@ -25,7 +25,7 @@ Prerequisites
   - access_entity="project:default_org/coding-brain"
   - artifact_type="repo"
   - artifact_ref="coding-brain"
-- Note: scope is legacy metadata only and does not control visibility.
+- Note: scope is legacy metadata only; it can be omitted and derived from access_entity, and does not control visibility.
 - For access_entity auto-resolution tests, have a user with:
   - Exactly one grant for a shared access_entity (e.g., team:default_org/dev)
   - Multiple grants for the same access_entity prefix (e.g., team:default_org/dev and team:default_org/ops)
@@ -34,7 +34,7 @@ Prerequisites
 
 ## 1) Seed Dataset (Memories)
 Create a small, coherent memory set for graph and search tests. Capture IDs from the response or via list_memories.
-Scope is optional legacy metadata; access is controlled by access_entity.
+Scope is optional legacy metadata; when omitted, it can be derived from access_entity. Access is controlled by access_entity.
 
 Add the following memories one by one:
 Note: `add_memories` defaults to async and returns a `job_id`. Poll `add_memories_status(job_id)` until

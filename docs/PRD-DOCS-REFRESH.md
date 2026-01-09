@@ -12,7 +12,7 @@ The codebase has shifted to access_entity-first visibility, expanded graph backf
 ---
 
 ## 2) Goals
-- Align all listed docs with the access_entity-only access model (scope is legacy metadata only).
+- Align all listed docs with the access_entity-only access model (scope is legacy metadata only and can be derived from access_entity when omitted).
 - Document entity name normalization and displayName usage for UI/output.
 - Document graph visibility rules: accessEntity drives visibility; userId is audit only.
 - Add and explain new backfill scripts and when to run them.
@@ -64,8 +64,8 @@ The codebase has shifted to access_entity-first visibility, expanded graph backf
 ---
 
 ## 7) Success Criteria
-- All in-scope docs explicitly state access_entity drives access control and scope is legacy metadata.
-- All relevant examples use access_entity and omit scope unless calling out legacy behavior.
+- All in-scope docs explicitly state access_entity drives access control and scope is legacy metadata (optional and derived from access_entity when omitted).
+- All relevant examples use access_entity and omit scope unless calling out legacy behavior (scope can be derived from access_entity).
 - New backfill scripts and displayName behavior are documented with usage notes.
 - MCP tool test plan includes displayName outputs and include_inferred_edges coverage.
 

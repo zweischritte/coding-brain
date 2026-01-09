@@ -14,7 +14,7 @@ Scope: Implemented capabilities plus near-term, code-adjacent gaps
 ---
 
 ## 2. Memory and Context Goals
-- Store structured memories (category, artifacts, entities, tags, evidence; scope is legacy metadata only).
+- Store structured memories (category, artifacts, entities, tags, evidence; scope is legacy metadata only and can be derived from access_entity when omitted).
 - Support code_refs to link memories directly to source code locations.
 - Enforce multi-tenant isolation via access_entity-driven visibility.
 - Project memory metadata into a Neo4j graph for aggregation and relation queries (accessEntity-filtered).

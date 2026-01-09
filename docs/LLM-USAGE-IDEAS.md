@@ -35,7 +35,7 @@ How these map to Coding Brain now:
 ### 2) Access control as a usage feature
 - Keep personal workflows private with `access_entity=user:<id>` while sharing runbooks and decisions with project/team/org access entities.
 - Use access_entity to share just enough: project-level for repo knowledge, team-level for broader practices.
-- Scope is legacy metadata only; do not rely on it for visibility.
+- Scope is legacy metadata only; it can be omitted and derived from access_entity. Do not rely on it for visibility.
 - When a question spans teams, use `access_entity=org:<org>` for common standards and policies.
 
 ### 3) Retrieval patterns that improve answers

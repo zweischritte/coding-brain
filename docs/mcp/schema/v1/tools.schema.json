@@ -37,6 +37,8 @@
     "get_audit_events": { "$ref": "#/$defs/GetAuditEventsTool" },
     "provide_feedback": { "$ref": "#/$defs/ProvideFeedbackTool" },
     "add_memory": { "$ref": "#/$defs/AddMemoryTool" },
+    "add_memories": { "$ref": "#/$defs/AddMemoriesTool" },
+    "add_memories_status": { "$ref": "#/$defs/AddMemoriesStatusTool" },
     "search_memories": { "$ref": "#/$defs/SearchMemoriesTool" },
     "update_memory": { "$ref": "#/$defs/UpdateMemoryTool" },
     "delete_memory": { "$ref": "#/$defs/DeleteMemoryTool" },
@@ -951,6 +953,102 @@
       "properties": {
         "input": { "$ref": "#/$defs/AddMemoryInput" },
         "output": { "$ref": "#/$defs/MemoryIdOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "AddMemoriesInput": {
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "category": { "type": "string" },
+        "scope": { "type": "string" },
+        "entity": { "type": "string" },
+        "access_entity": { "type": "string" },
+        "artifact_type": { "type": "string" },
+        "artifact_ref": { "type": "string" },
+        "tags": { "type": "object" },
+        "evidence": { "type": "array", "items": { "type": "string" } },
+        "code_refs": { "type": "array", "items": { "$ref": "#/$defs/CodeLocation" } },
+        "infer": { "type": "boolean" },
+        "async_mode": { "type": "boolean", "default": true }
+      },
+      "required": ["text", "category"],
+      "additionalProperties": false
+    },
+    "QueuedAddMemoriesOutput": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["queued"] },
+        "job_id": { "type": "string" }
+      },
+      "required": ["status", "job_id"],
+      "additionalProperties": false
+    },
+    "AddMemoriesBatchOutput": {
+      "type": "object",
+      "properties": {
+        "results": { "type": "array", "items": { "$ref": "#/$defs/MemoryResult" } },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "total": { "type": "integer" },
+            "success": { "type": "integer" },
+            "failed": { "type": "integer" }
+          },
+          "additionalProperties": false
+        },
+        "error": { "type": "string" },
+        "failed": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["results"],
+      "additionalProperties": true
+    },
+    "AddMemoriesOutput": {
+      "oneOf": [
+        { "$ref": "#/$defs/QueuedAddMemoriesOutput" },
+        { "$ref": "#/$defs/MemoryResult" },
+        { "$ref": "#/$defs/AddMemoriesBatchOutput" }
+      ]
+    },
+    "AddMemoriesTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/AddMemoriesInput" },
+        "output": { "$ref": "#/$defs/AddMemoriesOutput" }
+      },
+      "required": ["input", "output"],
+      "additionalProperties": false
+    },
+    "AddMemoriesStatusInput": {
+      "type": "object",
+      "properties": {
+        "job_id": { "type": "string" }
+      },
+      "required": ["job_id"],
+      "additionalProperties": false
+    },
+    "AddMemoriesStatusOutput": {
+      "type": "object",
+      "properties": {
+        "job_id": { "type": "string" },
+        "requested_by": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string" },
+        "started_at": { "type": ["string", "null"] },
+        "finished_at": { "type": ["string", "null"] },
+        "summary": { "type": ["object", "null"] },
+        "result": { "type": ["object", "null"] },
+        "error": { "type": ["string", "null"] }
+      },
+      "required": ["job_id", "status", "created_at"],
+      "additionalProperties": true
+    },
+    "AddMemoriesStatusTool": {
+      "type": "object",
+      "properties": {
+        "input": { "$ref": "#/$defs/AddMemoriesStatusInput" },
+        "output": { "$ref": "#/$defs/AddMemoriesStatusOutput" }
       },
       "required": ["input", "output"],
       "additionalProperties": false

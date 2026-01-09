@@ -20,7 +20,7 @@ When storing memories:
 - **artifact_type**: `repo`
 - **artifact_ref**: `[YOUR_REPO]`
 - **entity**: Always specify (e.g., "API", "Frontend", "AuthService")
-- Scope is legacy metadata only; do not rely on it for access control.
+- Scope is legacy metadata only; it can be omitted and derived from access_entity. Do not rely on it for access control.
 
 ## Key Rules
 
@@ -89,7 +89,7 @@ Make repo knowledge discoverable and actionable by:
   - Memories: read/write (and delete if needed)
   - Code tools: read/write
   - Graph/UI: graph and entity read permissions
-- Set `access_entity` explicitly for any shared data; scope is legacy metadata only.
+- Set `access_entity` explicitly for any shared data; scope is legacy metadata only and can be omitted (derived from access_entity).
 
 ## Step 1: Index the repo (code tools)
 
