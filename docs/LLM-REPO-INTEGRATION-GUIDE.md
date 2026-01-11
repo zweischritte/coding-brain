@@ -18,6 +18,13 @@ Make repo knowledge discoverable and actionable by:
   - `graph:read`, `entities:read` for graph use
 - Set `access_entity` explicitly for any shared data; scope is legacy metadata only and can be omitted (derived from access_entity).
 
+### Shared Memory Entry Points (cloudfactory/shared)
+
+If you have access to `project:cloudfactory/shared`, load these first:
+- System Prompt Template: `03e4db30-daaa-422f-bb0b-e4417e9c263b`
+- Shared Memory Index: `3dc502f7-eaeb-4efc-a9fc-99b09655934a`
+- Friendly Quickstart: `e02b4b2a-b976-4d19-85b7-c61f759793fb`
+
 ## Step 1: Index the repo (code tools)
 
 Code tools only work after indexing. Run indexing before any code search or explain.
@@ -109,6 +116,8 @@ Run quick checks after ingestion:
 search_memory(query="access_entity routing", limit=5)
 search_memory(query="code indexing", limit=5)
 search_memory(query="MCP endpoints", limit=5)
+search_memory(query="routing", filter_tags="source=docs/README-CODING-BRAIN.md,shared", filter_mode="all", limit=5)
+search_memory(query="*", filter_app="claude-code", limit=20)  # Find memories written via Claude Code
 ```
 
 Graph checks:

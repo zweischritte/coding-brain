@@ -1,4 +1,10 @@
 {
+    "openmemory": {
+        "custom_instructions": null,
+        "mem0": {
+            "graph_write_on_add": false
+        }
+    },
     "mem0": {
         "llm": {
             "provider": "ollama",

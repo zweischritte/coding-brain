@@ -13,6 +13,7 @@ Implemented capabilities
 - Structured memory CRUD with categories, artifacts, entities, tags, and evidence (scope is legacy metadata only and can be derived from access_entity when omitted)
 - Memory state tracking and access logs in PostgreSQL
 - Vector search via Mem0 (default Qdrant)
+- MCP `search_memory` hard filters (pre-search) via `filter_*` params, including `filter_tags` (`key` or `key=value`), `filter_app` (e.g., `claude-code`), and `filter_mode=all|any`
 - Neo4j metadata graph (OM_*), similarity edges, tag co-occurrence, typed relations, timeline queries
 - Optional business concepts extraction + concept graph and vector store
 - OpenSearch-backed memory search endpoints (lexical; semantic when clients supply query vectors)

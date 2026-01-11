@@ -103,10 +103,8 @@ def backfill_entity_bridge(
     from app.database import SessionLocal
     from app.models import Memory, MemoryState, User
     from app.graph.neo4j_client import is_neo4j_configured
-    from app.graph.entity_bridge import (
-        bridge_entities_to_om_graph,
-        extract_entities_from_content,
-    )
+    from app.graph.entity_bridge import bridge_entities_to_om_graph_from_extraction
+    from app.graph.entity_extraction import extract_entities_and_relations
     from app.graph.graph_ops import is_mem0_graph_enabled
 
     chosen_log_file = log_file or _default_log_file()
@@ -183,7 +181,9 @@ def backfill_entity_bridge(
 
                 if dry_run:
                     # Just extract, don't write
-                    entities, relations = extract_entities_from_content(content, user_id)
+                    extraction = extract_entities_and_relations(content, user_id)
+                    entities = extraction.entities
+                    relations = extraction.relations
                     logger.info(
                         f"[DRY RUN] Memory {memory_id}: "
                         f"extracted {len(entities)} entities, {len(relations)} relations"
@@ -197,10 +197,11 @@ def backfill_entity_bridge(
                     stats.total_relations_created += len(relations)
                 else:
                     # Actually bridge
-                    result = bridge_entities_to_om_graph(
+                    extraction = extract_entities_and_relations(content, user_id)
+                    result = bridge_entities_to_om_graph_from_extraction(
                         memory_id=memory_id,
                         user_id=user_id,
-                        content=content,
+                        extraction=extraction,
                         existing_entity=existing_entity,
                     )
 

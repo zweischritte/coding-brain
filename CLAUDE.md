@@ -8,6 +8,11 @@ You are an AI assistant operating with the Coding Brain / OpenMemory stack. Use 
 - Respect access control (`access_entity`) and JWT grants.
 - Be explicit about what you read, write, update, or delete.
 
+## Key Rules (System Prompt Template Baseline)
+- Code > Memory: verify with `read_file` or `search_code_hybrid` before answering.
+- Store decisions: use `add_memories` for decisions, conventions, architecture.
+- Search first: use `search_memory` before asking for past context.
+
 ---
 
 <!-- VERIFICATION PROTOCOL - Critical instructions for code-related questions -->
@@ -178,6 +183,17 @@ If you can do it via MCP tool calls, prefer MCP for speed and context.
 
 ---
 
+## Shared Memory Entry Points (cloudfactory/shared)
+
+- System Prompt Template: `03e4db30-daaa-422f-bb0b-e4417e9c263b`
+- Shared Memory Index: `3dc502f7-eaeb-4efc-a9fc-99b09655934a`
+- Coding Brain Shared Index: `ba93af28-784d-4262-b8f9-adb08c45acab`
+- Friendly Quickstart: `e02b4b2a-b976-4d19-85b7-c61f759793fb`
+- Tool-use policy: `f894b62b-a912-449b-b34a-9c425f70b795`
+- Response style guide: `c7993fc9-2c92-4b1e-b80d-330b60bb2336`
+
+---
+
 ## Tool Selection Heuristics
 
 ### For Code Tracing (bugs, call chains, understanding flow)
@@ -189,7 +205,7 @@ If you can do it via MCP tool calls, prefer MCP for speed and context.
 
 ### For Decision/Convention Lookup
 
-1. Use `search_memory` with category/entity filters
+1. Use `search_memory` with category/entity filters; add `filter_*` for strict scope
 2. Check `access_entity` to confirm permissions
 3. Verify `evidence`/`updated_at` for recency
 
@@ -233,6 +249,13 @@ When `use_rrf=true` (default), search combines:
 - Graph topology (Neo4j OM_SIMILAR edges)
 - Entity centrality (PageRank boost)
 
+Hard filters (pre-search) are passed to Qdrant payload filters:
+`filter_tags`, `filter_evidence`, `filter_category`, `filter_scope`,
+`filter_artifact_type`, `filter_artifact_ref`, `filter_entity`, `filter_source`,
+`filter_access_entity`. `filter_tags` accepts `key` or `key=value`;
+`filter_mode` controls tag/evidence matching (`all` default, or `any`).
+Boosting params (`category`, `scope`, `entity`, `tags`) remain soft.
+
 `relation_detail` parameter controls meta_relations output:
 
 - `"none"`: No meta_relations (minimal tokens)
@@ -256,10 +279,26 @@ add_memories(
   evidence=["ADR-014"]
 )
 ```
+Note: `add_memories` defaults to async and returns a `job_id`. Use `add_memories_status(job_id)` to fetch the result, or pass `async_mode=false`.
+
+### Add memory status
+```text
+add_memories_status(job_id="<job-id>")
+```
 
 ### Search memories
 ```text
 search_memory(query="pytest before merge", limit=5)
+```
+
+### Search memories (hard filters)
+```text
+search_memory(
+  query="auth routing",
+  filter_tags="source=docs/README-CODING-BRAIN.md,shared",
+  filter_mode="all",
+  limit=5
+)
 ```
 
 ### Search memories (time window)
@@ -365,6 +404,7 @@ Use structured metadata for precision:
 **IMPORTANT**: Always include an `entity` when creating memories. The entity identifies what the memory is about (a person, team, service, component, or concept). Without an entity, the memory cannot be properly linked in the graph or discovered via entity-based queries.
 
 Prefer explicit `access_entity` for shared scopes to avoid ambiguity.
+For strict filtering in searches, use `filter_tags` (`key` for boolean tags, `key=value` for string tags).
 
 ---
 
@@ -396,6 +436,7 @@ explain_code(symbol_id="<symbol-id>")
 
 ## Operational Notes
 - `add_memories` supports `infer` to control LLM fact extraction; use `infer=false` to store raw text without auto-splitting.
+- `add_memories` defaults to async; poll `add_memories_status(job_id)` or pass `async_mode=false` for synchronous results.
 - `index_codebase` runs inside the MCP container; use container-visible paths (e.g., `/usr/src/coding-brain`) and ensure OpenSearch + Neo4j are up.
 - For large repos, prefer `async_mode=true` and poll `index_codebase_status`; cancel with `index_codebase_cancel`.
 - `graph_similar_memories`, `graph_entity_relations`, `graph_entity_network`, and `graph_biography_timeline` require Mem0 graph extraction and/or similarity projection jobs to be enabled.

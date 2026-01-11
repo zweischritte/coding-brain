@@ -54,8 +54,18 @@ class GraphStoreProvider(BaseModel):
     custom_prompt: Optional[str] = Field(None, description="Custom prompt for entity/relation extraction")
     threshold: Optional[float] = Field(None, description="Similarity threshold for graph matching (0.0-1.0)")
 
+class OpenMemoryMem0Config(BaseModel):
+    graph_write_on_add: Optional[bool] = Field(
+        None,
+        description="If true, run Mem0 graph write during add; if false, defer to projection.",
+    )
+
+
 class OpenMemoryConfig(BaseModel):
-    custom_instructions: Optional[str] = Field(None, description="Custom instructions for memory management and fact extraction")
+    custom_instructions: Optional[str] = Field(
+        None, description="Custom instructions for memory management and fact extraction"
+    )
+    mem0: Optional[OpenMemoryMem0Config] = None
 
 class Mem0Config(BaseModel):
     llm: Optional[LLMProvider] = None
@@ -71,7 +81,10 @@ def get_default_configuration():
     """Get the default configuration with sensible defaults for LLM and embedder."""
     return {
         "openmemory": {
-            "custom_instructions": None
+            "custom_instructions": None,
+            "mem0": {
+                "graph_write_on_add": False,
+            },
         },
         "mem0": {
             "llm": {
@@ -127,6 +140,13 @@ def get_config_from_db(db: Session, key: str = "main"):
     # Merge with defaults to ensure all required fields exist
     if "openmemory" not in config_value:
         config_value["openmemory"] = default_config["openmemory"]
+    else:
+        if "custom_instructions" not in config_value["openmemory"]:
+            config_value["openmemory"]["custom_instructions"] = default_config["openmemory"]["custom_instructions"]
+        if "mem0" not in config_value["openmemory"]:
+            config_value["openmemory"]["mem0"] = default_config["openmemory"]["mem0"]
+        elif "graph_write_on_add" not in config_value["openmemory"]["mem0"]:
+            config_value["openmemory"]["mem0"]["graph_write_on_add"] = default_config["openmemory"]["mem0"]["graph_write_on_add"]
     
     if "mem0" not in config_value:
         config_value["mem0"] = default_config["mem0"]

@@ -14,6 +14,7 @@ from app.models import (
     MemoryState,
     MemoryStatusHistory,
     User,
+    Config as ConfigModel,
 )
 from app.schemas import MemoryResponse
 from app.security.dependencies import get_current_principal, require_scopes
@@ -45,6 +46,25 @@ from sqlalchemy import func, String, cast, text, and_, or_
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
+
+
+def _get_graph_write_on_add(db: Session) -> bool:
+    """Return OpenMemory mem0.graph_write_on_add flag (default: False)."""
+    try:
+        row = db.query(ConfigModel).filter(ConfigModel.key == "main").first()
+        if not row or not row.value:
+            return False
+        config = row.value
+        openmemory_cfg = config.get("openmemory", {})
+        om_mem0_cfg = openmemory_cfg.get("mem0", {})
+        if "graph_write_on_add" in om_mem0_cfg:
+            return bool(om_mem0_cfg.get("graph_write_on_add"))
+        mem0_cfg = config.get("mem0", {})
+        if "graph_write_on_add" in mem0_cfg:
+            return bool(mem0_cfg.get("graph_write_on_add"))
+    except Exception:
+        return False
+    return False
 
 
 def get_memory_or_404(db: Session, memory_id: UUID) -> Memory:
@@ -379,11 +399,13 @@ async def create_memory(
             "org_id": principal.org_id,
             **normalized_metadata,
         }
+        graph_write_on_add = _get_graph_write_on_add(db)
         qdrant_response = memory_client.add(
             clean_text,
             user_id=principal.user_id,  # Use JWT user_id to match search
             metadata=combined_metadata,
-            infer=request.infer
+            infer=request.infer,
+            graph_write=graph_write_on_add,
         )
         
         # Log the response for debugging
@@ -435,6 +457,69 @@ async def create_memory(
                 db.commit()
                 for memory in created_memories:
                     db.refresh(memory)
+
+                from app.graph.entity_bridge import (
+                    bridge_entities_to_om_graph,
+                    bridge_entities_to_om_graph_from_extraction,
+                )
+                from app.graph.entity_extraction import (
+                    extract_entities_and_relations,
+                    write_mem0_graph_from_extraction,
+                )
+                from app.graph.graph_ops import (
+                    is_graph_enabled,
+                    is_mem0_graph_enabled,
+                    project_memory_to_graph,
+                    update_entity_edges_on_memory_add,
+                    update_tag_edges_on_memory_add,
+                    project_similarity_edges_for_memory,
+                )
+
+                if is_graph_enabled() or is_mem0_graph_enabled():
+                    for memory in created_memories:
+                        try:
+                            if is_graph_enabled():
+                                project_memory_to_graph(
+                                    memory_id=str(memory.id),
+                                    user_id=principal.user_id,
+                                    content=memory.content,
+                                    metadata=combined_metadata,
+                                    created_at=memory.created_at.isoformat() if memory.created_at else None,
+                                    updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
+                                    state=memory.state.value if memory.state else "active",
+                                )
+
+                            if is_mem0_graph_enabled():
+                                if graph_write_on_add:
+                                    bridge_entities_to_om_graph(
+                                        memory_id=str(memory.id),
+                                        user_id=principal.user_id,
+                                        content=memory.content,
+                                        existing_entity=combined_metadata.get("entity"),
+                                    )
+                                else:
+                                    extraction = extract_entities_and_relations(
+                                        content=memory.content,
+                                        user_id=principal.user_id,
+                                    )
+                                    write_mem0_graph_from_extraction(
+                                        content=memory.content,
+                                        user_id=principal.user_id,
+                                        extraction=extraction,
+                                    )
+                                    bridge_entities_to_om_graph_from_extraction(
+                                        memory_id=str(memory.id),
+                                        user_id=principal.user_id,
+                                        extraction=extraction,
+                                        existing_entity=combined_metadata.get("entity"),
+                                    )
+
+                            if is_graph_enabled():
+                                update_entity_edges_on_memory_add(str(memory.id), principal.user_id)
+                                update_tag_edges_on_memory_add(str(memory.id), principal.user_id)
+                                project_similarity_edges_for_memory(str(memory.id), principal.user_id)
+                        except Exception as graph_error:
+                            logging.warning(f"Graph projection failed for {memory.id}: {graph_error}")
                 
                 # Return the first memory (for API compatibility)
                 # but all memories are now saved to the database
@@ -726,7 +811,11 @@ async def update_memory(
         get_entities_for_memory_from_graph,
         refresh_co_mention_edges_for_entities,
     )
-    from app.graph.entity_bridge import bridge_entities_to_om_graph
+    from app.graph.entity_bridge import bridge_entities_to_om_graph_from_extraction
+    from app.graph.entity_extraction import (
+        extract_entities_and_relations,
+        write_mem0_graph_from_extraction,
+    )
     user = db.query(User).filter(User.user_id == principal.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -872,10 +961,17 @@ async def update_memory(
         # Bridge multi-entity extraction (uses Mem0 Graph extraction; does not require vector-store changes)
         if is_mem0_graph_enabled():
             try:
-                bridge_entities_to_om_graph(
+                extraction = extract_entities_and_relations(new_content, principal.user_id)
+                if content_updated:
+                    write_mem0_graph_from_extraction(
+                        content=new_content,
+                        user_id=principal.user_id,
+                        extraction=extraction,
+                    )
+                bridge_entities_to_om_graph_from_extraction(
                     memory_id=str(memory_id),
                     user_id=principal.user_id,
-                    content=new_content,
+                    extraction=extraction,
                     existing_entity=updated_metadata.get("entity"),
                 )
                 entity_bridge_ran = True

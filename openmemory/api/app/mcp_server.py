@@ -21,10 +21,11 @@ import datetime
 import json
 import logging
 import uuid
+from typing import Any
 from pathlib import Path
 
 from app.database import SessionLocal
-from app.models import Memory, MemoryAccessLog, MemoryState, MemoryStatusHistory
+from app.models import Memory, MemoryAccessLog, MemoryState, MemoryStatusHistory, Config as ConfigModel
 from sqlalchemy import and_, or_
 from app.utils.structured_memory import (
     build_structured_memory,
@@ -63,6 +64,7 @@ from app.utils.response_format import (
 from app.utils.db import get_user_and_app
 from app.utils.memory import get_memory_client
 from app.utils.permissions import check_memory_access_permissions
+from app.utils.debug_timing import DebugTimer
 from app.indexing_jobs import create_index_job, get_index_job, run_index_job
 from app.security.access import resolve_access_entity_for_scope
 from app.graph.graph_ops import (
@@ -95,8 +97,15 @@ from app.graph.graph_ops import (
     # Biographical timeline operations
     get_biography_timeline_from_graph,
 )
-from app.graph.entity_bridge import bridge_entities_to_om_graph
-from app.memory_jobs import create_memory_job, get_memory_job, update_memory_job
+from app.graph.entity_bridge import (
+    bridge_entities_to_om_graph,
+    bridge_entities_to_om_graph_from_extraction,
+)
+from app.graph.entity_extraction import (
+    extract_entities_and_relations,
+    write_mem0_graph_from_extraction,
+)
+from app.memory_jobs import create_memory_job, get_memory_job, list_memory_jobs, update_memory_job
 from app.path_utils import resolve_repo_root
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -126,10 +135,30 @@ def get_memory_client_safe():
         return None
 
 
+def _get_graph_write_on_add(db) -> bool:
+    """Return OpenMemory mem0.graph_write_on_add flag (default: False)."""
+    try:
+        row = db.query(ConfigModel).filter(ConfigModel.key == "main").first()
+        if not row or not row.value:
+            return False
+        config = row.value
+        openmemory_cfg = config.get("openmemory", {})
+        om_mem0_cfg = openmemory_cfg.get("mem0", {})
+        if "graph_write_on_add" in om_mem0_cfg:
+            return bool(om_mem0_cfg.get("graph_write_on_add"))
+        mem0_cfg = config.get("mem0", {})
+        if "graph_write_on_add" in mem0_cfg:
+            return bool(mem0_cfg.get("graph_write_on_add"))
+    except Exception:
+        return False
+    return False
+
+
 def _project_graph_for_results(
     valid_results: list[dict],
     user_id: str,
     combined_metadata: dict,
+    graph_write_on_add: bool,
 ) -> None:
     """Project memory updates into graph stores (best-effort)."""
     logging.info(f"Graph projection: checking {len(valid_results)} results, graph_enabled={is_graph_enabled()}")
@@ -150,12 +179,29 @@ def _project_graph_for_results(
                 # and typed OM_RELATION edges between related entities
                 if is_mem0_graph_enabled():
                     try:
-                        bridge_result = bridge_entities_to_om_graph(
-                            memory_id=result['id'],
-                            user_id=user_id,
-                            content=result.get('memory', ''),
-                            existing_entity=combined_metadata.get('entity'),
-                        )
+                        if graph_write_on_add:
+                            bridge_result = bridge_entities_to_om_graph(
+                                memory_id=result['id'],
+                                user_id=user_id,
+                                content=result.get('memory', ''),
+                                existing_entity=combined_metadata.get('entity'),
+                            )
+                        else:
+                            extraction = extract_entities_and_relations(
+                                content=result.get('memory', ''),
+                                user_id=user_id,
+                            )
+                            write_mem0_graph_from_extraction(
+                                content=result.get('memory', ''),
+                                user_id=user_id,
+                                extraction=extraction,
+                            )
+                            bridge_result = bridge_entities_to_om_graph_from_extraction(
+                                memory_id=result['id'],
+                                user_id=user_id,
+                                extraction=extraction,
+                                existing_entity=combined_metadata.get('entity'),
+                            )
                         logging.info(
                             "Entity bridge: %s entities, %s relations",
                             bridge_result.get('entities_bridged', 0),
@@ -187,12 +233,37 @@ async def _run_graph_projection_async(
     valid_results: list[dict],
     user_id: str,
     combined_metadata: dict,
+    graph_write_on_add: bool,
+    graph_job_id: str,
 ) -> None:
     """Run graph projection in a background thread to avoid blocking the response."""
     try:
-        await asyncio.to_thread(_project_graph_for_results, valid_results, user_id, combined_metadata)
+        update_memory_job(
+            graph_job_id,
+            status="running",
+            started_at=datetime.datetime.now(datetime.UTC).isoformat(),
+        )
+        await asyncio.to_thread(
+            _project_graph_for_results,
+            valid_results,
+            user_id,
+            combined_metadata,
+            graph_write_on_add,
+        )
+        update_memory_job(
+            graph_job_id,
+            status="succeeded",
+            finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            result=_summarize_graph_job(valid_results),
+        )
     except Exception as e:
         logging.warning(f"Graph projection task failed: {e}")
+        update_memory_job(
+            graph_job_id,
+            status="failed",
+            finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+            error=str(e),
+        )
 
 
 def _summarize_add_job(
@@ -209,6 +280,311 @@ def _summarize_add_job(
     }
 
 
+def _summarize_graph_job(
+    valid_results: list[dict],
+    parent_add_job_id: str | None = None,
+) -> dict:
+    summary = {
+        "memory_ids": [r.get("id") for r in valid_results if r.get("id")],
+        "count": len(valid_results),
+    }
+    if parent_add_job_id:
+        summary["parent_add_job_id"] = parent_add_job_id
+    return summary
+
+
+def _summarize_update_job(
+    *,
+    memory_ids: list[str],
+    validated_fields: dict,
+    content_text: str | None,
+    normalized_add_tags: dict | None,
+    normalized_remove_tags: list | None,
+    mcp_client: str | None,
+    is_batch: bool,
+) -> dict:
+    fields_updated = list(validated_fields.keys())
+    if content_text is not None:
+        fields_updated.append("text")
+    if mcp_client is not None:
+        fields_updated.append("mcp_client")
+    summary = {
+        "memory_ids": list(memory_ids),
+        "count": len(memory_ids),
+        "batch": is_batch,
+    }
+    if fields_updated:
+        summary["fields_updated"] = fields_updated
+    if normalized_add_tags:
+        summary["add_tags"] = list(normalized_add_tags.keys())
+    if normalized_remove_tags:
+        summary["remove_tags"] = list(normalized_remove_tags)
+    if mcp_client is not None:
+        summary["mcp_client"] = mcp_client
+    return summary
+
+
+def _update_memory_core(
+    *,
+    user_id: str,
+    client_name: str,
+    ids_to_update: list[str],
+    validated_fields: dict,
+    content_text: str | None,
+    normalized_add_tags: dict | None,
+    normalized_remove_tags: list | None,
+    preserve_timestamps: bool,
+    mcp_client: str | None,
+    is_batch: bool,
+    principal,
+) -> dict:
+    try:
+        db = SessionLocal()
+        try:
+            user, app = get_user_and_app(db, user_id=user_id, app_id=client_name)
+            memory_client = get_memory_client_safe()
+
+            updated_ids = []
+            failed_ids = []
+            single_failure = None
+
+            for mid in ids_to_update:
+                try:
+                    memory = db.query(Memory).filter(
+                        Memory.id == uuid.UUID(mid),
+                    ).first()
+
+                    if not memory:
+                        failed_ids.append({"id": mid, "error": "not found"})
+                        if not is_batch:
+                            single_failure = {"error": f"Memory '{mid}' not found"}
+                        continue
+
+                    current_metadata = memory.metadata_ or {}
+                    current_access_entity = current_metadata.get("access_entity")
+
+                    if not current_access_entity and memory.user_id != user.id:
+                        failed_ids.append({"id": mid, "error": "not found"})
+                        if not is_batch:
+                            single_failure = {"error": f"Memory '{mid}' not found"}
+                        continue
+
+                    if principal:
+                        from app.security.access import can_write_to_access_entity
+
+                        if current_access_entity:
+                            if not can_write_to_access_entity(principal, current_access_entity):
+                                failed_ids.append({"id": mid, "error": "access denied", "code": "FORBIDDEN"})
+                                if not is_batch:
+                                    single_failure = {
+                                        "error": (
+                                            "Access denied: you don't have permission to update "
+                                            f"memories with access_entity='{current_access_entity}'"
+                                        ),
+                                        "code": "FORBIDDEN",
+                                    }
+                                continue
+
+                        new_access_entity = validated_fields.get("access_entity")
+                        if new_access_entity and new_access_entity != current_access_entity:
+                            if not can_write_to_access_entity(principal, new_access_entity):
+                                failed_ids.append({
+                                    "id": mid,
+                                    "error": f"cannot set access_entity={new_access_entity}",
+                                    "code": "FORBIDDEN",
+                                })
+                                if not is_batch:
+                                    single_failure = {
+                                        "error": (
+                                            "Access denied: you don't have permission to set "
+                                            f"access_entity='{new_access_entity}'"
+                                        ),
+                                        "code": "FORBIDDEN",
+                                    }
+                                continue
+
+                    updated_metadata = apply_metadata_updates(
+                        current_metadata=current_metadata,
+                        validated_fields=validated_fields,
+                        add_tags=normalized_add_tags,
+                        remove_tags=normalized_remove_tags,
+                    )
+                    if mcp_client is not None:
+                        updated_metadata["mcp_client"] = mcp_client
+
+                    content_updated = False
+                    if content_text is not None:
+                        memory.content = content_text
+                        content_updated = True
+
+                    memory.metadata_ = updated_metadata
+
+                    if not preserve_timestamps:
+                        memory.updated_at = datetime.datetime.now(datetime.UTC)
+
+                    metadata_updated = bool(
+                        validated_fields or normalized_add_tags or normalized_remove_tags or mcp_client
+                    )
+
+                    if memory_client:
+                        if content_updated:
+                            try:
+                                memory_client.update(mid, content_text)
+                                from app.utils.vector_sync import sync_metadata_to_qdrant_with_mcp_client
+                                sync_metadata_to_qdrant_with_mcp_client(
+                                    memory_id=mid,
+                                    memory=memory,
+                                    metadata=updated_metadata,
+                                    mcp_client_override=mcp_client,
+                                    memory_client=memory_client,
+                                )
+                            except Exception as vs_error:
+                                logging.warning(f"Failed to update vector store for {mid}: {vs_error}")
+                        elif metadata_updated:
+                            try:
+                                from app.utils.vector_sync import sync_metadata_to_qdrant_with_mcp_client
+                                sync_metadata_to_qdrant_with_mcp_client(
+                                    memory_id=mid,
+                                    memory=memory,
+                                    metadata=updated_metadata,
+                                    mcp_client_override=mcp_client,
+                                    memory_client=memory_client,
+                                )
+                            except Exception as vs_error:
+                                logging.warning(f"Failed to sync metadata to vector store for {mid}: {vs_error}")
+
+                    access_log = MemoryAccessLog(
+                        memory_id=memory.id,
+                        app_id=app.id,
+                        access_type="update",
+                        metadata_={
+                            "fields_updated": (
+                                list(validated_fields.keys())
+                                + (["text"] if content_text is not None else [])
+                                + (["mcp_client"] if mcp_client else [])
+                            ),
+                            "add_tags": normalized_add_tags,
+                            "remove_tags": normalized_remove_tags,
+                            "preserve_timestamps": preserve_timestamps,
+                            "mcp_client_override": mcp_client,
+                        },
+                    )
+                    db.add(access_log)
+
+                    try:
+                        project_memory_to_graph(
+                            memory_id=mid,
+                            user_id=user_id,
+                            content=memory.content,
+                            metadata=updated_metadata,
+                            created_at=memory.created_at.isoformat() if memory.created_at else None,
+                            updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
+                            state=memory.state.value if memory.state else "active",
+                        )
+                    except Exception as graph_error:
+                        logging.warning(f"Graph projection failed for updated memory {mid}: {graph_error}")
+
+                    updated_ids.append(mid)
+
+                except Exception as mem_error:
+                    logging.warning(f"Failed to update memory {mid}: {mem_error}")
+                    failed_ids.append({"id": mid, "error": str(mem_error)})
+                    if not is_batch:
+                        single_failure = {"error": str(mem_error)}
+
+            db.commit()
+
+            if is_batch:
+                response = {
+                    "status": "batch_update_complete",
+                    "updated": len(updated_ids),
+                    "failed": len(failed_ids),
+                    "updated_ids": updated_ids,
+                }
+                if failed_ids:
+                    response["failures"] = failed_ids
+                if mcp_client:
+                    response["mcp_client_set_to"] = mcp_client
+            else:
+                if updated_ids:
+                    response = {
+                        "status": "updated",
+                        "memory_id": updated_ids[0],
+                    }
+                    if validated_fields:
+                        response["fields_updated"] = list(validated_fields.keys())
+                    if mcp_client:
+                        response["mcp_client"] = mcp_client
+                    if normalized_add_tags or normalized_remove_tags:
+                        response["current_tags"] = updated_metadata.get("tags", {})
+                else:
+                    return single_failure or {"error": "Unknown error"}
+
+            return response
+        finally:
+            db.close()
+    except Exception as e:
+        logging.exception(e)
+        return {"error": f"Error updating memory: {e}"}
+
+
+async def _run_update_memory_job(
+    *,
+    job_id: str,
+    user_id: str,
+    client_name: str,
+    ids_to_update: list[str],
+    validated_fields: dict,
+    content_text: str | None,
+    normalized_add_tags: dict | None,
+    normalized_remove_tags: list | None,
+    preserve_timestamps: bool,
+    mcp_client: str | None,
+    is_batch: bool,
+    principal,
+) -> None:
+    update_memory_job(
+        job_id,
+        status="running",
+        started_at=datetime.datetime.now(datetime.UTC).isoformat(),
+    )
+    response = await asyncio.to_thread(
+        _update_memory_core,
+        user_id=user_id,
+        client_name=client_name,
+        ids_to_update=ids_to_update,
+        validated_fields=validated_fields,
+        content_text=content_text,
+        normalized_add_tags=normalized_add_tags,
+        normalized_remove_tags=normalized_remove_tags,
+        preserve_timestamps=preserve_timestamps,
+        mcp_client=mcp_client,
+        is_batch=is_batch,
+        principal=principal,
+    )
+
+    status = "succeeded"
+    error_message = None
+    if response.get("error"):
+        status = "failed"
+        error_message = response.get("error")
+    elif is_batch:
+        failed_count = response.get("failed", 0) if isinstance(response, dict) else 0
+        updated_count = response.get("updated", 0) if isinstance(response, dict) else 0
+        if failed_count and updated_count:
+            status = "partial"
+        elif failed_count and not updated_count:
+            status = "failed"
+            error_message = "All updates failed"
+
+    update_memory_job(
+        job_id,
+        status=status,
+        finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+        result=response,
+        error=error_message,
+    )
+
 def _add_memories_core(
     *,
     memory_client: object,
@@ -218,27 +594,54 @@ def _add_memories_core(
     structured_metadata: dict,
     combined_metadata: dict,
     infer: bool,
-) -> tuple[dict, list[dict]]:
-    """Run the add_memories logic and return (response, valid_results)."""
+    debug: bool = False,
+) -> tuple[dict, list[dict], dict | None, bool]:
+    """Run the add_memories logic and return (response, valid_results, timing, graph_write_on_add).
+
+    Returns:
+        Tuple of (formatted_response, valid_results, timing_dict, graph_write_on_add).
+        timing_dict is None if debug=False, otherwise contains internal timings.
+    """
+    import time
+    timing = {} if debug else None
+
     try:
         db = SessionLocal()
         try:
             # Get or create user and app
+            if debug:
+                t0 = time.perf_counter()
             user, app = get_user_and_app(db, user_id=user_id, app_id=client_name)
+            if debug:
+                timing["db_get_user_app"] = round((time.perf_counter() - t0) * 1000, 2)
 
             # Check if app is active
             if not app.is_active:
                 return (
                     {"error": f"App {app.name} is currently paused on OpenMemory. Cannot create new memories."},
                     [],
+                    timing,
+                    False,
                 )
 
+            graph_write_on_add = _get_graph_write_on_add(db)
+
+            # Call Mem0 client (this includes embedding + optional LLM + Qdrant store)
+            if debug:
+                t0 = time.perf_counter()
             response = memory_client.add(
                 clean_text,
                 user_id=user_id,
                 metadata=combined_metadata,
                 infer=infer,
+                graph_write=graph_write_on_add,
+                debug=debug,
             )
+            if debug:
+                timing["mem0_client_add"] = round((time.perf_counter() - t0) * 1000, 2)
+                # Extract detailed timing from mem0 response
+                if isinstance(response, dict) and "debug_timing" in response:
+                    timing["mem0_breakdown"] = response.pop("debug_timing")
 
             # Process the response and update database
             if isinstance(response, dict) and 'results' in response:
@@ -251,6 +654,8 @@ def _add_memories_core(
                             "hint": "If you expect raw storage, set infer=false",
                         },
                         [],
+                        timing,
+                        graph_write_on_add,
                     )
 
                 valid_results = [
@@ -269,7 +674,12 @@ def _add_memories_core(
                             "details": invalid_results,
                         },
                         [],
+                        timing,
+                        graph_write_on_add,
                     )
+
+                if debug:
+                    t0 = time.perf_counter()
 
                 for result in valid_results:
                     if 'id' not in result:
@@ -316,7 +726,14 @@ def _add_memories_core(
                             )
                             db.add(history)
 
+                if debug:
+                    t1 = time.perf_counter()
+
                 db.commit()
+
+                if debug:
+                    timing["postgresql_write"] = round((time.perf_counter() - t0) * 1000, 2)
+                    timing["postgresql_commit"] = round((time.perf_counter() - t1) * 1000, 2)
 
                 # Format response using the new lean format
                 formatted_response = format_add_memories_response(
@@ -326,15 +743,15 @@ def _add_memories_core(
                 if invalid_results:
                     formatted_response["error"] = "Some memories failed to save"
                     formatted_response["failed"] = invalid_results
-                return formatted_response, valid_results
+                return formatted_response, valid_results, timing, graph_write_on_add
 
             # Handle case where response is not in expected format
-            return {"error": "Unexpected response format from memory client"}, []
+            return {"error": "Unexpected response format from memory client"}, [], timing, graph_write_on_add
         finally:
             db.close()
     except Exception as e:
         logging.exception(f"Error adding to memory: {e}")
-        return {"error": f"Error adding to memory: {e}"}, []
+        return {"error": f"Error adding to memory: {e}"}, [], timing, False
 
 
 async def _run_add_memories_job(
@@ -347,9 +764,13 @@ async def _run_add_memories_job(
     structured_metadata: dict,
     combined_metadata: dict,
     infer: bool,
+    debug: bool = False,
 ) -> None:
+    import time
+    job_start_time = time.perf_counter() if debug else None
+
     update_memory_job(job_id, status="running", started_at=datetime.datetime.now(datetime.UTC).isoformat())
-    response, valid_results = await asyncio.to_thread(
+    response, valid_results, core_timing, graph_write_on_add = await asyncio.to_thread(
         _add_memories_core,
         memory_client=memory_client,
         user_id=user_id,
@@ -358,10 +779,40 @@ async def _run_add_memories_job(
         structured_metadata=structured_metadata,
         combined_metadata=combined_metadata,
         infer=infer,
+        debug=debug,
     )
 
     summary = _summarize_add_job(structured_metadata, valid_results)
+
+    # Build debug timing if enabled
+    debug_timing = None
+    if debug and job_start_time is not None:
+        total_job_ms = (time.perf_counter() - job_start_time) * 1000
+        debug_timing = {
+            "total_ms": round(total_job_ms, 2),
+            "breakdown": {},
+            "details": {},
+        }
+        if core_timing:
+            # Add core timing breakdown with _ms suffix
+            for key, value in core_timing.items():
+                if isinstance(value, (int, float)):
+                    debug_timing["breakdown"][f"{key}_ms"] = value
+                elif isinstance(value, dict):
+                    # Nested timing breakdown (e.g., mem0_breakdown) - store in details
+                    debug_timing["details"][key] = value
+        # Remove empty details
+        if not debug_timing["details"]:
+            del debug_timing["details"]
+        debug_timing["note"] = "Timing from async job execution (excludes graph projection)"
+
     if valid_results:
+        graph_job_id = create_memory_job(
+            requested_by=user_id,
+            summary=_summarize_graph_job(valid_results, parent_add_job_id=job_id),
+            job_type="graph_projection",
+        )
+        summary["graph_job_id"] = graph_job_id
         status = "succeeded"
         if response.get("error"):
             status = "partial"
@@ -371,12 +822,15 @@ async def _run_add_memories_job(
             finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
             result=response,
             summary=summary,
+            debug_timing=debug_timing,
         )
         asyncio.create_task(
             _run_graph_projection_async(
                 valid_results=list(valid_results),
                 user_id=user_id,
                 combined_metadata=dict(combined_metadata),
+                graph_write_on_add=graph_write_on_add,
+                graph_job_id=graph_job_id,
             )
         )
         return
@@ -388,6 +842,7 @@ async def _run_add_memories_job(
         result=response,
         error=response.get("error"),
         summary=summary,
+        debug_timing=debug_timing,
     )
 
 # Context variables for user_id, client_name, and org_id
@@ -914,11 +1369,13 @@ Parameters:
 - evidence: References (e.g., ["ADR-014", "PR-123"])
 - code_refs: Link to source code (e.g., [{"file_path": "/src/auth.ts", "line_start": 42}])
 - async_mode: When true, return immediately with job_id and process in background (default: true)
+- debug: When true, return detailed timing breakdown for performance analysis (default: false)
 
-Returns: id of created memory, plus saved metadata.
+Returns: id of created memory, plus saved metadata. If debug=true, includes timing breakdown.
 
 Example:
 - add_memories(text="Use JWT for auth", category="decision", entity="AuthService", access_entity="project:cloudfactory/vgbk")
+- add_memories(text="...", category="decision", debug=true)  # Returns timing info
 """,
     annotations=ToolAnnotations(readOnlyHint=False, title="Add Memory")
 )
@@ -936,7 +1393,12 @@ async def add_memories(
     code_refs: list = None,
     infer: bool = False,
     async_mode: bool = True,
+    debug: bool = False,
 ) -> str:
+    # Initialize debug timer
+    timer = DebugTimer(enabled=debug)
+    timer.start("total")
+
     # Check scope - requires memories:write
     scope_error = _check_tool_scope("memories:write")
     if scope_error:
@@ -955,8 +1417,7 @@ async def add_memories(
         access_entity = None
 
     # PRD-13: Derive scope from access_entity if not provided
-    # This happens later in build_structured_memory, but we need scope here
-    # for the access_entity resolution logic
+    timer.start("access_resolution")
     effective_scope = scope
     if effective_scope is None and access_entity:
         from app.utils.structured_memory import derive_scope
@@ -993,8 +1454,10 @@ async def add_memories(
                 "error": f"Access denied: you don't have permission to create memories with access_entity='{access_entity}'",
                 "code": "FORBIDDEN",
             })
+    timer.stop("access_resolution")
 
     # Validate and build structured memory
+    timer.start("validation")
     try:
         clean_text, structured_metadata = build_structured_memory(
             text=text,
@@ -1027,6 +1490,7 @@ async def add_memories(
                 "error": str(e),
                 "code": "INVALID_CODE_REFS",
             })
+    timer.stop("validation")
 
     combined_metadata = {
         "source_app": "openmemory",
@@ -1054,14 +1518,22 @@ async def add_memories(
                 structured_metadata=structured_metadata,
                 combined_metadata=combined_metadata,
                 infer=infer,
+                debug=debug,
             )
         )
-        return json.dumps({
+        response = {
             "status": "queued",
             "job_id": job_id,
-        })
+        }
+        if debug:
+            timer.stop("total")
+            response["debug_timing"] = timer.get_timing()
+            response["debug_timing"]["note"] = "Async mode: detailed timing available via add_memories_status after job completes"
+        return json.dumps(response)
 
-    formatted_response, valid_results = await asyncio.to_thread(
+    # Synchronous mode with detailed timing
+    timer.start("mem0_add")
+    formatted_response, valid_results, core_timing, graph_write_on_add = await asyncio.to_thread(
         _add_memories_core,
         memory_client=memory_client,
         user_id=uid,
@@ -1070,31 +1542,76 @@ async def add_memories(
         structured_metadata=structured_metadata,
         combined_metadata=combined_metadata,
         infer=infer,
+        debug=debug,
     )
+    timer.stop("mem0_add", {"infer": infer})
+
+    # Merge core timing if available
+    if core_timing:
+        for name, value in core_timing.items():
+            if isinstance(value, (int, float)):
+                timer.record(name, value)
+            elif isinstance(value, dict):
+                # Nested timing breakdown (e.g., mem0_breakdown) - store as metadata
+                timer.record(name, 0.0, metadata=value)
+
     if valid_results:
+        graph_job_id = create_memory_job(
+            requested_by=uid,
+            summary=_summarize_graph_job(valid_results),
+            job_type="graph_projection",
+        )
+        timer.start("graph_projection_trigger")
         asyncio.create_task(
             _run_graph_projection_async(
                 valid_results=list(valid_results),
                 user_id=uid,
                 combined_metadata=dict(combined_metadata),
+                graph_write_on_add=graph_write_on_add,
+                graph_job_id=graph_job_id,
             )
         )
+        timer.stop("graph_projection_trigger")
+
+    timer.stop("total")
+
+    # Add timing to response if debug mode
+    if debug:
+        formatted_response["debug_timing"] = timer.get_timing()
+    if valid_results:
+        formatted_response["graph_job_id"] = graph_job_id
+
     return json.dumps(formatted_response)
 
 
 @mcp.tool(
-    description="""Get status for an async add_memories job.
+    description="""Get status for an async memory job (add/update), or list all jobs.
 
-Use when: add_memories was called with async_mode=true and returned a job_id.
+Use when: add_memories or update_memory was called with async_mode=true and returned a job_id,
+or when you want to see all running/recent jobs. Also returns graph projection
+jobs created by add_memories.
 
 Parameters:
-- job_id: Job UUID returned from add_memories
+- job_id: Job UUID returned from add_memories/update_memory (optional - if omitted, lists jobs)
+- status_filter: Filter jobs by status when listing (optional). Options:
+  - "running": Show queued and running jobs (default when listing)
+  - "completed": Show succeeded jobs
+  - "failed": Show failed jobs
+  - "all": Show all jobs
+  - or specific: "queued", "running", "succeeded", "failed"
+- limit: Max jobs to return when listing (default: 20, max: 100)
 
-Returns: job status, timestamps, summary, and result if available.
+Returns:
+- If job_id provided: Single job with status, timestamps, summary, and result
+- If job_id omitted: List of jobs matching the filter, sorted by newest first
 """,
     annotations=ToolAnnotations(readOnlyHint=True, title="Add Memory Job Status")
 )
-async def add_memories_status(job_id: str) -> str:
+async def add_memories_status(
+    job_id: str | None = None,
+    status_filter: str | None = None,
+    limit: int = 20,
+) -> str:
     # Check scope - requires memories:read
     scope_error = _check_tool_scope("memories:read")
     if scope_error:
@@ -1104,44 +1621,79 @@ async def add_memories_status(job_id: str) -> str:
     if not uid:
         return json.dumps({"error": "user_id not provided"})
 
-    job = get_memory_job(job_id)
-    if not job:
-        return json.dumps({"error": "job_id not found", "code": "JOB_NOT_FOUND"})
-
     principal = principal_var.get(None)
-    if principal and job.get("requested_by") != principal.user_id:
-        return json.dumps({
-            "error": "Access denied: you don't have permission to view this job",
-            "code": "FORBIDDEN",
-        })
 
-    return json.dumps(job)
+    # If job_id provided, return single job status
+    if job_id:
+        job = get_memory_job(job_id)
+        if not job:
+            return json.dumps({"error": "job_id not found", "code": "JOB_NOT_FOUND"})
+
+        if principal and job.get("requested_by") != principal.user_id:
+            return json.dumps({
+                "error": "Access denied: you don't have permission to view this job",
+                "code": "FORBIDDEN",
+            })
+
+        return json.dumps(job)
+
+    # No job_id provided - list jobs
+    # Default to "running" filter when listing without explicit filter
+    effective_filter = status_filter if status_filter else "running"
+
+    # Clamp limit
+    effective_limit = min(max(1, limit), 100)
+
+    # Filter by user if principal available
+    requested_by = principal.user_id if principal else None
+
+    jobs = list_memory_jobs(
+        requested_by=requested_by,
+        status_filter=effective_filter,
+        limit=effective_limit,
+    )
+
+    return json.dumps({
+        "jobs": jobs,
+        "count": len(jobs),
+        "filter": effective_filter,
+        "limit": effective_limit,
+    })
 
 
 @mcp.tool(
-    description="""Search memories with semantic search and metadata boosting.
+    description="""Retrieves architectural context, guidelines, and historical decisions from the knowledge base.
 
-Use when: Finding past decisions, conventions, or context. Add entity/category filters for precision.
+Use when: Understanding "Why" decisions were made, finding conventions, guidelines, or past context.
 
-NOT for: Code tracing or bug hunting - use search_code_hybrid + Read tool instead. Memory results may be stale.
+WARNING: Does NOT search live code. Memory results may be stale. Use this to understand 'Why' and 'How', but NEVER rely on it for 'Where' in code or exhaustive reference finding. For code tracing, use search_code_hybrid + Read tool instead.
 
 Parameters:
 - query: Search text (required)
 - entity: Boost memories about this entity (e.g., "AuthService")
 - category: Boost by category (decision, architecture, workflow, etc.)
 - scope: Boost by scope (project, team, org)
+- filter_tags: Hard filter by tag keys or key=value pairs (comma-separated)
+- filter_evidence: Hard filter by evidence refs (comma-separated)
+- filter_category, filter_scope, filter_artifact_type, filter_artifact_ref, filter_entity, filter_source, filter_access_entity, filter_app: Hard filters (comma-separated)
+- filter_app: Hard filter by app/client name (e.g., "claude-code", "cursor") - filters by mcp_client field
+- filter_mode: "all" or "any" for tag/evidence filters (default: "all")
 - limit: Max results (default: 10, max: 50)
 - created_after/before: Filter by date range (ISO format)
 - recency_weight: Prioritize recent (0.0-1.0, default: 0.0)
+- entity_max_hops: Max hops for bridge entity traversal (1-5, default: 2). Lower = faster but less coverage.
 - relation_detail: Output verbosity ("none", "minimal", "standard", "full")
+- debug: When true, return detailed timing breakdown for performance analysis (default: false)
 
-Returns: results[] with id, memory, score, category, scope, entity, access_entity
+Returns: results[] with id, memory, score, category, scope, entity, access_entity. If debug=true, includes timing breakdown.
 
 IMPORTANT: For code-related memories, ALWAYS verify against actual code before answering.
 
 Examples:
 - search_memory(query="auth flow", entity="AuthService", limit=5)
 - search_memory(query="Q4 decisions", created_after="2025-10-01T00:00:00Z")
+- search_memory(query="...", debug=true)  # Returns timing info
+- search_memory(query="*", filter_app="claude-code", limit=50)  # Find memories written via claude-code
 """,
     annotations=ToolAnnotations(readOnlyHint=True, title="Search Memories")
 )
@@ -1154,6 +1706,18 @@ async def search_memory(
     artifact_ref: str = None,
     entity: str = None,
     tags: str = None,
+    # HARD FILTERS (applied before reranking)
+    filter_tags: Any = None,
+    filter_evidence: Any = None,
+    filter_category: Any = None,
+    filter_scope: Any = None,
+    filter_artifact_type: Any = None,
+    filter_artifact_ref: Any = None,
+    filter_entity: Any = None,
+    filter_source: Any = None,
+    filter_access_entity: Any = None,
+    filter_app: Any = None,
+    filter_mode: str = "all",
     # RECENCY boost (soft ranking - does NOT exclude)
     recency_weight: float = 0.0,
     recency_halflife_days: int = 45,
@@ -1173,10 +1737,17 @@ async def search_memory(
     graph_seed_count: int = 5,
     # QUERY ROUTING (Phase 3: Intelligent Query Routing)
     auto_route: bool = True,
+    # ENTITY EXPANSION (controls bridge entity traversal depth)
+    entity_max_hops: int = 2,
     # RELATION OUTPUT (controls meta_relations format)
     relation_detail: str = "standard",
+    # DEBUG timing
+    debug: bool = False,
 ) -> str:
     """Search memories with re-ranking. See tool description for full docs."""
+    # Initialize debug timer
+    timer = DebugTimer(enabled=debug)
+
     # Check scope - requires memories:read
     scope_error = _check_tool_scope("memories:read")
     if scope_error:
@@ -1202,6 +1773,7 @@ async def search_memory(
     try:
         db = SessionLocal()
         try:
+            timer.start("acl_check")
             # Get or create user and app
             user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
 
@@ -1237,9 +1809,107 @@ async def search_memory(
                 updated_before=parse_datetime(updated_before),
             )
 
+            # Build hard filters (pre-search)
+            try:
+                filter_mode_normalized = (filter_mode or "all").strip().lower()
+                if filter_mode_normalized not in ("any", "all"):
+                    raise ValueError("filter_mode must be 'any' or 'all'")
+
+                def normalize_filter_list(value, name):
+                    if value is None:
+                        return []
+                    if isinstance(value, str):
+                        return [v.strip() for v in value.split(",") if v.strip()]
+                    if isinstance(value, (list, tuple)):
+                        cleaned = []
+                        for item in value:
+                            if not isinstance(item, str):
+                                raise ValueError(f"{name} items must be strings")
+                            item = item.strip()
+                            if item:
+                                cleaned.append(item)
+                        return cleaned
+                    raise ValueError(f"{name} must be a string or list of strings")
+
+                filter_tags_list = normalize_filter_list(filter_tags, "filter_tags")
+                filter_evidence_list = normalize_filter_list(filter_evidence, "filter_evidence")
+                filter_category_list = normalize_filter_list(filter_category, "filter_category")
+                filter_scope_list = normalize_filter_list(filter_scope, "filter_scope")
+                filter_artifact_type_list = normalize_filter_list(filter_artifact_type, "filter_artifact_type")
+                filter_artifact_ref_list = normalize_filter_list(filter_artifact_ref, "filter_artifact_ref")
+                filter_entity_list = normalize_filter_list(filter_entity, "filter_entity")
+                filter_source_list = normalize_filter_list(filter_source, "filter_source")
+                filter_access_entity_list = normalize_filter_list(filter_access_entity, "filter_access_entity")
+                filter_app_list = normalize_filter_list(filter_app, "filter_app")
+            except ValueError as e:
+                return json.dumps({"error": str(e)})
+
+            must_conditions = []
+            should_conditions = []
+
+            if not principal:
+                must_conditions.append({"key": "user_id", "value": uid})
+
+            def add_field_filter(field_name, values):
+                if not values:
+                    return
+                if len(values) == 1:
+                    must_conditions.append({"key": field_name, "value": values[0]})
+                else:
+                    must_conditions.append({"key": field_name, "any": values})
+
+            add_field_filter("category", filter_category_list)
+            add_field_filter("scope", filter_scope_list)
+            add_field_filter("artifact_type", filter_artifact_type_list)
+            add_field_filter("artifact_ref", filter_artifact_ref_list)
+            add_field_filter("entity", filter_entity_list)
+            add_field_filter("source", filter_source_list)
+            add_field_filter("access_entity", filter_access_entity_list)
+            add_field_filter("mcp_client", filter_app_list)  # filter_app maps to mcp_client in Qdrant payload
+
+            if filter_evidence_list:
+                if filter_mode_normalized == "all" and len(filter_evidence_list) > 1:
+                    for value in filter_evidence_list:
+                        must_conditions.append({"key": "evidence", "value": value})
+                elif len(filter_evidence_list) == 1:
+                    must_conditions.append({"key": "evidence", "value": filter_evidence_list[0]})
+                else:
+                    must_conditions.append({"key": "evidence", "any": filter_evidence_list})
+
+            tag_conditions = []
+            for token in filter_tags_list:
+                if "=" in token:
+                    key, value = token.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if not key or not value:
+                        raise ValueError("filter_tags entries must be 'key' or 'key=value'")
+                    tag_conditions.append({"key": f"tags.{key}", "value": value})
+                else:
+                    key = token.strip()
+                    if not key:
+                        continue
+                    tag_conditions.append({"key": f"tags.{key}", "value": True})
+
+            if tag_conditions:
+                if filter_mode_normalized == "any":
+                    should_conditions.extend(tag_conditions)
+                else:
+                    must_conditions.extend(tag_conditions)
+
+            vector_filters = None
+            if must_conditions or should_conditions:
+                vector_filters = {
+                    "must": must_conditions,
+                    "should": should_conditions,
+                }
+
+            timer.stop("acl_check", {"accessible_count": len(allowed)})
+
             # =========================================================
             # PHASE 3: Query Routing (Intelligent Route Selection)
             # =========================================================
+            timer.start("query_routing")
             route = None
             query_analysis = None
             rrf_alpha = 0.6  # Default RRF alpha
@@ -1272,26 +1942,31 @@ async def search_memory(
                             )
                 except Exception as routing_error:
                     logging.warning(f"Query routing failed, using default: {routing_error}")
+            timer.stop("query_routing", {"route": route.value if route else "default"})
 
             # =========================================================
             # PHASE 1: Vector Search
             # =========================================================
+            timer.start("vector_embedding")
             # No metadata filters - we do re-ranking instead
             embeddings = memory_client.embedding_model.embed(query, "search")
-            search_limit = limit * 3  # Pool for reranking
+            timer.stop("vector_embedding")
 
-            search_filters = {"user_id": uid} if not principal else None
+            timer.start("vector_search")
+            search_limit = limit * 3  # Pool for reranking
 
             hits = memory_client.vector_store.search(
                 query=query,
                 vectors=embeddings,
                 limit=search_limit,
-                filters=search_filters,
+                filters=vector_filters,
             )
+            timer.stop("vector_search", {"hits": len(hits)})
 
             # =========================================================
             # PHASE 2: Graph Retrieval & RRF Fusion
             # =========================================================
+            timer.start("graph_retrieval")
             graph_results = []
             rrf_stats = None
             rrf_enabled = (
@@ -1348,10 +2023,12 @@ async def search_memory(
                                 )
                 except Exception as graph_error:
                     logging.warning(f"Graph retrieval failed, using vector-only: {graph_error}")
+            timer.stop("graph_retrieval", {"candidates": len(graph_results)})
 
             # =========================================================
             # Entity-Aware Query Expansion (for GRAPH_PRIMARY route)
             # =========================================================
+            timer.start("entity_expansion")
             # When 2+ entities detected and route is GRAPH_PRIMARY,
             # find bridge entities and expand retrieval
             bridge_entities = []
@@ -1369,13 +2046,15 @@ async def search_memory(
                     )
 
                     entity_names = [e[0] for e in query_analysis.detected_entities]
-                    # Find bridge entities (3-hop max for transitive paths like A→B→C→D)
+                    # Find bridge entities (entity_max_hops controls traversal depth)
+                    # Validate and cap entity_max_hops (1-5 range)
+                    capped_max_hops = min(max(1, entity_max_hops), 5)
                     bridge_entities = find_bridge_entities(
                         user_id=uid,
                         entity_names=entity_names,
                         max_bridges=5,
                         min_count=2,
-                        max_hops=3,
+                        max_hops=capped_max_hops,
                         access_entities=access_entities,
                         access_entity_prefixes=access_entity_prefixes,
                     )
@@ -1422,10 +2101,12 @@ async def search_memory(
 
                 except Exception as entity_error:
                     logging.warning(f"Entity graph retrieval failed: {entity_error}")
+            timer.stop("entity_expansion", {"bridges": len(bridge_entities)})
 
             # =========================================================
             # PHASE 1 (continued): Graph-Enhanced Reranking
             # =========================================================
+            timer.start("graph_context")
             # Fetch graph context for graph boost calculation
             graph_context = None
             if is_graph_enabled():
@@ -1442,8 +2123,10 @@ async def search_memory(
                     )
                 except Exception as cache_error:
                     logging.warning(f"Graph context fetch failed: {cache_error}")
+            timer.stop("graph_context")
 
             # Process results
+            timer.start("result_processing")
             results = []
             core_keys = {"data", "hash", "created_at", "updated_at"}
 
@@ -1509,10 +2192,12 @@ async def search_memory(
                     }
 
                 results.append(result_entry)
+            timer.stop("result_processing", {"processed": len(results)})
 
             # =========================================================
             # PHASE 2 (continued): RRF Fusion
             # =========================================================
+            timer.start("rrf_fusion")
             # If we have graph results, fuse them with vector results using RRF
             if graph_results:
                 try:
@@ -1616,10 +2301,12 @@ async def search_memory(
             else:
                 # No graph results - standard vector-only sorting
                 results.sort(key=lambda x: x["scores"]["final"], reverse=True)
+            timer.stop("rrf_fusion", {"used_graph": bool(graph_results)})
 
             # Apply limit
             results = results[:limit]
 
+            timer.start("access_logging")
             # 5. Access logging
             for r in results:
                 if r.get("id"):
@@ -1641,7 +2328,9 @@ async def search_memory(
                         logging.warning(f"Failed to log access: {log_error}")
 
             db.commit()
+            timer.stop("access_logging")
 
+            timer.start("response_format")
             # Format response (lean by default, verbose for debugging)
             if verbose:
                 # Build verbose response metadata
@@ -1675,6 +2364,30 @@ async def search_memory(
                     filters_applied["updated_before"] = updated_before
                 if filters.exclude_tags:
                     filters_applied["exclude_tags"] = filters.exclude_tags
+                hard_filters_applied = {}
+                if filter_category_list:
+                    hard_filters_applied["category"] = filter_category_list
+                if filter_scope_list:
+                    hard_filters_applied["scope"] = filter_scope_list
+                if filter_artifact_type_list:
+                    hard_filters_applied["artifact_type"] = filter_artifact_type_list
+                if filter_artifact_ref_list:
+                    hard_filters_applied["artifact_ref"] = filter_artifact_ref_list
+                if filter_entity_list:
+                    hard_filters_applied["entity"] = filter_entity_list
+                if filter_source_list:
+                    hard_filters_applied["source"] = filter_source_list
+                if filter_access_entity_list:
+                    hard_filters_applied["access_entity"] = filter_access_entity_list
+                if filter_app_list:
+                    hard_filters_applied["app"] = filter_app_list
+                if filter_evidence_list:
+                    hard_filters_applied["evidence"] = filter_evidence_list
+                if filter_tags_list:
+                    hard_filters_applied["tags"] = filter_tags_list
+                if hard_filters_applied:
+                    hard_filters_applied["mode"] = filter_mode_normalized
+                    filters_applied["hard_filters"] = hard_filters_applied
 
                 response = format_search_results(
                     results=results,
@@ -1721,6 +2434,7 @@ async def search_memory(
             else:
                 # Lean format (default) - optimized for LLM processing
                 response = format_search_results(results=results, verbose=False)
+            timer.stop("response_format")
 
             # Enrich with graph relations (only if graph is available)
             # This adds two new optional fields without changing existing response shape
@@ -1735,7 +2449,8 @@ async def search_memory(
                     # Get memory IDs from results for meta_relations lookup
                     memory_ids = [str(r.get("id")) for r in results if r.get("id")]
 
-                    # 1. meta_relations: deterministic metadata relations from Neo4j projection
+                    # 1. meta_relations: deterministic metadata relations from Neo4j OM_* projection
+                    timer.start("neo4j_om_meta_relations")
                     if memory_ids and is_graph_enabled():
                         raw_meta_relations = get_meta_relations_for_memories(memory_ids)
                         if raw_meta_relations:
@@ -1758,8 +2473,10 @@ async def search_memory(
                                             compact_relations[memory_id] = compact
                                 if compact_relations:
                                     response["meta_relations"] = compact_relations
+                    timer.stop("neo4j_om_meta_relations", {"memory_count": len(memory_ids) if memory_ids else 0})
 
                 # 2. relations: Mem0 Graph Memory relations (LLM-extracted entities)
+                timer.start("neo4j_om_mem0_relations")
                 if is_mem0_graph_enabled():
                     graph_relations = get_graph_relations(
                         query=query,
@@ -1768,6 +2485,7 @@ async def search_memory(
                     )
                     if graph_relations:
                         response["relations"] = graph_relations
+                timer.stop("neo4j_om_mem0_relations")
 
             except Exception as graph_error:
                 logging.warning(f"Graph enrichment failed: {graph_error}")
@@ -1775,6 +2493,11 @@ async def search_memory(
 
             # Add verification instruction for code-related memories
             response["_instructions"] = "VERIFY: For code-related memories, read the actual file before answering."
+
+            # Add debug timing if requested
+            timing_data = timer.get_timing()
+            if timing_data:
+                response["_debug_timing"] = timing_data
 
             return json.dumps(response, default=str)
 
@@ -2272,6 +2995,12 @@ async def get_memory(memory_id: str) -> str:
                     "code": "NOT_FOUND",
                 })
 
+            if memory.state == MemoryState.deleted:
+                return json.dumps({
+                    "error": "Memory not found",
+                    "code": "NOT_FOUND",
+                })
+
             # Access control check
             principal = principal_var.get(None)
             md = memory.metadata_ or {}
@@ -2574,22 +3303,27 @@ async def delete_all_memories() -> str:
 Use when: Correcting, enriching, or evolving existing memories. Only provided fields are updated.
 
 Parameters:
-- memory_id: UUID of memory to update (required)
-- text: New content text
+- memory_id: UUID of memory to update (required if memory_ids not provided)
+- memory_ids: List of UUIDs for batch update (required if memory_id not provided)
+- text: New content text (single memory only, not allowed with memory_ids)
 - category, scope, artifact_type, artifact_ref: Update structure
 - entity, evidence: Update metadata
+- mcp_client: Override the app/client that wrote the memory (e.g., "gemini", "cursor")
 - add_tags: Dict of tags to add (e.g., {"confirmed": true})
 - remove_tags: List of tag keys to remove
+- async_mode: When true, return immediately with job_id and process in background (default: false)
 
-Returns: Updated memory with all fields.
+Returns: Updated memory with all fields (single), or batch result summary (batch). In async mode, returns job_id.
 
 Example:
 - update_memory(memory_id="abc-123", add_tags={"verified": true}, evidence=["PR-456"])
+- update_memory(memory_ids=["abc-123", "def-456"], mcp_client="gemini")
 """,
     annotations=ToolAnnotations(readOnlyHint=False, title="Update Memory")
 )
 async def update_memory(
-    memory_id: str,
+    memory_id: str = None,
+    memory_ids: list = None,
     # Content
     text: str = None,
     # Structure
@@ -2602,11 +3336,14 @@ async def update_memory(
     entity: str = None,
     source: str = None,
     evidence: list = None,
+    # App/client override
+    mcp_client: str = None,
     # Tag operations
     add_tags: dict = None,
     remove_tags: list = None,
     # Maintenance mode
     preserve_timestamps: bool = False,
+    async_mode: bool = False,
 ) -> str:
     # Check scope - requires memories:write
     scope_error = _check_tool_scope("memories:write")
@@ -2620,6 +3357,24 @@ async def update_memory(
         return json.dumps({"error": "user_id not provided"})
     if not client_name:
         return json.dumps({"error": "client_name not provided"})
+
+    # Validate memory_id vs memory_ids - exactly one must be provided
+    if memory_id and memory_ids:
+        return json.dumps({"error": "Provide either memory_id or memory_ids, not both"})
+    if not memory_id and not memory_ids:
+        return json.dumps({"error": "Either memory_id or memory_ids is required"})
+
+    # Batch mode validation
+    is_batch = memory_ids is not None
+    if is_batch:
+        if text is not None:
+            return json.dumps({"error": "text updates are not allowed in batch mode (memory_ids)"})
+        if not isinstance(memory_ids, list) or len(memory_ids) == 0:
+            return json.dumps({"error": "memory_ids must be a non-empty list"})
+        # Normalize to list of strings
+        ids_to_update = [str(mid) for mid in memory_ids]
+    else:
+        ids_to_update = [str(memory_id)]
 
     # Validate update fields
     try:
@@ -2653,153 +3408,58 @@ async def update_memory(
     except StructuredMemoryError as e:
         return json.dumps(_format_structured_memory_error(e))
 
-    try:
-        db = SessionLocal()
-        try:
-            user, app = get_user_and_app(db, user_id=uid, app_id=client_name)
+    principal = principal_var.get(None)
 
-            memory = db.query(Memory).filter(
-                Memory.id == uuid.UUID(memory_id),
-            ).first()
-
-            if not memory:
-                return json.dumps({"error": f"Memory '{memory_id}' not found"})
-
-            # Access control check: verify principal can write to memory's access_entity
-            principal = principal_var.get(None)
-            current_metadata = memory.metadata_ or {}
-            current_access_entity = current_metadata.get("access_entity")
-
-            if not current_access_entity and memory.user_id != user.id:
-                return json.dumps({"error": f"Memory '{memory_id}' not found"})
-
-            if principal:
-                from app.security.access import can_write_to_access_entity
-
-                # Check write access to current access_entity
-                if current_access_entity:
-                    if not can_write_to_access_entity(principal, current_access_entity):
-                        return json.dumps({
-                            "error": f"Access denied: you don't have permission to update memories with access_entity='{current_access_entity}'",
-                            "code": "FORBIDDEN",
-                        })
-
-                # If changing access_entity, also check access to new access_entity
-                new_access_entity = validated_fields.get("access_entity")
-                if new_access_entity and new_access_entity != current_access_entity:
-                    if not can_write_to_access_entity(principal, new_access_entity):
-                        return json.dumps({
-                            "error": f"Access denied: you don't have permission to set access_entity='{new_access_entity}'",
-                            "code": "FORBIDDEN",
-                        })
-
-            # Get current metadata
-
-            # Apply metadata updates
-            updated_metadata = apply_metadata_updates(
-                current_metadata=current_metadata,
+    if async_mode:
+        summary = _summarize_update_job(
+            memory_ids=ids_to_update,
+            validated_fields=validated_fields,
+            content_text=content_text,
+            normalized_add_tags=normalized_add_tags,
+            normalized_remove_tags=normalized_remove_tags,
+            mcp_client=mcp_client,
+            is_batch=is_batch,
+        )
+        job_id = create_memory_job(
+            requested_by=uid,
+            summary=summary,
+            job_type="memory_update",
+        )
+        asyncio.create_task(
+            _run_update_memory_job(
+                job_id=job_id,
+                user_id=uid,
+                client_name=client_name,
+                ids_to_update=ids_to_update,
                 validated_fields=validated_fields,
-                add_tags=normalized_add_tags,
-                remove_tags=normalized_remove_tags,
+                content_text=content_text,
+                normalized_add_tags=normalized_add_tags,
+                normalized_remove_tags=normalized_remove_tags,
+                preserve_timestamps=preserve_timestamps,
+                mcp_client=mcp_client,
+                is_batch=is_batch,
+                principal=principal,
             )
+        )
+        return json.dumps({
+            "status": "queued",
+            "job_id": job_id,
+        })
 
-            # Update content if provided
-            content_updated = False
-            if content_text is not None:
-                memory.content = content_text
-                content_updated = True
-
-            # Update metadata
-            memory.metadata_ = updated_metadata
-
-            # Handle timestamps
-            if not preserve_timestamps:
-                memory.updated_at = datetime.datetime.now(datetime.UTC)
-
-            # Determine if metadata was updated
-            metadata_updated = bool(validated_fields or normalized_add_tags or normalized_remove_tags)
-
-            # Update vector store
-            memory_client = get_memory_client_safe()
-            if memory_client:
-                if content_updated:
-                    # Content changed -> re-embed and update payload
-                    try:
-                        memory_client.update(str(memory_id), content_text)
-                        # Also sync metadata (mem0's update doesn't include our structured metadata)
-                        from app.utils.vector_sync import sync_metadata_to_qdrant
-                        sync_metadata_to_qdrant(
-                            memory_id=str(memory_id),
-                            memory=memory,
-                            metadata=updated_metadata,
-                            memory_client=memory_client,
-                        )
-                    except Exception as vs_error:
-                        logging.warning(f"Failed to update vector store: {vs_error}")
-                elif metadata_updated:
-                    # Only metadata changed -> update payload without re-embedding
-                    try:
-                        from app.utils.vector_sync import sync_metadata_to_qdrant
-                        sync_metadata_to_qdrant(
-                            memory_id=str(memory_id),
-                            memory=memory,
-                            metadata=updated_metadata,
-                            memory_client=memory_client,
-                        )
-                    except Exception as vs_error:
-                        logging.warning(f"Failed to sync metadata to vector store: {vs_error}")
-
-            # Create access log
-            access_log = MemoryAccessLog(
-                memory_id=memory.id,
-                app_id=app.id,
-                access_type="update",
-                metadata_={
-                    "fields_updated": (
-                        list(validated_fields.keys())
-                        + (["text"] if content_text is not None else [])
-                    ),
-                    "add_tags": normalized_add_tags,
-                    "remove_tags": normalized_remove_tags,
-                    "preserve_timestamps": preserve_timestamps,
-                },
-            )
-            db.add(access_log)
-
-            db.commit()
-
-            # Re-project to Neo4j graph with updated metadata (non-blocking)
-            try:
-                project_memory_to_graph(
-                    memory_id=memory_id,
-                    user_id=uid,
-                    content=memory.content,
-                    metadata=updated_metadata,
-                    created_at=memory.created_at.isoformat() if memory.created_at else None,
-                    updated_at=memory.updated_at.isoformat() if memory.updated_at else None,
-                    state=memory.state.value if memory.state else "active",
-                )
-            except Exception as graph_error:
-                logging.warning(f"Graph projection failed for updated memory {memory_id}: {graph_error}")
-
-            # Build response
-            response = {
-                "status": "updated",
-                "memory_id": memory_id,
-            }
-
-            if validated_fields:
-                response["fields_updated"] = list(validated_fields.keys())
-
-            if normalized_add_tags or normalized_remove_tags:
-                response["current_tags"] = updated_metadata.get("tags", {})
-
-            return json.dumps(response)
-        finally:
-            db.close()
-    except Exception as e:
-        logging.exception(e)
-        return json.dumps({"error": f"Error updating memory: {e}"})
+    response = _update_memory_core(
+        user_id=uid,
+        client_name=client_name,
+        ids_to_update=ids_to_update,
+        validated_fields=validated_fields,
+        content_text=content_text,
+        normalized_add_tags=normalized_add_tags,
+        normalized_remove_tags=normalized_remove_tags,
+        preserve_timestamps=preserve_timestamps,
+        mcp_client=mcp_client,
+        is_batch=is_batch,
+        principal=principal,
+    )
+    return json.dumps(response)
 
 
 @mcp.tool(
@@ -3644,11 +4304,11 @@ async def index_codebase_cancel(job_id: str) -> str:
 
 
 @mcp.tool(
-    description="""Search code using hybrid retrieval (lexical + semantic + graph).
+    description="""Searches code definitions and logic via semantic/hybrid retrieval.
 
-Use when: Finding code by concept, function name, or pattern. Primary tool for code discovery.
+Use when: Discovering implementation details, finding code by concept, function name, or pattern. Good for understanding "How" something is implemented.
 
-NOT for: Reading full file context - use Read tool after finding the file.
+NOT for: Finding ALL references of a specific string exhaustively - prefer Grep/search_file_content for strict literal matching. Also not for reading full file context - use Read tool after finding the file.
 
 Parameters:
 - query: Search text (required)

@@ -30,6 +30,8 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 - REST search endpoints backed by OpenSearch (lexical; semantic when clients supply query vectors)
 - Metadata-based re-ranking for memory search results
 - Graph traversal helpers for related memories and entity networks
+- MCP `search_memory` supports hard filters (pre-search) via `filter_*` params, including
+  `filter_tags` (`key` or `key=value`), `filter_evidence`, `filter_access_entity`, and `filter_app` (e.g., `claude-code`, `cursor`) with `filter_mode=all|any`
 
 ### Code Intelligence Modules
 - Tree-sitter + SCIP indexing pipeline with CODE_* graph projection to Neo4j
@@ -52,6 +54,17 @@ It is built on a multi-store backend: PostgreSQL, Qdrant, OpenSearch, Neo4j, and
 
 ### Guidance
 - Separate MCP SSE endpoint for serving guidance documents on demand
+
+---
+
+## Shared Memory Entry Points (cloudfactory/shared)
+
+- System Prompt Template: `03e4db30-daaa-422f-bb0b-e4417e9c263b`
+- Shared Memory Index: `3dc502f7-eaeb-4efc-a9fc-99b09655934a`
+- Coding Brain Shared Index: `ba93af28-784d-4262-b8f9-adb08c45acab`
+- Friendly Quickstart: `e02b4b2a-b976-4d19-85b7-c61f759793fb`
+- Tool-use policy: `f894b62b-a912-449b-b34a-9c425f70b795`
+- Response style guide: `c7993fc9-2c92-4b1e-b80d-330b60bb2336`
 
 ---
 
@@ -116,6 +129,19 @@ python -m app.scripts.backfill_access_entity
 ```
 
 If you backfill, re-sync vector and graph stores to reflect updated metadata.
+
+---
+
+## Mem0 Graph Extraction (Single-Pass)
+
+OpenMemory now supports a single-pass entity extraction pipeline to avoid duplicate LLM calls.
+
+- Config flag: `openmemory.mem0.graph_write_on_add` (default: `false`).
+- When `false`: `add_memories` skips Mem0 graph add-time extraction; a single extraction runs during graph projection and writes both Mem0 `__Entity__` and OM_* entity relations.
+- When `true`: legacy behavior; Mem0 graph extraction happens inside `memory_client.add`, and projection only bridges to OM_* (no second extraction).
+- Impact: with `false`, Mem0 graph data is eventually consistent (projection runs async after add).
+
+Set the flag via `/api/v1/config` (DB-backed config), or in `openmemory/api/config.json` if you seed config from file.
 
 ---
 

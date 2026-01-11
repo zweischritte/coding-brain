@@ -81,15 +81,42 @@ class MemoryGraph:
             data (str): The data to add to the graph.
             filters (dict): A dictionary containing filters to be applied during the addition.
         """
+        entity_type_map, relations_raw = self.extract_entities_and_relations(data, filters)
+        return self.add_from_extraction(data, filters, entity_type_map, relations_raw)
+
+    def extract_entities_and_relations(self, data, filters):
+        """
+        Extract entities and relations from data without writing to the graph.
+
+        Returns:
+            Tuple of (entity_type_map, relations_raw).
+        """
         entity_type_map = self._retrieve_nodes_from_data(data, filters)
-        to_be_added = self._establish_nodes_relations_from_data(data, filters, entity_type_map)
+        if not entity_type_map:
+            return {}, []
+        relations_raw = self._establish_nodes_relations_from_data(data, filters, entity_type_map)
+        return entity_type_map, relations_raw
+
+    def add_from_extraction(self, data, filters, entity_type_map, relations_raw):
+        """
+        Write entities and relations to the graph using precomputed extraction.
+
+        Args:
+            data (str): Source text used for extraction.
+            filters (dict): Graph filters (user_id, agent_id, run_id).
+            entity_type_map (dict): Extracted entities and types.
+            relations_raw (list): Extracted relations in Mem0 format.
+        """
+        if not entity_type_map:
+            return {"deleted_entities": [], "added_entities": []}
+
         search_output = self._search_graph_db(node_list=list(entity_type_map.keys()), filters=filters)
         to_be_deleted = self._get_delete_entities_from_search_output(search_output, data, filters)
 
         # TODO: Batch queries with APOC plugin
         # TODO: Add more filter support
         deleted_entities = self._delete_entities(to_be_deleted, filters)
-        added_entities = self._add_entities(to_be_added, filters, entity_type_map)
+        added_entities = self._add_entities(relations_raw, filters, entity_type_map)
 
         return {"deleted_entities": deleted_entities, "added_entities": added_entities}
 

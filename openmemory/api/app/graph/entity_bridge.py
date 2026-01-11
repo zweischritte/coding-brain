@@ -13,26 +13,17 @@ then projects them into the OpenMemory graph structure.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ExtractedEntity:
-    """An entity extracted from memory content."""
-    name: str
-    entity_type: str
-
-
-@dataclass
-class ExtractedRelation:
-    """A relationship between two entities."""
-    source: str
-    relationship: str
-    destination: str
+from app.graph.entity_extraction import (
+    ExtractedEntity,
+    ExtractedRelation,
+    ExtractionResult,
+    extract_entities_and_relations,
+)
 
 
 def extract_entities_from_content(
@@ -52,50 +43,14 @@ def extract_entities_from_content(
     Returns:
         Tuple of (entities, relations)
     """
-    try:
-        from app.utils.memory import get_memory_client
-
-        memory_client = get_memory_client()
-        if memory_client is None or not hasattr(memory_client, 'graph') or memory_client.graph is None:
-            logger.debug("Mem0 Graph Memory not configured, skipping entity extraction")
-            return [], []
-
-        graph = memory_client.graph
-        filters = {"user_id": user_id}
-
-        # Phase 1: Extract entities from content
-        entity_type_map = graph._retrieve_nodes_from_data(content, filters)
-
-        if not entity_type_map:
-            logger.debug(f"No entities extracted from content: {content[:100]}...")
-            return [], []
-
-        entities = [
-            ExtractedEntity(name=name, entity_type=entity_type)
-            for name, entity_type in entity_type_map.items()
-        ]
-
-        # Phase 2: Extract relationships between entities
-        relations_raw = graph._establish_nodes_relations_from_data(content, filters, entity_type_map)
-
-        relations = [
-            ExtractedRelation(
-                source=r["source"],
-                relationship=r["relationship"],
-                destination=r["destination"],
-            )
-            for r in relations_raw
-        ]
-
-        logger.info(
-            f"Extracted {len(entities)} entities and {len(relations)} relations from content"
-        )
-
-        return entities, relations
-
-    except Exception as e:
-        logger.warning(f"Entity extraction failed: {e}")
+    result = extract_entities_and_relations(content, user_id)
+    if not result.entities:
+        logger.debug(f"No entities extracted from content: {content[:100]}...")
         return [], []
+    logger.info(
+        f"Extracted {len(result.entities)} entities and {len(result.relations)} relations from content"
+    )
+    return result.entities, result.relations
 
 
 def bridge_entities_to_om_graph(
@@ -140,19 +95,53 @@ def bridge_entities_to_om_graph(
 
     from app.graph.entity_normalizer import normalize_entity_name
 
-    # Extract entities and relations from content
-    entities, relations = extract_entities_from_content(content, user_id)
+    extraction = extract_entities_and_relations(content, user_id)
+    return bridge_entities_to_om_graph_from_extraction(
+        memory_id=memory_id,
+        user_id=user_id,
+        extraction=extraction,
+        existing_entity=existing_entity,
+    )
+
+
+def bridge_entities_to_om_graph_from_extraction(
+    memory_id: str,
+    user_id: str,
+    extraction: ExtractionResult,
+    existing_entity: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Bridge pre-extracted entities to the OpenMemory OM_* graph.
+    """
+    from app.graph.neo4j_client import is_neo4j_configured, get_neo4j_session
+    from app.graph.metadata_projector import get_projector
+
+    result = {
+        "memory_id": memory_id,
+        "entities_bridged": 0,
+        "relations_created": 0,
+        "co_mentions_updated": False,
+        "entities": [],
+    }
+
+    if not is_neo4j_configured():
+        logger.debug("Neo4j not configured, skipping entity bridge")
+        return result
+
+    from app.graph.entity_normalizer import normalize_entity_name
+
+    entities = list(extraction.entities)
+    relations = list(extraction.relations)
 
     # Include existing entity from metadata if provided (keep raw casing for displayName)
     if existing_entity:
         existing_name = existing_entity.strip()
         existing_normalized = normalize_entity_name(existing_name) if existing_name else ""
-        if existing_normalized:
-            if not any(
-                normalize_entity_name(e.name) == existing_normalized
-                for e in entities
-            ):
-                entities.append(ExtractedEntity(name=existing_name, entity_type="metadata_entity"))
+        if existing_normalized and not any(
+            normalize_entity_name(e.name) == existing_normalized
+            for e in entities
+        ):
+            entities.append(ExtractedEntity(name=existing_name, entity_type="metadata_entity"))
 
     if not entities:
         logger.debug(f"No entities to bridge for memory {memory_id}")

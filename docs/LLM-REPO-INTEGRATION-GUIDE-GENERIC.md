@@ -37,6 +37,12 @@ When storing memories:
 | Find similar context | `graph_similar_memories` | Semantic similarity |
 | Code discovery | `search_code_hybrid` | Then use Read for full context |
 
+Hard filters (pre-search): use `filter_tags`, `filter_evidence`, `filter_category`,
+`filter_scope`, `filter_artifact_type`, `filter_artifact_ref`, `filter_entity`,
+`filter_source`, `filter_access_entity`, `filter_app` with `filter_mode=all|any`.
+`filter_tags` accepts `key` (boolean true) or `key=value` (string value).
+`filter_app` filters by the app/client that wrote the memory (e.g., `claude-code`, `cursor`).
+
 ## Memory Categories
 
 - `decision` - Choices made (why X over Y)
@@ -63,6 +69,7 @@ or set `async_mode=false` when you need the memory ID immediately.
 
 ```
 search_memory(query="authentication", entity="API", limit=5)
+search_memory(query="authentication", filter_tags="layer=backend,shared", filter_mode="all", limit=5)
 ```
 
 ## Entities for This Repo
@@ -90,6 +97,13 @@ Make repo knowledge discoverable and actionable by:
   - Code tools: read/write
   - Graph/UI: graph and entity read permissions
 - Set `access_entity` explicitly for any shared data; scope is legacy metadata only and can be omitted (derived from access_entity).
+
+### Shared Memory Entry Points (optional)
+
+If your org maintains a shared index (e.g. `project:cloudfactory/shared`), load these first:
+- System Prompt Template: `03e4db30-daaa-422f-bb0b-e4417e9c263b`
+- Shared Memory Index: `3dc502f7-eaeb-4efc-a9fc-99b09655934a`
+- Friendly Quickstart: `e02b4b2a-b976-4d19-85b7-c61f759793fb`
 
 ## Step 1: Index the repo (code tools)
 
@@ -171,6 +185,7 @@ Run quick checks after ingestion:
 ```text
 search_memory(query="<key topic>", limit=5)
 search_memory(query="<system name>", limit=5)
+search_memory(query="<topic>", filter_tags="source=docs/README.md,shared", filter_mode="all", limit=5)
 ```
 
 Graph checks:

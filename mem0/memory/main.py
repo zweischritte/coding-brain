@@ -289,6 +289,8 @@ class Memory(MemoryBase):
         infer: bool = True,
         memory_type: Optional[str] = None,
         prompt: Optional[str] = None,
+        graph_write: bool = True,
+        debug: bool = False,
     ):
         """
         Create a new memory.
@@ -311,6 +313,8 @@ class Memory(MemoryBase):
                 creating procedural memories (typically requires 'agent_id'). Otherwise, memories
                 are treated as general conversational/factual memories.memory_type (str, optional): Type of memory to create. Defaults to None. By default, it creates the short term memories and long term (semantic and episodic) memories. Pass "procedural_memory" to create procedural memories.
             prompt (str, optional): Prompt to use for the memory creation. Defaults to None.
+            graph_write (bool, optional): If False, skip graph extraction/write on add. Defaults to True.
+            debug (bool, optional): If True, returns detailed timing breakdown. Defaults to False.
 
 
         Returns:
@@ -318,6 +322,7 @@ class Memory(MemoryBase):
                   including a list of memory items affected (added, updated) under a "results" key,
                   and potentially "relations" if graph store is enabled.
                   Example for v1.1+: `{"results": [{"id": "...", "memory": "...", "event": "ADD"}]}`
+                  If debug=True, includes "debug_timing" with detailed breakdown.
 
         Raises:
             Mem0ValidationError: If input validation fails (invalid memory_type, messages format, etc.).
@@ -327,6 +332,9 @@ class Memory(MemoryBase):
             LLMError: If LLM operations fail.
             DatabaseError: If database operations fail.
         """
+        import time
+        timing = {} if debug else None
+        total_start = time.perf_counter() if debug else None
 
         processed_metadata, effective_filters = _build_filters_and_metadata(
             user_id=user_id,
@@ -366,26 +374,47 @@ class Memory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
+        run_graph = graph_write and self.enable_graph
+        if debug:
+            t0 = time.perf_counter()
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future1 = executor.submit(self._add_to_vector_store, messages, processed_metadata, effective_filters, infer)
-            future2 = executor.submit(self._add_to_graph, messages, effective_filters)
+            futures = []
+            future1 = executor.submit(self._add_to_vector_store, messages, processed_metadata, effective_filters, infer, debug)
+            futures.append(future1)
+            future2 = None
+            if run_graph:
+                future2 = executor.submit(self._add_to_graph, messages, effective_filters)
+                futures.append(future2)
 
-            concurrent.futures.wait([future1, future2])
+            concurrent.futures.wait(futures)
 
-            vector_store_result = future1.result()
-            graph_result = future2.result()
+            vector_store_result, vector_timing = future1.result()
+            graph_result = future2.result() if future2 else []
+        if debug:
+            timing["concurrent_execution"] = round((time.perf_counter() - t0) * 1000, 2)
+            if vector_timing:
+                timing["vector_store_breakdown"] = vector_timing
 
-        if self.enable_graph:
-            return {
-                "results": vector_store_result,
-                "relations": graph_result,
-            }
+        result = {
+            "results": vector_store_result,
+        }
+        if run_graph:
+            result["relations"] = graph_result
 
-        return {"results": vector_store_result}
+        if debug:
+            timing["total"] = round((time.perf_counter() - total_start) * 1000, 2)
+            result["debug_timing"] = timing
 
-    def _add_to_vector_store(self, messages, metadata, filters, infer):
+        return result
+
+    def _add_to_vector_store(self, messages, metadata, filters, infer, debug=False):
+        import time
+        timing = {} if debug else None
+
         if not infer:
             returned_memories = []
+            if debug:
+                t0 = time.perf_counter()
             for message_dict in messages:
                 if (
                     not isinstance(message_dict, dict)
@@ -418,7 +447,9 @@ class Memory(MemoryBase):
                         "role": message_dict["role"],
                     }
                 )
-            return returned_memories
+            if debug:
+                timing["raw_add_total"] = round((time.perf_counter() - t0) * 1000, 2)
+            return returned_memories, timing
 
         parsed_messages = parse_messages(messages)
 
@@ -431,6 +462,8 @@ class Memory(MemoryBase):
             is_agent_memory = self._should_use_agent_memory_extraction(messages, metadata)
             system_prompt, user_prompt = get_fact_retrieval_messages(parsed_messages, is_agent_memory)
 
+        if debug:
+            t0 = time.perf_counter()
         response = self.llm.generate_response(
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -438,6 +471,8 @@ class Memory(MemoryBase):
             ],
             response_format={"type": "json_object"},
         )
+        if debug:
+            timing["llm_fact_extraction"] = round((time.perf_counter() - t0) * 1000, 2)
 
         try:
             response = remove_code_blocks(response)
@@ -455,6 +490,9 @@ class Memory(MemoryBase):
             logger.error(f"Error in new_retrieved_facts: {e}")
             new_retrieved_facts = []
 
+        if debug:
+            timing["facts_extracted_count"] = len(new_retrieved_facts)
+
         if not new_retrieved_facts:
             logger.debug("No new facts retrieved from input. Skipping memory update LLM call.")
 
@@ -469,17 +507,33 @@ class Memory(MemoryBase):
             search_filters["agent_id"] = filters["agent_id"]
         if filters.get("run_id"):
             search_filters["run_id"] = filters["run_id"]
+
+        if debug:
+            t0 = time.perf_counter()
+            embed_time = 0
+            search_time = 0
         for new_mem in new_retrieved_facts:
+            if debug:
+                te = time.perf_counter()
             messages_embeddings = self.embedding_model.embed(new_mem, "add")
+            if debug:
+                embed_time += time.perf_counter() - te
             new_message_embeddings[new_mem] = messages_embeddings
+            if debug:
+                ts = time.perf_counter()
             existing_memories = self.vector_store.search(
                 query=new_mem,
                 vectors=messages_embeddings,
                 limit=5,
                 filters=search_filters,
             )
+            if debug:
+                search_time += time.perf_counter() - ts
             for mem in existing_memories:
                 retrieved_old_memory.append({"id": mem.id, "text": mem.payload.get("data", "")})
+        if debug:
+            timing["embedding_generation"] = round(embed_time * 1000, 2)
+            timing["vector_search"] = round(search_time * 1000, 2)
 
         unique_data = {}
         for item in retrieved_old_memory:
@@ -498,6 +552,8 @@ class Memory(MemoryBase):
                 retrieved_old_memory, new_retrieved_facts, self.config.custom_update_memory_prompt
             )
 
+            if debug:
+                t0 = time.perf_counter()
             try:
                 response: str = self.llm.generate_response(
                     messages=[{"role": "user", "content": function_calling_prompt}],
@@ -506,6 +562,8 @@ class Memory(MemoryBase):
             except Exception as e:
                 logger.error(f"Error in new memory actions response: {e}")
                 response = ""
+            if debug:
+                timing["llm_update_decision"] = round((time.perf_counter() - t0) * 1000, 2)
 
             try:
                 if not response or not response.strip():
@@ -520,6 +578,8 @@ class Memory(MemoryBase):
         else:
             new_memories_with_actions = {}
 
+        if debug:
+            t0 = time.perf_counter()
         returned_memories = []
         try:
             for resp in new_memories_with_actions.get("memory", []):
@@ -587,6 +647,8 @@ class Memory(MemoryBase):
                     logger.error(f"Error processing memory action: {resp}, Error: {e}")
         except Exception as e:
             logger.error(f"Error iterating new_memories_with_actions: {e}")
+        if debug:
+            timing["memory_operations"] = round((time.perf_counter() - t0) * 1000, 2)
 
         keys, encoded_ids = process_telemetry_filters(filters)
         capture_event(
@@ -594,7 +656,7 @@ class Memory(MemoryBase):
             self,
             {"version": self.api_version, "keys": keys, "encoded_ids": encoded_ids, "sync_type": "sync"},
         )
-        return returned_memories
+        return returned_memories, timing
 
     def _add_to_graph(self, messages, filters):
         added_entities = []
@@ -1339,6 +1401,7 @@ class AsyncMemory(MemoryBase):
         infer: bool = True,
         memory_type: Optional[str] = None,
         prompt: Optional[str] = None,
+        graph_write: bool = True,
         llm=None,
     ):
         """
@@ -1354,6 +1417,7 @@ class AsyncMemory(MemoryBase):
             memory_type (str, optional): Type of memory to create. Defaults to None.
                                          Pass "procedural_memory" to create procedural memories.
             prompt (str, optional): Prompt to use for the memory creation. Defaults to None.
+            graph_write (bool, optional): If False, skip graph extraction/write on add. Defaults to True.
             llm (BaseChatModel, optional): LLM class to use for generating procedural memories. Defaults to None. Useful when user is using LangChain ChatModel.
         Returns:
             dict: A dictionary containing the result of the memory addition operation.
@@ -1392,14 +1456,21 @@ class AsyncMemory(MemoryBase):
         else:
             messages = parse_vision_messages(messages)
 
+        run_graph = graph_write and self.enable_graph
         vector_store_task = asyncio.create_task(
             self._add_to_vector_store(messages, processed_metadata, effective_filters, infer)
         )
-        graph_task = asyncio.create_task(self._add_to_graph(messages, effective_filters))
+        graph_task = None
+        if run_graph:
+            graph_task = asyncio.create_task(self._add_to_graph(messages, effective_filters))
 
-        vector_store_result, graph_result = await asyncio.gather(vector_store_task, graph_task)
+        if graph_task:
+            vector_store_result, graph_result = await asyncio.gather(vector_store_task, graph_task)
+        else:
+            vector_store_result = await vector_store_task
+            graph_result = []
 
-        if self.enable_graph:
+        if run_graph:
             return {
                 "results": vector_store_result,
                 "relations": graph_result,

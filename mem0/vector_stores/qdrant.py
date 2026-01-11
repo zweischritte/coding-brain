@@ -7,6 +7,7 @@ from qdrant_client.models import (
     Distance,
     FieldCondition,
     Filter,
+    MatchAny,
     MatchValue,
     PointIdsList,
     PointStruct,
@@ -105,7 +106,7 @@ class Qdrant(VectorStoreBase):
             logger.debug("Skipping payload index creation for local Qdrant (not supported)")
             return
             
-        common_fields = ["user_id", "agent_id", "run_id", "actor_id"]
+        common_fields = ["user_id", "agent_id", "run_id", "actor_id", "mcp_client"]
         
         for field in common_fields:
             try:
@@ -138,6 +139,54 @@ class Qdrant(VectorStoreBase):
         ]
         self.client.upsert(collection_name=self.collection_name, points=points)
 
+    def _build_conditions(self, items):
+        conditions = []
+        for item in items:
+            if isinstance(item, FieldCondition):
+                conditions.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+
+            key = item.get("key")
+            if not key:
+                continue
+
+            if "any" in item:
+                values = item.get("any")
+                if isinstance(values, (list, tuple)) and values:
+                    conditions.append(
+                        FieldCondition(key=key, match=MatchAny(any=list(values)))
+                    )
+                elif values is not None:
+                    conditions.append(FieldCondition(key=key, match=MatchValue(value=values)))
+                continue
+
+            if "value" in item:
+                conditions.append(FieldCondition(key=key, match=MatchValue(value=item.get("value"))))
+                continue
+
+            if "range" in item:
+                range_value = item.get("range") or {}
+                conditions.append(
+                    FieldCondition(
+                        key=key,
+                        range=Range(gte=range_value.get("gte"), lte=range_value.get("lte")),
+                    )
+                )
+                continue
+
+            if "gte" in item or "lte" in item:
+                conditions.append(
+                    FieldCondition(
+                        key=key,
+                        range=Range(gte=item.get("gte"), lte=item.get("lte")),
+                    )
+                )
+                continue
+
+        return conditions
+
     def _create_filter(self, filters: dict) -> Filter:
         """
         Create a Filter object from the provided filters.
@@ -150,11 +199,33 @@ class Qdrant(VectorStoreBase):
         """
         if not filters:
             return None
-            
+
+        if isinstance(filters, Filter):
+            return filters
+
+        if isinstance(filters, dict) and any(key in filters for key in ("must", "should", "must_not")):
+            must_conditions = self._build_conditions(filters.get("must", []))
+            should_conditions = self._build_conditions(filters.get("should", []))
+            must_not_conditions = self._build_conditions(filters.get("must_not", []))
+            return Filter(
+                must=must_conditions or None,
+                should=should_conditions or None,
+                must_not=must_not_conditions or None,
+            )
+
         conditions = []
         for key, value in filters.items():
             if isinstance(value, dict) and "gte" in value and "lte" in value:
                 conditions.append(FieldCondition(key=key, range=Range(gte=value["gte"], lte=value["lte"])))
+            elif isinstance(value, dict) and "any" in value:
+                values = value.get("any")
+                if isinstance(values, (list, tuple)) and values:
+                    conditions.append(FieldCondition(key=key, match=MatchAny(any=list(values))))
+                elif values is not None:
+                    conditions.append(FieldCondition(key=key, match=MatchValue(value=values)))
+            elif isinstance(value, (list, tuple)):
+                if value:
+                    conditions.append(FieldCondition(key=key, match=MatchAny(any=list(value))))
             else:
                 conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
         return Filter(must=conditions) if conditions else None
