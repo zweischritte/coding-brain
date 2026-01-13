@@ -65,13 +65,17 @@ class ImpactAnalysisConfig:
         include_cross_language: Include cross-language dependencies
         max_affected_files: Maximum affected files to return
         include_inferred_edges: Include edges inferred heuristically
+        include_field_edges: Include field/property edges (READS/WRITES/HAS_FIELD)
+        include_schema_edges: Include schema exposure edges (SCHEMA_EXPOSES)
     """
 
-    max_depth: int = 3
+    max_depth: int = 10
     confidence_threshold: str = "probable"  # "definite", "probable", "possible"
     include_cross_language: bool = False
     max_affected_files: int = 100
     include_inferred_edges: bool = True
+    include_field_edges: bool = False
+    include_schema_edges: bool = False
 
 
 # =============================================================================
@@ -93,6 +97,8 @@ class ImpactInput:
         max_depth: Override config for max depth
         confidence_threshold: Override config for confidence
         include_inferred_edges: Override config for inferred edge usage
+        include_field_edges: Include field/property edges (READS/WRITES/HAS_FIELD)
+        include_schema_edges: Include schema exposure edges (SCHEMA_EXPOSES)
     """
 
     repo_id: str = ""
@@ -102,6 +108,8 @@ class ImpactInput:
     max_depth: Optional[int] = None
     confidence_threshold: Optional[str] = None
     include_inferred_edges: Optional[bool] = None
+    include_field_edges: Optional[bool] = None
+    include_schema_edges: Optional[bool] = None
 
 
 # =============================================================================
@@ -203,6 +211,16 @@ class ImpactAnalysisTool:
             if input_data.include_inferred_edges is not None
             else cfg.include_inferred_edges
         )
+        include_field_edges = (
+            input_data.include_field_edges
+            if input_data.include_field_edges is not None
+            else cfg.include_field_edges
+        )
+        include_schema_edges = (
+            input_data.include_schema_edges
+            if input_data.include_schema_edges is not None
+            else cfg.include_schema_edges
+        )
 
         # Collect affected files
         affected_map: dict[str, AffectedFile] = {}
@@ -217,6 +235,8 @@ class ImpactAnalysisTool:
                     affected_map=affected_map,
                     max_files=cfg.max_affected_files,
                     include_inferred_edges=include_inferred_edges,
+                    include_field_edges=include_field_edges,
+                    include_schema_edges=include_schema_edges,
                     traversal_state=traversal_state,
                 )
             elif input_data.changed_files:
@@ -228,6 +248,8 @@ class ImpactAnalysisTool:
                     affected_map=affected_map,
                     max_files=cfg.max_affected_files,
                     include_inferred_edges=include_inferred_edges,
+                    include_field_edges=include_field_edges,
+                    include_schema_edges=include_schema_edges,
                     traversal_state=traversal_state,
                 )
         except Exception as e:
@@ -270,6 +292,8 @@ class ImpactAnalysisTool:
         affected_map: dict[str, AffectedFile],
         max_files: int,
         include_inferred_edges: bool,
+        include_field_edges: bool,
+        include_schema_edges: bool,
         traversal_state: dict[str, bool],
     ) -> None:
         """Analyze impact of changes to a symbol.
@@ -300,6 +324,8 @@ class ImpactAnalysisTool:
             visited=visited,
             max_files=max_files,
             include_inferred_edges=include_inferred_edges,
+            include_field_edges=include_field_edges,
+            include_schema_edges=include_schema_edges,
             traversal_state=traversal_state,
         )
 
@@ -312,6 +338,8 @@ class ImpactAnalysisTool:
         visited: set[str],
         max_files: int,
         include_inferred_edges: bool,
+        include_field_edges: bool,
+        include_schema_edges: bool,
         traversal_state: dict[str, bool],
     ) -> None:
         """Recursively traverse callers to find affected files."""
@@ -323,7 +351,7 @@ class ImpactAnalysisTool:
 
         visited.add(symbol_id)
 
-        # Get incoming CALLS edges
+        # Get incoming dependency edges (CALLS/READS/WRITES/HAS_FIELD)
         if not hasattr(self.graph_driver, "get_incoming_edges"):
             return
 
@@ -336,10 +364,13 @@ class ImpactAnalysisTool:
                 else str(edge.edge_type)
             )
 
-            if edge_type_value != "CALLS":
-                continue
+            is_call = edge_type_value == "CALLS"
+            is_field_edge = edge_type_value in ("READS", "WRITES", "HAS_FIELD")
 
-            if not include_inferred_edges and edge.properties and edge.properties.get("inferred"):
+            if is_call:
+                if not include_inferred_edges and edge.properties and edge.properties.get("inferred"):
+                    continue
+            elif not (include_field_edges and is_field_edge):
                 continue
 
             caller_id = edge.source_id
@@ -358,9 +389,18 @@ class ImpactAnalysisTool:
                     # Calculate confidence based on depth
                     confidence = self._calculate_confidence(current_depth)
 
+                    if is_call:
+                        reason = f"Calls changed symbol (depth {current_depth})"
+                    elif edge_type_value == "READS":
+                        reason = f"Reads changed field (depth {current_depth})"
+                    elif edge_type_value == "WRITES":
+                        reason = f"Writes changed field (depth {current_depth})"
+                    else:
+                        reason = f"Contains changed field (depth {current_depth})"
+
                     affected_map[file_path] = AffectedFile(
                         file_path=file_path,
-                        reason=f"Calls changed symbol (depth {current_depth})",
+                        reason=reason,
                         confidence=confidence,
                     )
 
@@ -374,8 +414,47 @@ class ImpactAnalysisTool:
                     visited=visited,
                     max_files=max_files,
                     include_inferred_edges=include_inferred_edges,
+                    include_field_edges=include_field_edges,
+                    include_schema_edges=include_schema_edges,
                     traversal_state=traversal_state,
                 )
+
+        if include_schema_edges and hasattr(self.graph_driver, "get_outgoing_edges"):
+            outgoing_edges = self.graph_driver.get_outgoing_edges(symbol_id)
+            for edge in outgoing_edges:
+                edge_type_value = (
+                    edge.edge_type.value
+                    if hasattr(edge.edge_type, "value")
+                    else str(edge.edge_type)
+                )
+                if edge_type_value != "SCHEMA_EXPOSES":
+                    continue
+                schema_id = edge.target_id
+                if schema_id in visited:
+                    continue
+                schema_node = self.graph_driver.get_node(schema_id)
+                if not schema_node:
+                    continue
+                schema_path = schema_node.properties.get("file_path")
+                if schema_path and schema_path not in affected_map:
+                    affected_map[schema_path] = AffectedFile(
+                        file_path=schema_path,
+                        reason=f"Exposed via schema field (depth {current_depth})",
+                        confidence=self._calculate_confidence(current_depth),
+                    )
+                if len(affected_map) < max_files:
+                    self._traverse_callers(
+                        symbol_id=schema_id,
+                        depth=depth,
+                        current_depth=current_depth + 1,
+                        affected_map=affected_map,
+                        visited=visited,
+                        max_files=max_files,
+                        include_inferred_edges=include_inferred_edges,
+                        include_field_edges=include_field_edges,
+                        include_schema_edges=include_schema_edges,
+                        traversal_state=traversal_state,
+                    )
 
     def _analyze_file_changes(
         self,
@@ -385,6 +464,8 @@ class ImpactAnalysisTool:
         affected_map: dict[str, AffectedFile],
         max_files: int,
         include_inferred_edges: bool,
+        include_field_edges: bool,
+        include_schema_edges: bool,
         traversal_state: dict[str, bool],
     ) -> None:
         """Analyze impact of file changes.
@@ -435,6 +516,8 @@ class ImpactAnalysisTool:
                             visited=visited,
                             max_files=max_files,
                             include_inferred_edges=include_inferred_edges,
+                            include_field_edges=include_field_edges,
+                            include_schema_edges=include_schema_edges,
                             traversal_state=traversal_state,
                         )
             except Exception as e:

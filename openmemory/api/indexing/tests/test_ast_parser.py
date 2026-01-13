@@ -99,6 +99,8 @@ class TestSymbolType:
         assert SymbolType.FUNCTION.value == "function"
         assert SymbolType.CLASS.value == "class"
         assert SymbolType.METHOD.value == "method"
+        assert SymbolType.FIELD.value == "field"
+        assert SymbolType.PROPERTY.value == "property"
         assert SymbolType.IMPORT.value == "import"
         assert SymbolType.VARIABLE.value == "variable"
         assert SymbolType.INTERFACE.value == "interface"
@@ -551,6 +553,28 @@ class MyClass {
         assert class_sym is not None
         assert class_sym.symbol_type == SymbolType.CLASS
 
+    def test_extract_class_fields_and_constructor_properties(self, plugin):
+        """Extract class fields and constructor parameter properties."""
+        code = '''
+class MyClass {
+    @Field()
+    public name: string;
+    private count = 0;
+
+    constructor(public id: string, readonly age: number, other: string) {}
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        fields = [s for s in symbols if s.symbol_type == SymbolType.FIELD]
+        field_names = {s.name for s in fields if s.parent_name == "MyClass"}
+        assert field_names == {"name", "count", "id", "age"}
+
+        name_field = next((s for s in fields if s.name == "name"), None)
+        assert name_field is not None
+        assert any(dec.name == "Field" for dec in name_field.decorators)
+
     def test_extract_interface(self, plugin):
         """Extract interface from TypeScript code."""
         code = '''
@@ -565,6 +589,21 @@ interface User {
         iface = next((s for s in symbols if s.name == "User"), None)
         assert iface is not None
         assert iface.symbol_type == SymbolType.INTERFACE
+
+    def test_extract_interface_properties(self, plugin):
+        """Extract interface property signatures."""
+        code = '''
+interface User {
+    id: string;
+    readonly name?: string;
+}
+'''
+        tree = plugin.parse(code.encode("utf-8"), is_tsx=False)
+        symbols = plugin.extract_symbols(tree, code.encode("utf-8"))
+
+        props = [s for s in symbols if s.symbol_type == SymbolType.PROPERTY]
+        prop_names = {s.name for s in props if s.parent_name == "User"}
+        assert prop_names == {"id", "name"}
 
     def test_extract_type_alias(self, plugin):
         """Extract type alias from TypeScript code."""

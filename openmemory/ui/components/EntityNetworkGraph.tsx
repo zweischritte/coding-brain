@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEntitiesApi } from "@/hooks/useEntitiesApi";
-import { EntityNetwork } from "@/components/types";
+import { EntityNetwork, EntityRelation } from "@/components/types";
 import { cn } from "@/lib/utils";
 import { Network, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 
@@ -71,6 +71,8 @@ interface GraphLink {
   source: string;
   target: string;
   value: number;
+  type: "co_mention" | "relation";
+  relationType?: string; // For typed relations (e.g., "works_at", "owns")
 }
 
 interface GraphData {
@@ -84,6 +86,11 @@ const NODE_COLORS = {
   hover: "#f59e0b", // Amber for hover
 };
 
+const LINK_COLORS = {
+  co_mention: "rgba(100, 100, 100, 0.5)", // Gray for co-mentions
+  relation: "rgba(34, 197, 94, 0.7)", // Green for typed relations
+};
+
 export function EntityNetworkGraph({
   entityName,
   onEntityClick,
@@ -93,8 +100,9 @@ export function EntityNetworkGraph({
   expanded,
   onExpandedChange,
 }: EntityNetworkGraphProps) {
-  const { getEntityNetwork } = useEntitiesApi();
+  const { getEntityNetwork, getEntityRelations } = useEntitiesApi();
   const [network, setNetwork] = useState<EntityNetwork | null>(null);
+  const [relations, setRelations] = useState<EntityRelation[]>([]);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true); // Start with loading=true
@@ -108,11 +116,13 @@ export function EntityNetworkGraph({
   const { width: containerWidth } = useContainerDimensions(containerElement);
   const cardClassName = cn("bg-zinc-900 border-zinc-800", isExpanded && "lg:col-span-2");
 
-  // Store getEntityNetwork in ref to avoid re-creating loadNetwork
+  // Store API functions in refs to avoid re-creating loadNetwork
   const getEntityNetworkRef = useRef(getEntityNetwork);
   getEntityNetworkRef.current = getEntityNetwork;
+  const getEntityRelationsRef = useRef(getEntityRelations);
+  getEntityRelationsRef.current = getEntityRelations;
 
-  // Load network data
+  // Load network data (co-mentions + typed relations)
   const loadNetwork = useCallback(async () => {
     if (!entityName) return;
 
@@ -120,44 +130,85 @@ export function EntityNetworkGraph({
     setError(null);
 
     try {
-      const networkData = await getEntityNetworkRef.current(entityName, minCount, limit);
+      // Fetch both co-mentions and typed relations in parallel
+      const [networkData, relationsData] = await Promise.all([
+        getEntityNetworkRef.current(entityName, minCount, limit),
+        getEntityRelationsRef.current(entityName, { direction: "both", limit }),
+      ]);
+
       setNetwork(networkData);
+      setRelations(relationsData);
 
+      // Build graph data from both sources
+      const nodes: GraphNode[] = [
+        {
+          id: entityName,
+          name: entityName,
+          val: 20, // Larger central node
+          color: NODE_COLORS.center,
+          isCenter: true,
+        },
+      ];
+
+      const links: GraphLink[] = [];
+      const nodeSet = new Set<string>([entityName]);
+
+      // Add nodes and links from co-mentions
       if (networkData && networkData.connections) {
-        // Build graph data
-        const nodes: GraphNode[] = [
-          {
-            id: entityName,
-            name: entityName,
-            val: 20, // Larger central node
-            color: NODE_COLORS.center,
-            isCenter: true,
-          },
-        ];
-
-        const links: GraphLink[] = [];
-
         networkData.connections.forEach((conn) => {
-          nodes.push({
-            id: conn.entity,
-            name: conn.entity,
-            val: Math.min(15, 5 + conn.count * 2), // Size based on connection count
-            color: NODE_COLORS.connected,
-            isCenter: false,
-          });
+          if (!nodeSet.has(conn.entity)) {
+            nodes.push({
+              id: conn.entity,
+              name: conn.entity,
+              val: Math.min(15, 5 + conn.count * 2), // Size based on connection count
+              color: NODE_COLORS.connected,
+              isCenter: false,
+            });
+            nodeSet.add(conn.entity);
+          }
 
           links.push({
             source: entityName,
             target: conn.entity,
             value: conn.count,
+            type: "co_mention",
           });
         });
-
-        setGraphData({ nodes, links });
       }
+
+      // Add nodes and links from typed relations
+      if (relationsData && relationsData.length > 0) {
+        relationsData.forEach((rel) => {
+          if (!nodeSet.has(rel.target)) {
+            nodes.push({
+              id: rel.target,
+              name: rel.target,
+              val: Math.min(15, 5 + rel.count * 2),
+              color: NODE_COLORS.connected,
+              isCenter: false,
+            });
+            nodeSet.add(rel.target);
+          }
+
+          // Determine link direction based on relation direction
+          const source = rel.direction === "outgoing" ? entityName : rel.target;
+          const target = rel.direction === "outgoing" ? rel.target : entityName;
+
+          links.push({
+            source,
+            target,
+            value: rel.count,
+            type: "relation",
+            relationType: rel.type,
+          });
+        });
+      }
+
+      setGraphData({ nodes, links });
     } catch (err) {
       setError("Failed to load entity network");
       setNetwork(null);
+      setRelations([]);
       setGraphData({ nodes: [], links: [] });
     } finally {
       setLoading(false);
@@ -286,8 +337,13 @@ export function EntityNetworkGraph({
           <Network className="h-5 w-5" />
           Entity Network
           <Badge variant="secondary" className="ml-2 bg-zinc-800 text-zinc-300">
-            {graphData.links.length} connections
+            {graphData.links.filter(l => l.type === "co_mention").length} co-mentions
           </Badge>
+          {graphData.links.filter(l => l.type === "relation").length > 0 && (
+            <Badge variant="secondary" className="bg-green-900/50 text-green-300 border border-green-700/50">
+              {graphData.links.filter(l => l.type === "relation").length} relations
+            </Badge>
+          )}
         </CardTitle>
         <div className="flex gap-2">
           <Button
@@ -336,7 +392,10 @@ export function EntityNetworkGraph({
               onNodeClick={handleNodeClick}
               onNodeHover={handleNodeHover}
               linkWidth={(link: any) => Math.min(5, 1 + link.value * 0.5)}
-              linkColor={() => "rgba(100, 100, 100, 0.5)"}
+              linkColor={(link: any) => LINK_COLORS[link.type as keyof typeof LINK_COLORS] || LINK_COLORS.co_mention}
+              linkLabel={(link: any) => link.relationType ? `${link.relationType} (${link.value}x)` : `co-mention (${link.value}x)`}
+              linkDirectionalArrowLength={(link: any) => link.type === "relation" ? 6 : 0}
+              linkDirectionalArrowRelPos={1}
               backgroundColor="#09090b"
               width={containerWidth}
               height={isExpanded ? 600 : height}

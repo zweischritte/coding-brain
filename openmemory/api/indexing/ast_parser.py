@@ -80,6 +80,8 @@ class SymbolType(Enum):
     FUNCTION = "function"
     CLASS = "class"
     METHOD = "method"
+    FIELD = "field"
+    PROPERTY = "property"
     IMPORT = "import"
     VARIABLE = "variable"
     INTERFACE = "interface"
@@ -638,12 +640,16 @@ class TypeScriptPlugin(LanguagePlugin):
             )
         )
 
-        # Extract methods
+        # Extract fields and methods
         body = node.child_by_field_name("body")
         if body:
+            field_names: set[str] = set()
             for child in body.children:
-                if child.type == "method_definition":
+                if child.type in ("public_field_definition", "property_definition"):
+                    self._extract_class_field(child, source, symbols, name, field_names)
+                elif child.type == "method_definition":
                     self._extract_method(child, source, symbols, name)
+                    self._extract_constructor_properties(child, source, symbols, name, field_names)
 
     def _extract_method(
         self,
@@ -678,6 +684,96 @@ class TypeScriptPlugin(LanguagePlugin):
             )
         )
 
+    def _extract_class_field(
+        self,
+        node: Node,
+        source: bytes,
+        symbols: list[Symbol],
+        parent_name: str,
+        field_names: set[str],
+    ) -> None:
+        """Extract class field/property symbol with decorators."""
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            name_node = next(
+                (child for child in node.children if child.type in ("property_identifier", "identifier")),
+                None,
+            )
+        if not name_node:
+            return
+
+        name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+        if name in field_names:
+            return
+        field_names.add(name)
+
+        decorators = self._extract_decorators_from_node(node, source)
+
+        symbols.append(
+            Symbol(
+                name=name,
+                symbol_type=SymbolType.FIELD,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+                language=Language.TYPESCRIPT,
+                parent_name=parent_name,
+                decorators=decorators,
+            )
+        )
+
+    def _extract_constructor_properties(
+        self,
+        node: Node,
+        source: bytes,
+        symbols: list[Symbol],
+        parent_name: str,
+        field_names: set[str],
+    ) -> None:
+        """Extract constructor parameter properties (public/private/readonly)."""
+        name_node = node.child_by_field_name("name")
+        method_name = (
+            source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+            if name_node
+            else None
+        )
+        if method_name != "constructor":
+            return
+
+        params_node = node.child_by_field_name("parameters")
+        if not params_node:
+            return
+
+        for param in params_node.children:
+            if param.type not in ("required_parameter", "optional_parameter"):
+                continue
+            if not any(child.type in ("accessibility_modifier", "readonly") for child in param.children):
+                continue
+
+            param_name = param.child_by_field_name("pattern") or param.child_by_field_name("name")
+            if not param_name:
+                param_name = next(
+                    (child for child in param.children if child.type in ("identifier", "property_identifier")),
+                    None,
+                )
+            if not param_name:
+                continue
+
+            name = source[param_name.start_byte : param_name.end_byte].decode("utf-8")
+            if name in field_names:
+                continue
+            field_names.add(name)
+
+            symbols.append(
+                Symbol(
+                    name=name,
+                    symbol_type=SymbolType.FIELD,
+                    line_start=param.start_point[0] + 1,
+                    line_end=param.end_point[0] + 1,
+                    language=Language.TYPESCRIPT,
+                    parent_name=parent_name,
+                )
+            )
+
     def _extract_interface(self, node: Node, source: bytes, symbols: list[Symbol]) -> None:
         """Extract interface symbol."""
         name_node = node.child_by_field_name("name")
@@ -693,6 +789,42 @@ class TypeScriptPlugin(LanguagePlugin):
                 line_start=node.start_point[0] + 1,
                 line_end=node.end_point[0] + 1,
                 language=Language.TYPESCRIPT,
+            )
+        )
+
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "property_signature":
+                    self._extract_interface_property(child, source, symbols, name)
+
+    def _extract_interface_property(
+        self,
+        node: Node,
+        source: bytes,
+        symbols: list[Symbol],
+        parent_name: str,
+    ) -> None:
+        """Extract interface property signature."""
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            name_node = next(
+                (child for child in node.children if child.type in ("property_identifier", "identifier", "string")),
+                None,
+            )
+        if not name_node:
+            return
+
+        name = source[name_node.start_byte : name_node.end_byte].decode("utf-8")
+
+        symbols.append(
+            Symbol(
+                name=name,
+                symbol_type=SymbolType.PROPERTY,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+                language=Language.TYPESCRIPT,
+                parent_name=parent_name,
             )
         )
 
@@ -920,6 +1052,14 @@ class TypeScriptPlugin(LanguagePlugin):
                 check = check.prev_sibling
             if check and check.type == "decorator":
                 decorators.reverse()
+
+        # Strategy 3: Field decorators as node children
+        if not decorators:
+            for child in node.children:
+                if child.type == "decorator":
+                    dec_info = self._extract_decorator_info(child, source)
+                    if dec_info:
+                        decorators.append(dec_info)
 
         return decorators
 

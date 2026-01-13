@@ -1,8 +1,8 @@
 """CODE_* Graph Projection for Neo4j.
 
 This module provides graph projection for code indexing:
-- Node types: CODE_FILE, CODE_SYMBOL, CODE_PACKAGE
-- Edge types: CONTAINS, DEFINES, IMPORTS, CALLS, READS, WRITES, DATA_FLOWS_TO
+- Node types: CODE_FILE, CODE_SYMBOL, CODE_PACKAGE, CODE_SCHEMA_FIELD, CODE_OPENAPI_DEF
+- Edge types: CONTAINS, DEFINES, IMPORTS, CALLS, READS, WRITES, DATA_FLOWS_TO, HAS_FIELD, SCHEMA_EXPOSES
 - Incremental updates (add/modify/delete)
 - Transaction support (atomic operations)
 - Batch operations for performance
@@ -59,6 +59,8 @@ class CodeNodeType(Enum):
     FILE = "CODE_FILE"
     SYMBOL = "CODE_SYMBOL"
     PACKAGE = "CODE_PACKAGE"
+    SCHEMA_FIELD = "CODE_SCHEMA_FIELD"
+    OPENAPI_DEF = "CODE_OPENAPI_DEF"
 
     @property
     def label(self) -> str:
@@ -76,6 +78,8 @@ class CodeEdgeType(Enum):
     READS = "READS"  # Symbol reads a variable
     WRITES = "WRITES"  # Symbol writes a variable
     DATA_FLOWS_TO = "DATA_FLOWS_TO"  # Data flows from source to sink
+    HAS_FIELD = "HAS_FIELD"  # Type owns field/property symbol
+    SCHEMA_EXPOSES = "SCHEMA_EXPOSES"  # Field exposed via schema surface
     TRIGGERS_EVENT = "TRIGGERS_EVENT"  # Event emitter triggers event handler (@OnEvent)
 
 
@@ -357,6 +361,167 @@ class PackageNodeBuilder:
         )
 
 
+class SchemaFieldNodeBuilder:
+    """Builder for CODE_SCHEMA_FIELD nodes."""
+
+    def __init__(self):
+        self._schema_id: Optional[str] = None
+        self._name: Optional[str] = None
+        self._schema_type: Optional[str] = None
+        self._schema_name: Optional[str] = None
+        self._nullable: Optional[bool] = None
+        self._field_type: Optional[str] = None
+        self._file_path: Optional[Path] = None
+        self._line_start: Optional[int] = None
+        self._line_end: Optional[int] = None
+        self._repo_id: Optional[str] = None
+
+    def schema_id(self, schema_id: str) -> "SchemaFieldNodeBuilder":
+        """Set schema field node ID."""
+        self._schema_id = schema_id
+        return self
+
+    def name(self, name: str) -> "SchemaFieldNodeBuilder":
+        """Set schema field name."""
+        self._name = name
+        return self
+
+    def schema_type(self, schema_type: str) -> "SchemaFieldNodeBuilder":
+        """Set schema type (graphql|zod|openapi|dto)."""
+        self._schema_type = schema_type
+        return self
+
+    def schema_name(self, schema_name: str) -> "SchemaFieldNodeBuilder":
+        """Set schema name (type/contract identifier)."""
+        self._schema_name = schema_name
+        return self
+
+    def nullable(self, nullable: bool) -> "SchemaFieldNodeBuilder":
+        """Set schema field nullability."""
+        self._nullable = nullable
+        return self
+
+    def field_type(self, field_type: str) -> "SchemaFieldNodeBuilder":
+        """Set schema field type."""
+        self._field_type = field_type
+        return self
+
+    def file_path(self, path: Path) -> "SchemaFieldNodeBuilder":
+        """Set source file path."""
+        self._file_path = path
+        return self
+
+    def line_start(self, line_start: int) -> "SchemaFieldNodeBuilder":
+        """Set start line number."""
+        self._line_start = line_start
+        return self
+
+    def line_end(self, line_end: int) -> "SchemaFieldNodeBuilder":
+        """Set end line number."""
+        self._line_end = line_end
+        return self
+
+    def repo_id(self, repo_id: str) -> "SchemaFieldNodeBuilder":
+        """Set repository ID."""
+        self._repo_id = repo_id
+        return self
+
+    def build(self) -> CodeNode:
+        """Build schema field node."""
+        if self._schema_id is None:
+            raise ValueError("schema_id is required")
+        if self._name is None:
+            raise ValueError("name is required")
+        if self._schema_type is None:
+            raise ValueError("schema_type is required")
+
+        properties: dict[str, Any] = {
+            "name": self._name,
+            "schema_type": self._schema_type,
+        }
+
+        if self._schema_name:
+            properties["schema_name"] = self._schema_name
+        if self._nullable is not None:
+            properties["nullable"] = self._nullable
+        if self._field_type:
+            properties["field_type"] = self._field_type
+        if self._file_path:
+            properties["file_path"] = str(self._file_path)
+        if self._line_start is not None:
+            properties["line_start"] = self._line_start
+        if self._line_end is not None:
+            properties["line_end"] = self._line_end
+        if self._repo_id:
+            properties["repo_id"] = self._repo_id
+
+        return CodeNode(
+            node_type=CodeNodeType.SCHEMA_FIELD,
+            id=self._schema_id,
+            properties=properties,
+        )
+
+
+class OpenAPIDefNodeBuilder:
+    """Builder for CODE_OPENAPI_DEF nodes."""
+
+    def __init__(self):
+        self._openapi_id: Optional[str] = None
+        self._name: Optional[str] = None
+        self._file_path: Optional[Path] = None
+        self._title: Optional[str] = None
+        self._repo_id: Optional[str] = None
+
+    def openapi_id(self, openapi_id: str) -> "OpenAPIDefNodeBuilder":
+        """Set OpenAPI definition node ID."""
+        self._openapi_id = openapi_id
+        return self
+
+    def name(self, name: str) -> "OpenAPIDefNodeBuilder":
+        """Set OpenAPI schema name."""
+        self._name = name
+        return self
+
+    def file_path(self, path: Path) -> "OpenAPIDefNodeBuilder":
+        """Set OpenAPI spec file path."""
+        self._file_path = path
+        return self
+
+    def title(self, title: str) -> "OpenAPIDefNodeBuilder":
+        """Set OpenAPI spec title."""
+        self._title = title
+        return self
+
+    def repo_id(self, repo_id: str) -> "OpenAPIDefNodeBuilder":
+        """Set repository ID."""
+        self._repo_id = repo_id
+        return self
+
+    def build(self) -> CodeNode:
+        """Build OpenAPI definition node."""
+        if self._openapi_id is None:
+            raise ValueError("openapi_id is required")
+        if self._name is None:
+            raise ValueError("name is required")
+
+        properties: dict[str, Any] = {
+            "name": self._name,
+        }
+
+        if self._file_path:
+            properties["file_path"] = str(self._file_path)
+        if self._title:
+            properties["title"] = self._title
+        if self._repo_id:
+            properties["repo_id"] = self._repo_id
+
+        return CodeNode(
+            node_type=CodeNodeType.OPENAPI_DEF,
+            id=self._openapi_id,
+            properties=properties,
+        )
+
+
 # =============================================================================
 # Edge Builder
 # =============================================================================
@@ -404,6 +569,16 @@ class EdgeBuilder:
     def data_flows_to(self) -> "EdgeBuilder":
         """Set edge type to DATA_FLOWS_TO."""
         self._edge_type = CodeEdgeType.DATA_FLOWS_TO
+        return self
+
+    def has_field(self) -> "EdgeBuilder":
+        """Set edge type to HAS_FIELD."""
+        self._edge_type = CodeEdgeType.HAS_FIELD
+        return self
+
+    def schema_exposes(self) -> "EdgeBuilder":
+        """Set edge type to SCHEMA_EXPOSES."""
+        self._edge_type = CodeEdgeType.SCHEMA_EXPOSES
         return self
 
     def from_node(self, source_id: str) -> "EdgeBuilder":
@@ -819,6 +994,66 @@ class GraphProjection:
             .language(language)
             .build()
         )
+        self.driver.add_node(node)
+        return node
+
+    def create_schema_field_node(
+        self,
+        schema_id: str,
+        name: str,
+        schema_type: str,
+        schema_name: Optional[str] = None,
+        nullable: Optional[bool] = None,
+        field_type: Optional[str] = None,
+        file_path: Optional[Path] = None,
+        line_start: Optional[int] = None,
+        line_end: Optional[int] = None,
+        repo_id: Optional[str] = None,
+    ) -> CodeNode:
+        """Create a CODE_SCHEMA_FIELD node."""
+        builder = (
+            SchemaFieldNodeBuilder()
+            .schema_id(schema_id)
+            .name(name)
+            .schema_type(schema_type)
+        )
+        if schema_name:
+            builder.schema_name(schema_name)
+        if nullable is not None:
+            builder.nullable(nullable)
+        if field_type:
+            builder.field_type(field_type)
+        if file_path:
+            builder.file_path(file_path)
+        if line_start is not None:
+            builder.line_start(line_start)
+        if line_end is not None:
+            builder.line_end(line_end)
+        if repo_id:
+            builder.repo_id(repo_id)
+
+        node = builder.build()
+        self.driver.add_node(node)
+        return node
+
+    def create_openapi_def_node(
+        self,
+        openapi_id: str,
+        name: str,
+        file_path: Optional[Path] = None,
+        title: Optional[str] = None,
+        repo_id: Optional[str] = None,
+    ) -> CodeNode:
+        """Create a CODE_OPENAPI_DEF node."""
+        builder = OpenAPIDefNodeBuilder().openapi_id(openapi_id).name(name)
+        if file_path:
+            builder.file_path(file_path)
+        if title:
+            builder.title(title)
+        if repo_id:
+            builder.repo_id(repo_id)
+
+        node = builder.build()
         self.driver.add_node(node)
         return node
 

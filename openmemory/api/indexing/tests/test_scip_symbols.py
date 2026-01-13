@@ -271,6 +271,20 @@ class TestSymbolIDBuilder:
         )
         assert str(symbol_id) == "scip-python myproject pkg/subpkg/module/func."
 
+    def test_builder_meta_descriptor(self):
+        """Build symbol ID with meta descriptor."""
+        symbol_id = (
+            SymbolIDBuilder()
+            .scheme(SCIPScheme.SCIP_PYTHON)
+            .package("myproject")
+            .namespace("models")
+            .type_("User")
+            .meta("field")
+            .term("email")
+            .build()
+        )
+        assert str(symbol_id) == "scip-python myproject models/User#field:email."
+
 
 # =============================================================================
 # Package Resolver Tests
@@ -465,6 +479,22 @@ class TestSCIPSymbolExtractor:
         scip_id = extractor.extract(symbol, file_path)
 
         assert "User#" in str(scip_id)
+
+    def test_extract_typescript_field(self, extractor, tmp_path):
+        """Extract SCIP symbol from TypeScript class field."""
+        symbol = Symbol(
+            name="email",
+            symbol_type=SymbolType.FIELD,
+            line_start=3,
+            line_end=3,
+            language=Language.TYPESCRIPT,
+            parent_name="User",
+        )
+
+        file_path = tmp_path / "models.ts"
+        scip_id = extractor.extract(symbol, file_path)
+
+        assert "User#field:email." in str(scip_id)
 
     def test_extract_java_class(self, extractor, tmp_path):
         """Extract SCIP symbol from Java class."""

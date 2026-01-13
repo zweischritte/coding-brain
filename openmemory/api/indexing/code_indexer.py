@@ -19,6 +19,7 @@ from openmemory.api.indexing.deterministic_edges import (
 )
 from openmemory.api.indexing.fallback_symbols import extract_python_symbols
 from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType, GraphProjection
+from openmemory.api.indexing.openapi_parser import OpenAPISpecExtractor
 from openmemory.api.indexing.scip_symbols import SCIPSymbolExtractor
 from openmemory.api.retrieval.opensearch import Document, IndexConfig, IndexManager
 
@@ -34,6 +35,8 @@ _INDEX_TYPES = {
     SymbolType.ENUM,
     SymbolType.TYPE_ALIAS,
     SymbolType.VARIABLE,
+    SymbolType.FIELD,
+    SymbolType.PROPERTY,
 }
 _FILE_DOC_MAX_CHARS = 8000
 
@@ -167,6 +170,22 @@ class CodeIndexingService:
                 break
         return files
 
+    def _iter_openapi_files(self) -> list[Path]:
+        files: list[Path] = []
+        for path in self.root_path.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in (".yaml", ".yml", ".json"):
+                continue
+            path_str = str(path)
+            if any(pattern in path_str for pattern in self.ignore_patterns):
+                continue
+            name = path.name.lower()
+            if "openapi" not in name and "swagger" not in name:
+                continue
+            files.append(path)
+        return files
+
     def _build_symbol_index(
         self,
         source_files: list[Path],
@@ -297,6 +316,7 @@ class CodeIndexingService:
             parse_cache,
             progress_callback=progress_callback,
         )
+        self._index_openapi_specs()
 
         if self.opensearch_client:
             try:
@@ -341,6 +361,7 @@ class CodeIndexingService:
 
         existing_symbol_ids = self._get_existing_symbol_ids(file_path)
         symbol_pairs = self._index_symbols(file_path, symbols)
+        self._index_field_edges(symbol_pairs)
         new_symbol_ids = {symbol_id for _, symbol_id in symbol_pairs}
 
         stale_symbols = existing_symbol_ids - new_symbol_ids
@@ -415,6 +436,27 @@ class CodeIndexingService:
             symbol_pairs.append((symbol, symbol_id))
 
         return symbol_pairs
+
+    def _index_field_edges(self, symbol_pairs: list[tuple[Symbol, str]]) -> None:
+        parent_ids = {
+            symbol.name: symbol_id
+            for symbol, symbol_id in symbol_pairs
+            if symbol.symbol_type in (SymbolType.CLASS, SymbolType.INTERFACE)
+        }
+        for symbol, symbol_id in symbol_pairs:
+            if symbol.symbol_type not in (SymbolType.FIELD, SymbolType.PROPERTY):
+                continue
+            if not symbol.parent_name:
+                continue
+            parent_id = parent_ids.get(symbol.parent_name)
+            if not parent_id:
+                continue
+            self._projection.create_edge(
+                edge_type=CodeEdgeType.HAS_FIELD,
+                source_id=parent_id,
+                target_id=symbol_id,
+                properties={"repo_id": self.repo_id},
+            )
 
     def _index_call_edges(
         self,
@@ -642,6 +684,7 @@ class CodeIndexingService:
             return 0
 
         edges_added = 0
+        created_schema_ids: set[str] = set()
 
         for file_path in source_files:
             cache_entry = parse_cache.get(file_path)
@@ -674,6 +717,47 @@ class CodeIndexingService:
                 )
             edges_added += len(edges.call_edges)
 
+            for source_id, target_id in edges.field_reads:
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.READS,
+                    source_id=source_id,
+                    target_id=target_id,
+                    properties={"resolution": "ast", "edge_kind": "field"},
+                )
+
+            for source_id, target_id in edges.field_writes:
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.WRITES,
+                    source_id=source_id,
+                    target_id=target_id,
+                    properties={"resolution": "ast", "edge_kind": "field"},
+                )
+
+            for schema_field in edges.schema_fields:
+                if schema_field.schema_id in created_schema_ids:
+                    continue
+                created_schema_ids.add(schema_field.schema_id)
+                self._projection.create_schema_field_node(
+                    schema_id=schema_field.schema_id,
+                    name=schema_field.name,
+                    schema_type=schema_field.schema_type,
+                    schema_name=schema_field.schema_name,
+                    nullable=schema_field.nullable,
+                    field_type=schema_field.field_type,
+                    file_path=schema_field.file_path,
+                    line_start=schema_field.line_start,
+                    line_end=schema_field.line_end,
+                    repo_id=self.repo_id,
+                )
+
+            for source_id, target_id in edges.schema_expose_edges:
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.SCHEMA_EXPOSES,
+                    source_id=source_id,
+                    target_id=target_id,
+                    properties={"resolution": "ast", "edge_kind": "schema"},
+                )
+
             for target in {t for t in edges.import_targets if t}:
                 if not target.exists() or not target.is_file():
                     continue
@@ -687,5 +771,59 @@ class CodeIndexingService:
                     target_id=str(target),
                     properties={"resolution": "path"},
                 )
+
+        return edges_added
+
+    def _index_openapi_specs(self) -> int:
+        if not self._symbol_index:
+            return 0
+
+        extractor = OpenAPISpecExtractor(self.root_path, self._symbol_index)
+        created_schema_ids: set[str] = set()
+        created_openapi_ids: set[str] = set()
+        edges_added = 0
+
+        for file_path in self._iter_openapi_files():
+            extraction = extractor.extract_from_file(file_path)
+            if not extraction.definitions and not extraction.schema_fields:
+                continue
+
+            for definition in extraction.definitions:
+                if definition.openapi_id in created_openapi_ids:
+                    continue
+                created_openapi_ids.add(definition.openapi_id)
+                self._projection.create_openapi_def_node(
+                    openapi_id=definition.openapi_id,
+                    name=definition.name,
+                    file_path=definition.file_path,
+                    title=definition.title,
+                    repo_id=self.repo_id,
+                )
+
+            for schema_field in extraction.schema_fields:
+                if schema_field.schema_id in created_schema_ids:
+                    continue
+                created_schema_ids.add(schema_field.schema_id)
+                self._projection.create_schema_field_node(
+                    schema_id=schema_field.schema_id,
+                    name=schema_field.name,
+                    schema_type=schema_field.schema_type,
+                    schema_name=schema_field.schema_name,
+                    nullable=schema_field.nullable,
+                    field_type=schema_field.field_type,
+                    file_path=schema_field.file_path,
+                    line_start=schema_field.line_start,
+                    line_end=schema_field.line_end,
+                    repo_id=self.repo_id,
+                )
+
+            for source_id, target_id in extraction.schema_expose_edges:
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.SCHEMA_EXPOSES,
+                    source_id=source_id,
+                    target_id=target_id,
+                    properties={"resolution": "openapi", "edge_kind": "schema"},
+                )
+                edges_added += 1
 
         return edges_added

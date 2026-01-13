@@ -4319,6 +4319,8 @@ Parameters:
 Returns: results[] with symbol info, file paths, line numbers, and code snippets.
 
 IMPORTANT: Results are snippets only. Use Read tool to see full file context before answering.
+Note: Snippets may include class fields/properties, but those are not indexed as symbols. Use the
+returned class/file symbol_id for downstream tools.
 
 Example:
 - search_code_hybrid(query="authentication middleware", language="python")
@@ -4688,16 +4690,19 @@ async def find_callees(
 @mcp.tool(description="""Analyze the impact of code changes.
 
 Determine which files and symbols are affected by code changes.
+Use SCIP `symbol_id`s from `search_code_hybrid` for symbol-level analysis.
 
 Required parameters:
 - repo_id: Repository ID (required)
 
 Optional parameters:
 - changed_files: List of changed file paths
-- symbol_id: Changed symbol ID
-- max_depth: Maximum traversal depth (default: 3, max: 10)
+- symbol_id: The SCIP symbol ID (e.g., `scip-typescript npm pkg method.`) retrieved from `search_code_hybrid`. Required for symbol analysis; plain names like "myFunction" will not work.
+- max_depth: Maximum traversal depth (default: 10, max: 10)
 - include_cross_language: Include cross-language dependencies (default: false)
 - include_inferred_edges: Override inferred-edge usage (defaults to server config)
+- include_field_edges: Include READS/WRITES/HAS_FIELD edges for fields/properties (default: false)
+- include_schema_edges: Include SCHEMA_EXPOSES edges for schema surfaces (default: false)
 
 Returns:
 - affected_files[]: List of affected files with impact scores
@@ -4705,15 +4710,18 @@ Returns:
 
 Examples:
 - impact_analysis(repo_id="repo-123", changed_files=["src/utils.py"])
-- impact_analysis(repo_id="repo-123", symbol_id="sym-abc", max_depth=5)
+- impact_analysis(repo_id="repo-123", symbol_id="scip-typescript npm my-pkg 1.0.0 src/`utils.ts`/processData().", max_depth=5)
+- impact_analysis(repo_id="repo-123", symbol_id="scip-typescript npm my-pkg 1.0.0 src/`models.ts`/User#field:email.", include_field_edges=true, include_schema_edges=true)
 """)
 async def impact_analysis(
     repo_id: str,
     changed_files: list = None,
     symbol_id: str = None,
-    max_depth: int = 3,
+    max_depth: int = 10,
     include_cross_language: bool = False,
     include_inferred_edges: bool | None = None,
+    include_field_edges: bool = False,
+    include_schema_edges: bool = False,
 ) -> str:
     """Analyze the impact of code changes."""
     # Check scope
@@ -4752,8 +4760,10 @@ async def impact_analysis(
             changed_files=changed_files or [],
             symbol_id=symbol_id,
             include_cross_language=include_cross_language,
-            max_depth=min(max(1, max_depth or 3), 10),
+            max_depth=min(max(1, max_depth or 10), 10),
             include_inferred_edges=include_inferred_edges,
+            include_field_edges=include_field_edges,
+            include_schema_edges=include_schema_edges,
         )
 
         result = toolkit.impact_tool.analyze(input_data)

@@ -268,6 +268,11 @@ class SymbolIDBuilder:
         self._descriptors.append(SCIPDescriptor.type_parameter(name))
         return self
 
+    def meta(self, name: str) -> "SymbolIDBuilder":
+        """Add meta descriptor."""
+        self._descriptors.append(SCIPDescriptor.meta(name))
+        return self
+
     def build(self) -> SCIPSymbolID:
         """Build symbol ID."""
         return SCIPSymbolID(
@@ -447,6 +452,10 @@ class SCIPSymbolExtractor:
             builder.method(symbol.name)
         elif symbol.symbol_type == SymbolType.FUNCTION:
             builder.term(symbol.name)
+        elif symbol.symbol_type == SymbolType.FIELD:
+            builder.meta("field").term(symbol.name)
+        elif symbol.symbol_type == SymbolType.PROPERTY:
+            builder.meta("property").term(symbol.name)
         elif symbol.symbol_type == SymbolType.VARIABLE:
             builder.term(symbol.name)
         elif symbol.symbol_type == SymbolType.IMPORT:

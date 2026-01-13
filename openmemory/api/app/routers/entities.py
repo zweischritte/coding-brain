@@ -263,11 +263,16 @@ async def list_entities(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Get access filters from JWT grants
+    access_entities, access_entity_prefixes = _get_graph_access_filters(principal)
+
     # Aggregate by entity to get list with counts
     entities = aggregate_memories_in_graph(
         user_id=principal.user_id,
         group_by="entity",
         limit=limit,
+        access_entities=access_entities,
+        access_entity_prefixes=access_entity_prefixes,
     )
 
     # Filter by min_memories

@@ -35,6 +35,8 @@ from openmemory.api.indexing.graph_projection import (
     FileNodeBuilder,
     SymbolNodeBuilder,
     PackageNodeBuilder,
+    SchemaFieldNodeBuilder,
+    OpenAPIDefNodeBuilder,
     EdgeBuilder,
     # Batch operations
     BatchOperation,
@@ -117,6 +119,16 @@ class TestCodeNodeType:
         """Test CODE_FILE node type."""
         assert CodeNodeType.FILE.value == "CODE_FILE"
         assert CodeNodeType.FILE.label == "CODE_FILE"
+
+    def test_schema_field_type(self):
+        """Test CODE_SCHEMA_FIELD node type."""
+        assert CodeNodeType.SCHEMA_FIELD.value == "CODE_SCHEMA_FIELD"
+        assert CodeNodeType.SCHEMA_FIELD.label == "CODE_SCHEMA_FIELD"
+
+    def test_openapi_def_type(self):
+        """Test CODE_OPENAPI_DEF node type."""
+        assert CodeNodeType.OPENAPI_DEF.value == "CODE_OPENAPI_DEF"
+        assert CodeNodeType.OPENAPI_DEF.label == "CODE_OPENAPI_DEF"
 
     def test_symbol_type(self):
         """Test CODE_SYMBOL node type."""
@@ -240,6 +252,14 @@ class TestCodeEdgeType:
     def test_data_flows_to_edge(self):
         """Test DATA_FLOWS_TO edge type."""
         assert CodeEdgeType.DATA_FLOWS_TO.value == "DATA_FLOWS_TO"
+
+    def test_has_field_edge(self):
+        """Test HAS_FIELD edge type."""
+        assert CodeEdgeType.HAS_FIELD.value == "HAS_FIELD"
+
+    def test_schema_exposes_edge(self):
+        """Test SCHEMA_EXPOSES edge type."""
+        assert CodeEdgeType.SCHEMA_EXPOSES.value == "SCHEMA_EXPOSES"
 
 
 class TestCodeEdge:
@@ -372,6 +392,68 @@ class TestPackageNodeBuilder:
             builder.build()
 
 
+class TestSchemaFieldNodeBuilder:
+    """Tests for SchemaFieldNodeBuilder."""
+
+    def test_build_schema_field_node(self):
+        """Test building a schema field node."""
+        builder = SchemaFieldNodeBuilder()
+        node = (
+            builder.schema_id("schema::graphql:/path/to/file.ts:User:name")
+            .name("name")
+            .schema_type("graphql")
+            .schema_name("User")
+            .nullable(True)
+            .field_type("string")
+            .file_path(Path("/path/to/file.ts"))
+            .line_start(10)
+            .line_end(10)
+            .build()
+        )
+
+        assert node.node_type == CodeNodeType.SCHEMA_FIELD
+        assert node.id == "schema::graphql:/path/to/file.ts:User:name"
+        assert node.properties["name"] == "name"
+        assert node.properties["schema_type"] == "graphql"
+        assert node.properties["schema_name"] == "User"
+        assert node.properties["nullable"] is True
+        assert node.properties["field_type"] == "string"
+        assert node.properties["file_path"] == "/path/to/file.ts"
+
+    def test_schema_field_requires_id(self):
+        """Test that schema_id is required."""
+        builder = SchemaFieldNodeBuilder().name("name").schema_type("graphql")
+        with pytest.raises(ValueError, match="schema_id is required"):
+            builder.build()
+
+
+class TestOpenAPIDefNodeBuilder:
+    """Tests for OpenAPIDefNodeBuilder."""
+
+    def test_build_openapi_def_node(self):
+        """Test building an OpenAPI definition node."""
+        builder = OpenAPIDefNodeBuilder()
+        node = (
+            builder.openapi_id("openapi::/path/to/openapi.json:User")
+            .name("User")
+            .title("Spec")
+            .file_path(Path("/path/to/openapi.json"))
+            .build()
+        )
+
+        assert node.node_type == CodeNodeType.OPENAPI_DEF
+        assert node.id == "openapi::/path/to/openapi.json:User"
+        assert node.properties["name"] == "User"
+        assert node.properties["title"] == "Spec"
+        assert node.properties["file_path"] == "/path/to/openapi.json"
+
+    def test_openapi_def_requires_id(self):
+        """Test that openapi_id is required."""
+        builder = OpenAPIDefNodeBuilder().name("User")
+        with pytest.raises(ValueError, match="openapi_id is required"):
+            builder.build()
+
+
 # =============================================================================
 # Test Edge Builder
 # =============================================================================
@@ -447,6 +529,30 @@ class TestEdgeBuilder:
 
         assert edge.edge_type == CodeEdgeType.DATA_FLOWS_TO
         assert edge.properties["flow_type"] == "return_value"
+
+    def test_build_has_field_edge(self):
+        """Test building HAS_FIELD edge."""
+        edge = (
+            EdgeBuilder()
+            .has_field()
+            .from_node("type_id")
+            .to_node("field_id")
+            .build()
+        )
+
+        assert edge.edge_type == CodeEdgeType.HAS_FIELD
+
+    def test_build_schema_exposes_edge(self):
+        """Test building SCHEMA_EXPOSES edge."""
+        edge = (
+            EdgeBuilder()
+            .schema_exposes()
+            .from_node("field_id")
+            .to_node("schema_field_id")
+            .build()
+        )
+
+        assert edge.edge_type == CodeEdgeType.SCHEMA_EXPOSES
 
     def test_edge_requires_type(self):
         """Test that edge type is required."""

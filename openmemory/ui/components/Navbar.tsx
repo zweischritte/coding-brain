@@ -9,7 +9,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CreateMemoryDialog } from "@/app/memories/components/CreateMemoryDialog";
 import { useMemoriesApi } from "@/hooks/useMemoriesApi";
-import Image from "next/image";
 import { useStats } from "@/hooks/useStats";
 import { useAppsApi } from "@/hooks/useAppsApi";
 import { Settings } from "lucide-react";
@@ -108,8 +107,7 @@ export function Navbar() {
     <header className="sticky top-0 z-50 w-full border-b border-zinc-800 bg-zinc-950/95 backdrop-blur supports-[backdrop-filter]:bg-zinc-950/60">
       <div className="container flex h-14 items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
-          <Image src="/logo.svg" alt="OpenMemory" width={26} height={26} />
-          <span className="text-xl font-medium">OpenMemory</span>
+          <span className="text-xl font-medium">Coding-Brain</span>
         </Link>
         <div className="flex items-center gap-2">
           <Link href="/">

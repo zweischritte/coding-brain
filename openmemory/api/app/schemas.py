@@ -226,7 +226,9 @@ class ImpactAnalysisRequest(BaseModel):
     symbol_id: Optional[str] = None
     include_cross_language: bool = False
     include_inferred_edges: Optional[bool] = None
-    max_depth: int = Field(default=3, ge=1, le=10)
+    include_field_edges: bool = False
+    include_schema_edges: bool = False
+    max_depth: int = Field(default=10, ge=1, le=10)
     confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
 

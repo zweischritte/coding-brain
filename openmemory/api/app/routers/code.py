@@ -491,6 +491,8 @@ async def impact_analysis(
             max_depth=request.max_depth,
             confidence_threshold=str(request.confidence_threshold),
             include_inferred_edges=request.include_inferred_edges,
+            include_field_edges=request.include_field_edges,
+            include_schema_edges=request.include_schema_edges,
         )
 
         result = toolkit.impact_tool.analyze(input_data)

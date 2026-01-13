@@ -98,6 +98,85 @@ def mock_graph_driver_with_dependencies(mock_graph_driver, sample_scip_id):
     return mock_graph_driver
 
 
+@pytest.fixture
+def mock_graph_driver_with_field_and_schema_edges():
+    """Create a mock graph driver with field and schema edges."""
+    driver = MagicMock()
+
+    field_id = "scip-typescript mypkg module/User#field:name."
+    reader_id = "scip-typescript mypkg module/User#getName."
+    writer_id = "scip-typescript mypkg module/User#setName."
+    schema_id = "schema::graphql:/path/to/schema.ts:User:name"
+
+    field_node = MagicMock()
+    field_node.properties = {
+        "scip_id": field_id,
+        "name": "name",
+        "kind": "field",
+        "file_path": "/path/to/model.ts",
+        "line_start": 3,
+        "line_end": 3,
+    }
+
+    reader_node = MagicMock()
+    reader_node.properties = {
+        "scip_id": reader_id,
+        "name": "getName",
+        "kind": "method",
+        "file_path": "/path/to/reader.ts",
+    }
+
+    writer_node = MagicMock()
+    writer_node.properties = {
+        "scip_id": writer_id,
+        "name": "setName",
+        "kind": "method",
+        "file_path": "/path/to/writer.ts",
+    }
+
+    schema_node = MagicMock()
+    schema_node.properties = {
+        "name": "name",
+        "schema_type": "graphql",
+        "file_path": "/path/to/schema.ts",
+    }
+
+    reads_edge = MagicMock()
+    reads_edge.source_id = reader_id
+    reads_edge.target_id = field_id
+    reads_edge.edge_type = CodeEdgeType.READS
+    reads_edge.properties = {}
+
+    writes_edge = MagicMock()
+    writes_edge.source_id = writer_id
+    writes_edge.target_id = field_id
+    writes_edge.edge_type = CodeEdgeType.WRITES
+    writes_edge.properties = {}
+
+    schema_edge = MagicMock()
+    schema_edge.source_id = field_id
+    schema_edge.target_id = schema_id
+    schema_edge.edge_type = CodeEdgeType.SCHEMA_EXPOSES
+    schema_edge.properties = {}
+
+    def get_node_side_effect(node_id):
+        if node_id == field_id:
+            return field_node
+        if node_id == reader_id:
+            return reader_node
+        if node_id == writer_id:
+            return writer_node
+        if node_id == schema_id:
+            return schema_node
+        return None
+
+    driver.get_node.side_effect = get_node_side_effect
+    driver.get_incoming_edges.return_value = [reads_edge, writes_edge]
+    driver.get_outgoing_edges.return_value = [schema_edge]
+
+    return driver, field_id
+
+
 # =============================================================================
 # ImpactAnalysisConfig Tests
 # =============================================================================
@@ -112,11 +191,13 @@ class TestImpactAnalysisConfig:
 
         config = ImpactAnalysisConfig()
 
-        assert config.max_depth == 3
+        assert config.max_depth == 10
         assert config.confidence_threshold == "probable"
         assert config.include_cross_language is False
         assert config.max_affected_files == 100
         assert config.include_inferred_edges is True
+        assert config.include_field_edges is False
+        assert config.include_schema_edges is False
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -128,6 +209,8 @@ class TestImpactAnalysisConfig:
             include_cross_language=True,
             max_affected_files=50,
             include_inferred_edges=False,
+            include_field_edges=True,
+            include_schema_edges=True,
         )
 
         assert config.max_depth == 5
@@ -135,6 +218,8 @@ class TestImpactAnalysisConfig:
         assert config.include_cross_language is True
         assert config.max_affected_files == 50
         assert config.include_inferred_edges is False
+        assert config.include_field_edges is True
+        assert config.include_schema_edges is True
 
 
 # =============================================================================
@@ -179,6 +264,20 @@ class TestImpactInput:
         )
 
         assert input_data.max_depth == 5
+
+    def test_field_edge_flag(self):
+        """Test field/schema edge flags in input."""
+        from openmemory.api.tools.impact_analysis import ImpactInput
+
+        input_data = ImpactInput(
+            repo_id="myrepo",
+            symbol_id="scip-python myapp module/func.",
+            include_field_edges=True,
+            include_schema_edges=True,
+        )
+
+        assert input_data.include_field_edges is True
+        assert input_data.include_schema_edges is True
 
 
 # =============================================================================
@@ -346,6 +445,53 @@ class TestImpactAnalysisTool:
             assert result.affected_files[0].reason is not None
             assert len(result.affected_files[0].reason) > 0
 
+    def test_analyze_includes_field_edges(
+        self, mock_graph_driver_with_field_and_schema_edges
+    ):
+        """Test field READS/WRITES edges are traversed when enabled."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        driver, field_id = mock_graph_driver_with_field_and_schema_edges
+        tool = ImpactAnalysisTool(graph_driver=driver)
+
+        result = tool.analyze(
+            ImpactInput(
+                repo_id="myrepo",
+                symbol_id=field_id,
+                include_field_edges=True,
+            )
+        )
+
+        file_paths = {af.file_path for af in result.affected_files}
+        assert "/path/to/reader.ts" in file_paths
+        assert "/path/to/writer.ts" in file_paths
+
+    def test_analyze_includes_schema_edges(
+        self, mock_graph_driver_with_field_and_schema_edges
+    ):
+        """Test schema edges are traversed when enabled."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        driver, field_id = mock_graph_driver_with_field_and_schema_edges
+        tool = ImpactAnalysisTool(graph_driver=driver)
+
+        result = tool.analyze(
+            ImpactInput(
+                repo_id="myrepo",
+                symbol_id=field_id,
+                include_schema_edges=True,
+            )
+        )
+
+        file_paths = {af.file_path for af in result.affected_files}
+        assert "/path/to/schema.ts" in file_paths
+
 
 # =============================================================================
 # Error Handling Tests
@@ -495,7 +641,7 @@ class TestFactoryFunction:
         tool = create_impact_analysis_tool(graph_driver=mock_graph_driver)
 
         assert tool is not None
-        assert tool.config.max_depth == 3  # Default
+        assert tool.config.max_depth == 10  # Default
 
     def test_create_with_custom_config(self, mock_graph_driver):
         """Test factory function with custom config."""

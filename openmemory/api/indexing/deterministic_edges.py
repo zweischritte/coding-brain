@@ -38,6 +38,25 @@ class DeterministicEdges:
 
     call_edges: list[tuple[str, str]] = field(default_factory=list)
     import_targets: list[Path] = field(default_factory=list)
+    field_reads: list[tuple[str, str]] = field(default_factory=list)
+    field_writes: list[tuple[str, str]] = field(default_factory=list)
+    schema_fields: list["SchemaFieldDefinition"] = field(default_factory=list)
+    schema_expose_edges: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SchemaFieldDefinition:
+    """Schema field node definition."""
+
+    schema_id: str
+    name: str
+    schema_type: str
+    schema_name: Optional[str]
+    file_path: Path
+    line_start: Optional[int]
+    line_end: Optional[int]
+    nullable: Optional[bool] = None
+    field_type: Optional[str] = None
 
 
 class RepoSymbolIndex:
@@ -49,6 +68,7 @@ class RepoSymbolIndex:
         self.functions_by_file: dict[Path, dict[str, str]] = {}
         self.classes_by_file: dict[Path, dict[str, str]] = {}
         self.methods_by_file: dict[Path, dict[str, dict[str, str]]] = {}
+        self.fields_by_file: dict[Path, dict[str, dict[str, str]]] = {}
 
         self.python_module_by_file: dict[Path, str] = {}
         self.python_module_map: dict[str, Path] = {}
@@ -81,6 +101,10 @@ class RepoSymbolIndex:
                 self.methods_by_file.setdefault(file_path, {}).setdefault(symbol.parent_name, {})[
                     symbol.name
                 ] = symbol_id
+            elif symbol.symbol_type in (SymbolType.FIELD, SymbolType.PROPERTY) and symbol.parent_name:
+                self.fields_by_file.setdefault(file_path, {}).setdefault(symbol.parent_name, {})[
+                    symbol.name
+                ] = symbol_id
 
             if language == Language.GO and symbol.symbol_type == SymbolType.FUNCTION:
                 self.go_functions_by_dir.setdefault(file_path.parent, {})[symbol.name] = symbol_id
@@ -111,6 +135,20 @@ class RepoSymbolIndex:
             .get(class_name, {})
             .get(method_name)
         )
+
+    def resolve_field_in_type(self, file_path: Path, type_name: str, field_name: str) -> Optional[str]:
+        return (
+            self.fields_by_file.get(Path(file_path), {})
+            .get(type_name, {})
+            .get(field_name)
+        )
+
+    def resolve_field_global(self, type_name: str, field_name: str) -> Optional[str]:
+        for fields in self.fields_by_file.values():
+            field_id = fields.get(type_name, {}).get(field_name)
+            if field_id:
+                return field_id
+        return None
 
     def resolve_symbol_in_file(self, file_path: Path, name: str) -> Optional[str]:
         symbol_id = self.resolve_function_in_file(file_path, name)
@@ -221,6 +259,25 @@ class DeterministicEdgeExtractor:
 
         import_map, import_targets = self._collect_ts_imports(file_path, source, root)
         call_edges: list[tuple[str, str]] = []
+        field_reads: list[tuple[str, str]] = []
+        field_writes: list[tuple[str, str]] = []
+
+        def source_for_access(current_class: Optional[str], current_caller: Optional[str]) -> Optional[str]:
+            if current_caller:
+                return current_caller
+            if current_class:
+                return self.symbol_index.resolve_class_in_file(file_path, current_class)
+            return None
+
+        def record_field_access(
+            access_list: list[tuple[str, str]],
+            field_id: Optional[str],
+            current_class: Optional[str],
+            current_caller: Optional[str],
+        ) -> None:
+            source_id = source_for_access(current_class, current_caller)
+            if field_id and source_id:
+                access_list.append((source_id, field_id))
 
         def visit(node: Node, current_class: Optional[str], current_caller: Optional[str]) -> None:
             if node.type == "class_declaration":
@@ -266,6 +323,31 @@ class DeterministicEdgeExtractor:
                         visit(child, current_class, current_caller)
                 return
 
+            if node.type == "assignment_expression":
+                left_node = node.child_by_field_name("left")
+                right_node = node.child_by_field_name("right")
+                if left_node and left_node.type == "member_expression":
+                    field_id = self._resolve_ts_field_access(
+                        file_path, source, left_node, current_class
+                    )
+                    record_field_access(field_writes, field_id, current_class, current_caller)
+                if right_node:
+                    visit(right_node, current_class, current_caller)
+                return
+
+            if node.type == "update_expression":
+                member_node = next(
+                    (child for child in node.children if child.type == "member_expression"),
+                    None,
+                )
+                if member_node:
+                    field_id = self._resolve_ts_field_access(
+                        file_path, source, member_node, current_class
+                    )
+                    record_field_access(field_reads, field_id, current_class, current_caller)
+                    record_field_access(field_writes, field_id, current_class, current_caller)
+                return
+
             if node.type == "call_expression" and current_caller:
                 target_id = self._resolve_ts_call(
                     file_path,
@@ -276,12 +358,36 @@ class DeterministicEdgeExtractor:
                 )
                 if target_id:
                     call_edges.append((current_caller, target_id))
+                args_node = node.child_by_field_name("arguments")
+                if args_node:
+                    for child in args_node.children:
+                        visit(child, current_class, current_caller)
+                return
+
+            if node.type == "member_expression":
+                field_id = self._resolve_ts_field_access(
+                    file_path, source, node, current_class
+                )
+                record_field_access(field_reads, field_id, current_class, current_caller)
+                return
 
             for child in node.children:
                 visit(child, current_class, current_caller)
 
         visit(root, None, None)
-        return DeterministicEdges(call_edges=call_edges, import_targets=import_targets)
+        schema_fields, schema_expose_edges = self._extract_ts_schema_exposures(
+            file_path,
+            source,
+            root,
+        )
+        return DeterministicEdges(
+            call_edges=call_edges,
+            import_targets=import_targets,
+            field_reads=field_reads,
+            field_writes=field_writes,
+            schema_fields=schema_fields,
+            schema_expose_edges=schema_expose_edges,
+        )
 
     def _collect_ts_imports(
         self,
@@ -410,6 +516,445 @@ class DeterministicEdgeExtractor:
                 return self.symbol_index.resolve_method_in_class(file_path, current_class, prop_name)
 
         return None
+
+    def _resolve_ts_field_access(
+        self,
+        file_path: Path,
+        source: bytes,
+        node: Node,
+        current_class: Optional[str],
+    ) -> Optional[str]:
+        if node.type != "member_expression":
+            return None
+
+        obj = node.child_by_field_name("object")
+        prop = node.child_by_field_name("property")
+        if not obj or not prop:
+            return None
+
+        prop_name = self._node_text(source, prop)
+        if not prop_name:
+            return None
+
+        if obj.type == "this" and current_class:
+            return self.symbol_index.resolve_field_in_type(file_path, current_class, prop_name)
+
+        if obj.type == "identifier":
+            obj_name = self._node_text(source, obj)
+            if obj_name:
+                target = self.symbol_index.resolve_field_in_type(file_path, obj_name, prop_name)
+                if target:
+                    return target
+                if current_class and obj_name == current_class:
+                    return self.symbol_index.resolve_field_in_type(file_path, current_class, prop_name)
+
+        return None
+
+    def _extract_ts_schema_exposures(
+        self,
+        file_path: Path,
+        source: bytes,
+        root: Node,
+    ) -> tuple[list[SchemaFieldDefinition], list[tuple[str, str]]]:
+        schema_fields: list[SchemaFieldDefinition] = []
+        schema_edges: list[tuple[str, str]] = []
+        seen_schema_ids: set[str] = set()
+
+        # GraphQL: @Field decorators on class fields
+        for symbol_ref in self.symbol_index.symbols_by_file.get(Path(file_path), []):
+            symbol = symbol_ref.symbol
+            if symbol.symbol_type != SymbolType.FIELD:
+                continue
+            if not symbol.decorators:
+                continue
+            if not any(self._decorator_base_name(dec.name) == "Field" for dec in symbol.decorators):
+                continue
+
+            schema_name = symbol.parent_name or ""
+            graphql_nullable, graphql_type = self._graphql_field_metadata(symbol)
+            schema_id = self._schema_field_id(
+                schema_type="graphql",
+                file_path=file_path,
+                schema_name=schema_name,
+                field_name=symbol.name,
+            )
+            if schema_id not in seen_schema_ids:
+                seen_schema_ids.add(schema_id)
+                schema_fields.append(
+                    SchemaFieldDefinition(
+                        schema_id=schema_id,
+                        name=symbol.name,
+                        schema_type="graphql",
+                        schema_name=schema_name,
+                        file_path=file_path,
+                        line_start=symbol.line_start,
+                        line_end=symbol.line_end,
+                        nullable=graphql_nullable,
+                        field_type=graphql_type,
+                    )
+                )
+            schema_edges.append((symbol_ref.symbol_id, schema_id))
+
+        # DTO validators: class-validator style decorators
+        for symbol_ref in self.symbol_index.symbols_by_file.get(Path(file_path), []):
+            symbol = symbol_ref.symbol
+            if symbol.symbol_type != SymbolType.FIELD:
+                continue
+            if not symbol.decorators:
+                continue
+
+            dto_metadata = self._dto_field_metadata(symbol.decorators)
+            if not dto_metadata:
+                continue
+
+            dto_nullable, dto_type = dto_metadata
+            schema_name = symbol.parent_name or ""
+            schema_id = self._schema_field_id(
+                schema_type="dto",
+                file_path=file_path,
+                schema_name=schema_name,
+                field_name=symbol.name,
+            )
+            if schema_id not in seen_schema_ids:
+                seen_schema_ids.add(schema_id)
+                schema_fields.append(
+                    SchemaFieldDefinition(
+                        schema_id=schema_id,
+                        name=symbol.name,
+                        schema_type="dto",
+                        schema_name=schema_name,
+                        file_path=file_path,
+                        line_start=symbol.line_start,
+                        line_end=symbol.line_end,
+                        nullable=dto_nullable,
+                        field_type=dto_type,
+                    )
+                )
+            schema_edges.append((symbol_ref.symbol_id, schema_id))
+
+        # Zod: z.object({ ... }) shapes
+        zod_aliases = self._collect_ts_zod_aliases(source, root)
+        if not zod_aliases:
+            zod_aliases.add("z")
+
+        def visit(node: Node) -> None:
+            if node.type == "variable_declarator":
+                name_node = node.child_by_field_name("name")
+                value_node = node.child_by_field_name("value")
+                if name_node and value_node and self._is_zod_object_call(value_node, source, zod_aliases):
+                    schema_name = self._node_text(source, name_node)
+                    schema_base = self._schema_base_name(schema_name)
+                    shape_node = self._extract_zod_shape_node(value_node)
+                    if shape_node:
+                        for pair in shape_node.children:
+                            if pair.type != "pair":
+                                continue
+                            key_node = pair.child_by_field_name("key") or pair.child_by_field_name("property")
+                            if not key_node:
+                                key_node = next(
+                                    (child for child in pair.children if child.type in ("property_identifier", "string")),
+                                    None,
+                                )
+                            if not key_node:
+                                continue
+                            field_name = self._property_key_text(source, key_node)
+                            if not field_name:
+                                continue
+                            value_node = pair.child_by_field_name("value")
+                            field_type, nullable = self._zod_field_metadata(
+                                value_node,
+                                source,
+                                zod_aliases,
+                            )
+                            schema_id = self._schema_field_id(
+                                schema_type="zod",
+                                file_path=file_path,
+                                schema_name=schema_name,
+                                field_name=field_name,
+                            )
+                            if schema_id not in seen_schema_ids:
+                                seen_schema_ids.add(schema_id)
+                                schema_fields.append(
+                                    SchemaFieldDefinition(
+                                        schema_id=schema_id,
+                                        name=field_name,
+                                        schema_type="zod",
+                                        schema_name=schema_name,
+                                        file_path=file_path,
+                                        line_start=pair.start_point[0] + 1,
+                                        line_end=pair.end_point[0] + 1,
+                                        nullable=nullable,
+                                        field_type=field_type,
+                                    )
+                                )
+                            if schema_base:
+                                field_id = self.symbol_index.resolve_field_in_type(
+                                    file_path,
+                                    schema_base,
+                                    field_name,
+                                )
+                                if field_id:
+                                    schema_edges.append((field_id, schema_id))
+
+                return
+
+            for child in node.children:
+                visit(child)
+
+        visit(root)
+        return schema_fields, schema_edges
+
+    def _decorator_base_name(self, name: str) -> str:
+        return name.split(".")[-1]
+
+    def _graphql_field_metadata(self, symbol: Symbol) -> tuple[Optional[bool], Optional[str]]:
+        for dec in symbol.decorators:
+            if self._decorator_base_name(dec.name) != "Field":
+                continue
+            raw_text = dec.raw_text or ""
+            return self._parse_nullable_option(raw_text), self._parse_graphql_type(raw_text)
+        return None, None
+
+    def _parse_nullable_option(self, raw_text: str) -> Optional[bool]:
+        match = re.search(r"nullable\s*:\s*(true|false)", raw_text)
+        if not match:
+            return None
+        return match.group(1) == "true"
+
+    def _parse_graphql_type(self, raw_text: str) -> Optional[str]:
+        match = re.search(r"=>\s*(\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_]*)", raw_text)
+        if not match:
+            return None
+        type_expr = match.group(1).strip()
+        if type_expr.startswith("[") and type_expr.endswith("]"):
+            inner = type_expr[1:-1].strip()
+            if inner:
+                return f"{inner}[]"
+            return None
+        return type_expr
+
+    def _dto_field_metadata(
+        self,
+        decorators: list,
+    ) -> Optional[tuple[Optional[bool], Optional[str]]]:
+        if not decorators:
+            return None
+
+        type_by_decorator = {
+            "IsString": "string",
+            "IsInt": "number",
+            "IsNumber": "number",
+            "IsFloat": "number",
+            "IsBoolean": "boolean",
+            "IsDate": "date",
+            "IsEmail": "email",
+            "IsUUID": "uuid",
+            "IsEnum": "enum",
+            "IsObject": "object",
+            "IsArray": "array",
+        }
+        optional_decorators = {"IsOptional"}
+        required_decorators = {"IsDefined", "IsNotEmpty"}
+
+        decorator_names = [self._decorator_base_name(dec.name) for dec in decorators]
+        if not any(
+            name in type_by_decorator
+            or name in optional_decorators
+            or name in required_decorators
+            for name in decorator_names
+        ):
+            return None
+
+        nullable: Optional[bool] = None
+        if any(name in optional_decorators for name in decorator_names):
+            nullable = True
+        elif any(name in required_decorators for name in decorator_names):
+            nullable = False
+
+        base_type = next(
+            (type_by_decorator[name] for name in decorator_names if name in type_by_decorator),
+            None,
+        )
+        if "IsArray" in decorator_names and base_type and base_type != "array":
+            field_type = f"{base_type}[]"
+        else:
+            field_type = base_type
+
+        return nullable, field_type
+
+    def _zod_field_metadata(
+        self,
+        value_node: Optional[Node],
+        source: bytes,
+        aliases: set[str],
+    ) -> tuple[Optional[str], Optional[bool]]:
+        if not value_node:
+            return None, None
+
+        optional = False
+        nullable = False
+        array_modifier = False
+        current = value_node
+
+        while current and current.type == "call_expression":
+            fn_node = current.child_by_field_name("function") or (
+                current.children[0] if current.children else None
+            )
+            if not fn_node or fn_node.type != "member_expression":
+                break
+            obj_node = fn_node.child_by_field_name("object")
+            prop_node = fn_node.child_by_field_name("property")
+            prop_name = self._node_text(source, prop_node) if prop_node else ""
+            if prop_name in ("optional", "nullable", "nullish", "array"):
+                if prop_name in ("optional", "nullish"):
+                    optional = True
+                if prop_name in ("nullable", "nullish"):
+                    nullable = True
+                if prop_name == "array":
+                    array_modifier = True
+                current = obj_node
+                continue
+            break
+
+        base_type = self._zod_base_type_from_call(current, source, aliases)
+        if not base_type:
+            if optional or nullable:
+                return None, True
+            return None, None
+
+        field_type = self._zod_type_from_base(base_type, current, source, aliases)
+        if array_modifier:
+            field_type = f"{field_type}[]" if field_type else "array"
+
+        effective_nullable = True if (optional or nullable) else False
+        return field_type, effective_nullable
+
+    def _zod_base_type_from_call(
+        self,
+        node: Optional[Node],
+        source: bytes,
+        aliases: set[str],
+    ) -> Optional[str]:
+        if not node or node.type != "call_expression":
+            return None
+        fn_node = node.child_by_field_name("function") or (
+            node.children[0] if node.children else None
+        )
+        if not fn_node or fn_node.type != "member_expression":
+            return None
+        obj_node = fn_node.child_by_field_name("object")
+        prop_node = fn_node.child_by_field_name("property")
+        if not obj_node or not prop_node:
+            return None
+        if obj_node.type != "identifier":
+            return None
+        obj_name = self._node_text(source, obj_node)
+        if obj_name not in aliases:
+            return None
+        base_type = self._node_text(source, prop_node)
+        return {
+            "nativeEnum": "enum",
+        }.get(base_type, base_type)
+
+    def _zod_type_from_base(
+        self,
+        base_type: str,
+        node: Optional[Node],
+        source: bytes,
+        aliases: set[str],
+    ) -> Optional[str]:
+        if base_type == "array":
+            item_type = self._zod_array_item_type(node, source, aliases)
+            if item_type:
+                return f"{item_type}[]"
+            return "array"
+        return base_type
+
+    def _zod_array_item_type(
+        self,
+        node: Optional[Node],
+        source: bytes,
+        aliases: set[str],
+    ) -> Optional[str]:
+        if not node or node.type != "call_expression":
+            return None
+        args = node.child_by_field_name("arguments")
+        if not args:
+            return None
+        for child in args.children:
+            if child.type != "call_expression":
+                continue
+            inner_type = self._zod_base_type_from_call(child, source, aliases)
+            if inner_type:
+                return self._zod_type_from_base(inner_type, child, source, aliases)
+        return None
+
+    def _collect_ts_zod_aliases(self, source: bytes, root: Node) -> set[str]:
+        aliases: set[str] = set()
+        for node in root.children:
+            if node.type != "import_statement":
+                continue
+            module_node = node.child_by_field_name("source")
+            module_spec = self._string_literal_value(source, module_node) if module_node else None
+            if module_spec != "zod":
+                continue
+            import_clause = next((c for c in node.children if c.type == "import_clause"), None)
+            if not import_clause:
+                continue
+            for child in import_clause.children:
+                if child.type == "identifier":
+                    aliases.add(self._node_text(source, child))
+                elif child.type == "named_imports":
+                    for spec in child.children:
+                        if spec.type != "import_specifier":
+                            continue
+                        identifiers = [c for c in spec.children if c.type == "identifier"]
+                        if identifiers:
+                            aliases.add(self._node_text(source, identifiers[-1]))
+                elif child.type == "namespace_import":
+                    ident = next((c for c in child.children if c.type == "identifier"), None)
+                    if ident:
+                        aliases.add(self._node_text(source, ident))
+        return aliases
+
+    def _is_zod_object_call(self, node: Node, source: bytes, aliases: set[str]) -> bool:
+        if node.type != "call_expression":
+            return False
+        fn_node = node.child_by_field_name("function") or (node.children[0] if node.children else None)
+        if not fn_node or fn_node.type != "member_expression":
+            return False
+        obj_node = fn_node.child_by_field_name("object")
+        prop_node = fn_node.child_by_field_name("property")
+        if not obj_node or not prop_node:
+            return False
+        obj_name = self._node_text(source, obj_node)
+        prop_name = self._node_text(source, prop_node)
+        return prop_name == "object" and obj_name in aliases
+
+    def _extract_zod_shape_node(self, node: Node) -> Optional[Node]:
+        args = node.child_by_field_name("arguments")
+        if not args:
+            return None
+        return next((child for child in args.children if child.type == "object"), None)
+
+    def _schema_base_name(self, schema_name: str) -> Optional[str]:
+        if schema_name.endswith("Schema") and len(schema_name) > len("Schema"):
+            return schema_name[: -len("Schema")]
+        return None
+
+    def _property_key_text(self, source: bytes, node: Node) -> str:
+        if node.type == "string":
+            return self._string_literal_value(source, node) or ""
+        return self._node_text(source, node)
+
+    def _schema_field_id(
+        self,
+        schema_type: str,
+        file_path: Path,
+        schema_name: str,
+        field_name: str,
+    ) -> str:
+        return f"schema::{schema_type}:{file_path}:{schema_name}:{field_name}"
 
     # ---------------------------------------------------------------------
     # Java

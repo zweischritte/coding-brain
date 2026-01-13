@@ -92,6 +92,8 @@ from openmemory.api.indexing.graph_projection import (
     FileNodeBuilder,
     SymbolNodeBuilder,
     PackageNodeBuilder,
+    SchemaFieldNodeBuilder,
+    OpenAPIDefNodeBuilder,
     EdgeBuilder,
     # Batch operations
     BatchOperation,
@@ -250,6 +252,8 @@ __all__ = [
     "FileNodeBuilder",
     "SymbolNodeBuilder",
     "PackageNodeBuilder",
+    "SchemaFieldNodeBuilder",
+    "OpenAPIDefNodeBuilder",
     "EdgeBuilder",
     "BatchOperation",
     "BatchOperationType",
