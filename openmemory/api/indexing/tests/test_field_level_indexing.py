@@ -308,6 +308,181 @@ function build() {
     assert store.has_edge(build_node.id, firstname_node.id, CodeEdgeType.WRITES)
 
 
+def test_zod_satisfies_object_literal_writes_edges(indexer):
+    indexer, store, src = indexer
+
+    code = """
+import { z } from 'zod';
+
+const ProducerSchema = z.object({
+  firstname: z.string(),
+  lastname: z.string(),
+});
+
+function build() {
+  const value = { firstname: "Ada", lastname: "Lovelace" } satisfies z.output<typeof ProducerSchema>;
+  return value;
+}
+"""
+    file_path = src / "producer-satisfies.ts"
+    file_path.write_text(code)
+
+    indexer.index_repository()
+
+    symbols = store.query_nodes_by_type(CodeNodeType.SYMBOL)
+    build_node = _find_symbol(symbols, "build", "function")
+    assert build_node is not None
+
+    schema_nodes = store.query_nodes_by_type(CodeNodeType.SCHEMA_FIELD)
+    firstname_node = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "firstname"
+        ),
+        None,
+    )
+    assert firstname_node is not None
+    assert store.has_edge(build_node.id, firstname_node.id, CodeEdgeType.WRITES)
+
+
+def test_zod_parse_object_literal_writes_edges(indexer):
+    indexer, store, src = indexer
+
+    code = """
+import { z } from 'zod';
+
+const ProducerSchema = z.object({
+  firstname: z.string(),
+  lastname: z.string(),
+});
+
+function build() {
+  ProducerSchema.parse({ firstname: "Ada", lastname: "Lovelace" });
+}
+"""
+    file_path = src / "producer-parse.ts"
+    file_path.write_text(code)
+
+    indexer.index_repository()
+
+    symbols = store.query_nodes_by_type(CodeNodeType.SYMBOL)
+    build_node = _find_symbol(symbols, "build", "function")
+    assert build_node is not None
+
+    schema_nodes = store.query_nodes_by_type(CodeNodeType.SCHEMA_FIELD)
+    firstname_node = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "firstname"
+        ),
+        None,
+    )
+    assert firstname_node is not None
+    assert store.has_edge(build_node.id, firstname_node.id, CodeEdgeType.WRITES)
+
+
+def test_zod_infer_resolves_workspace_package(tmp_path: Path):
+    store = MemoryGraphStore()
+    indexer = CodeIndexingService(
+        root_path=tmp_path,
+        repo_id="test-repo",
+        graph_driver=store,
+        opensearch_client=None,
+        embedding_service=None,
+        include_api_boundaries=False,
+        extensions=[".ts"],
+    )
+
+    package_root = tmp_path / "packages" / "shared"
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "package.json").write_text('{"name": "@repo/shared"}')
+
+    schema_path = package_root / "src" / "schema.ts"
+    schema_path.parent.mkdir(parents=True, exist_ok=True)
+    schema_path.write_text(
+        """
+import { z } from 'zod';
+
+export const ProducerSchema = z.object({
+  firstname: z.string(),
+  lastname: z.string(),
+});
+"""
+    )
+
+    consumer_path = tmp_path / "apps" / "app" / "src" / "consumer.ts"
+    consumer_path.parent.mkdir(parents=True, exist_ok=True)
+    consumer_path.write_text(
+        """
+import { z } from 'zod';
+import { ProducerSchema } from '@repo/shared';
+
+function build(): z.infer<typeof ProducerSchema> {
+  return { firstname: "Alice", lastname: "Smith" };
+}
+"""
+    )
+
+    indexer.index_repository()
+
+    symbols = store.query_nodes_by_type(CodeNodeType.SYMBOL)
+    build_node = _find_symbol(symbols, "build", "function")
+    assert build_node is not None
+
+    schema_nodes = store.query_nodes_by_type(CodeNodeType.SCHEMA_FIELD)
+    firstname_node = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "firstname"
+            and node.properties.get("file_path") == str(schema_path)
+        ),
+        None,
+    )
+    assert firstname_node is not None
+    assert store.has_edge(build_node.id, firstname_node.id, CodeEdgeType.WRITES)
+
+
+def test_nested_zod_schema_fields(indexer):
+    indexer, store, src = indexer
+
+    code = """
+import { z } from 'zod';
+
+const schema = z.object({
+  movie: z.object({
+    producers: z.array(
+      z.object({
+        firstname: z.string(),
+        lastname: z.string(),
+      }),
+    ),
+  }),
+});
+"""
+    file_path = src / "nested.ts"
+    file_path.write_text(code)
+
+    indexer.index_repository()
+
+    schema_nodes = store.query_nodes_by_type(CodeNodeType.SCHEMA_FIELD)
+    nested_node = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "movie.producers.firstname"
+        ),
+        None,
+    )
+    assert nested_node is not None
+
+
 def test_zod_schema_alias_edges(tmp_path: Path):
     store = MemoryGraphStore()
     indexer = CodeIndexingService(
@@ -368,6 +543,158 @@ const ProducerSchema = z.object({
             for node in schema_nodes
             if node.properties.get("schema_type") == "zod"
             and node.properties.get("name") == "firstname"
+            and node.properties.get("file_path") == str(local_path)
+        ),
+        None,
+    )
+
+    assert canonical_firstname is not None
+    assert local_firstname is not None
+    assert store.has_edge(
+        local_firstname.id,
+        canonical_firstname.id,
+        CodeEdgeType.SCHEMA_ALIASES,
+    )
+
+
+def test_zod_schema_alias_edges_generic_name(tmp_path: Path):
+    store = MemoryGraphStore()
+    indexer = CodeIndexingService(
+        root_path=tmp_path,
+        repo_id="test-repo",
+        graph_driver=store,
+        opensearch_client=None,
+        embedding_service=None,
+        include_api_boundaries=False,
+        extensions=[".ts"],
+        enable_zod_schema_aliases=True,
+    )
+
+    canonical_path = tmp_path / "packages" / "core" / "entities" / "movie.schema.ts"
+    local_path = tmp_path / "apps" / "frontend" / "routes" / "movie-report.state.ts"
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+
+    canonical_path.write_text(
+        """
+import { z } from 'zod';
+
+export const MovieSchema = z.object({
+  title: z.string(),
+  year: z.number(),
+  producers: z.array(z.string()),
+});
+"""
+    )
+    local_path.write_text(
+        """
+import { z } from 'zod';
+
+const schema = z.object({
+  title: z.string(),
+  year: z.number(),
+  producers: z.array(z.string()),
+});
+"""
+    )
+
+    indexer.index_repository()
+
+    schema_nodes = store.query_nodes_by_type(CodeNodeType.SCHEMA_FIELD)
+    canonical_title = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "title"
+            and node.properties.get("file_path") == str(canonical_path)
+        ),
+        None,
+    )
+    local_title = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "title"
+            and node.properties.get("file_path") == str(local_path)
+        ),
+        None,
+    )
+
+    assert canonical_title is not None
+    assert local_title is not None
+    assert store.has_edge(
+        local_title.id,
+        canonical_title.id,
+        CodeEdgeType.SCHEMA_ALIASES,
+    )
+
+
+def test_zod_subschema_alias_edges(tmp_path: Path):
+    store = MemoryGraphStore()
+    indexer = CodeIndexingService(
+        root_path=tmp_path,
+        repo_id="test-repo",
+        graph_driver=store,
+        opensearch_client=None,
+        embedding_service=None,
+        include_api_boundaries=False,
+        extensions=[".ts"],
+        enable_zod_schema_aliases=True,
+    )
+
+    canonical_path = tmp_path / "packages" / "core" / "producer.schema.ts"
+    local_path = tmp_path / "apps" / "frontend" / "routes" / "report.state.ts"
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+
+    canonical_path.write_text(
+        """
+import { z } from 'zod';
+
+export const ProducerSchema = z.object({
+  firstname: z.string(),
+  lastname: z.string(),
+});
+"""
+    )
+    local_path.write_text(
+        """
+import { z } from 'zod';
+
+const schema = z.object({
+  movie: z.object({
+    producers: z.array(
+      z.object({
+        firstname: z.string(),
+        lastname: z.string(),
+      }),
+    ),
+  }),
+});
+"""
+    )
+
+    indexer.index_repository()
+
+    schema_nodes = store.query_nodes_by_type(CodeNodeType.SCHEMA_FIELD)
+    canonical_firstname = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "firstname"
+            and node.properties.get("file_path") == str(canonical_path)
+        ),
+        None,
+    )
+    local_firstname = next(
+        (
+            node
+            for node in schema_nodes
+            if node.properties.get("schema_type") == "zod"
+            and node.properties.get("name") == "movie.producers.firstname"
             and node.properties.get("file_path") == str(local_path)
         ),
         None,

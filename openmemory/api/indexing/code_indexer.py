@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import hashlib
 import logging
 import re
@@ -53,6 +54,18 @@ _DEFAULT_ZOD_SCHEMA_ALIAS_LOCAL_PATTERNS = [
 ]
 _DEFAULT_ZOD_SCHEMA_ALIAS_MIN_FIELDS = 3
 _DEFAULT_ZOD_SCHEMA_ALIAS_OVERLAP = 0.8
+_DEFAULT_ZOD_SCHEMA_ALIAS_STOP_WORDS = {
+    "schema",
+    "state",
+    "form",
+    "validator",
+    "input",
+    "output",
+    "type",
+    "entity",
+    "dto",
+    "model",
+}
 _FILE_DOC_MAX_CHARS = 8000
 _GENERATED_PATH_HINTS = ("dist", "build", "out", "generated", "__generated__")
 _VENDOR_PATH_HINTS = ("node_modules", "vendor")
@@ -333,6 +346,20 @@ class CodeIndexingService:
 
         return symbol_index, parse_cache
 
+    def _build_package_map(self) -> dict[str, Path]:
+        package_map: dict[str, Path] = {}
+        for path in self.root_path.rglob("package.json"):
+            if self._is_ignored(str(path)):
+                continue
+            try:
+                data = json.loads(path.read_text(errors="ignore"))
+            except Exception:
+                continue
+            name = data.get("name")
+            if isinstance(name, str) and name:
+                package_map.setdefault(name, path.parent)
+        return package_map
+
     def reset_repo(self) -> None:
         if hasattr(self.graph_driver, "delete_repo_nodes"):
             self.graph_driver.delete_repo_nodes(self.repo_id)
@@ -385,7 +412,13 @@ class CodeIndexingService:
         report_progress("scan")
 
         self._symbol_index, parse_cache = self._build_symbol_index(source_files)
-        self._edge_extractor = DeterministicEdgeExtractor(self.root_path, self._symbol_index)
+        package_map = self._build_package_map()
+        self._edge_extractor = DeterministicEdgeExtractor(
+            self.root_path,
+            self._symbol_index,
+            package_map=package_map,
+        )
+        self._edge_extractor.build_global_zod_schema_map(source_files, parse_cache)
 
         for file_path in source_files:
             files_scanned += 1
@@ -1133,15 +1166,55 @@ class CodeIndexingService:
         if not schemas:
             return
 
+        subschemas: dict[tuple[str, Path, str], dict[str, Any]] = {}
+        for entry in schemas.values():
+            for field_name in entry["fields"]:
+                if "." not in field_name:
+                    continue
+                parts = field_name.split(".")
+                if len(parts) < 2:
+                    continue
+                parent_segment = parts[-2]
+                leaf = parts[-1]
+                key = (entry["schema_name"], entry["file_path"], parent_segment)
+                sub_entry = subschemas.setdefault(
+                    key,
+                    {
+                        "schema_name": parent_segment,
+                        "file_path": entry["file_path"],
+                        "fields": set(),
+                        "field_ids": {},
+                        "is_subschema": True,
+                    },
+                )
+                field_id = entry["field_ids"].get(field_name)
+                if not field_id:
+                    continue
+                sub_entry["fields"].add(leaf)
+                sub_entry["field_ids"][leaf] = field_id
+
         canonical_by_base: dict[str, list[dict[str, Any]]] = {}
         local_by_base: dict[str, list[dict[str, Any]]] = {}
         for entry in schemas.values():
             rel_path = self._relative_path_for_match(entry["file_path"])
-            base_name = self._schema_base_name(entry["schema_name"])
+            alias_keys = self._alias_keys_for_schema(entry["schema_name"], entry["file_path"])
+            if not alias_keys:
+                continue
             if self._path_matches(rel_path, self.zod_schema_alias_canonical_patterns):
-                canonical_by_base.setdefault(base_name, []).append(entry)
+                for base_name in alias_keys:
+                    canonical_by_base.setdefault(base_name, []).append(entry)
             if self._path_matches(rel_path, self.zod_schema_alias_local_patterns):
-                local_by_base.setdefault(base_name, []).append(entry)
+                for base_name in alias_keys:
+                    local_by_base.setdefault(base_name, []).append(entry)
+
+        for entry in subschemas.values():
+            rel_path = self._relative_path_for_match(entry["file_path"])
+            alias_keys = self._alias_keys_for_schema(entry["schema_name"], entry["file_path"])
+            if not alias_keys:
+                continue
+            if self._path_matches(rel_path, self.zod_schema_alias_local_patterns):
+                for base_name in alias_keys:
+                    local_by_base.setdefault(base_name, []).append(entry)
 
         seen_edges: set[tuple[str, str]] = set()
         for base_name, locals_list in local_by_base.items():
@@ -1154,16 +1227,21 @@ class CodeIndexingService:
                         continue
                     local_fields = local_schema["fields"]
                     canonical_fields = canonical_schema["fields"]
+                    min_fields = self.zod_schema_alias_min_fields
+                    overlap_threshold = self.zod_schema_alias_overlap
+                    if local_schema.get("is_subschema"):
+                        min_fields = min(min_fields, 2)
+                        overlap_threshold = max(overlap_threshold, 0.9)
                     if (
-                        len(local_fields) < self.zod_schema_alias_min_fields
-                        or len(canonical_fields) < self.zod_schema_alias_min_fields
+                        len(local_fields) < min_fields
+                        or len(canonical_fields) < min_fields
                     ):
                         continue
                     union = local_fields | canonical_fields
                     if not union:
                         continue
                     overlap_ratio = len(local_fields & canonical_fields) / len(union)
-                    if overlap_ratio < self.zod_schema_alias_overlap:
+                    if overlap_ratio < overlap_threshold:
                         continue
                     shared_fields = local_fields & canonical_fields
                     for field_name in shared_fields:
@@ -1219,6 +1297,47 @@ class CodeIndexingService:
         if schema_name.endswith(suffix) and len(schema_name) > len(suffix):
             return schema_name[: -len(suffix)]
         return schema_name
+
+    def _alias_tokens(self, value: str) -> list[str]:
+        if not value:
+            return []
+        spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", value)
+        spaced = re.sub(r"[^A-Za-z0-9]+", " ", spaced)
+        tokens = []
+        for token in spaced.split():
+            normalized = self._normalize_alias_key(token)
+            if (
+                normalized
+                and normalized not in _DEFAULT_ZOD_SCHEMA_ALIAS_STOP_WORDS
+                and len(normalized) >= 3
+            ):
+                tokens.append(normalized)
+        return tokens
+
+    def _alias_keys_for_schema(self, schema_name: str, file_path: Path) -> set[str]:
+        base_name = self._schema_base_name(schema_name) or schema_name
+        base_key = self._normalize_alias_key(base_name)
+        keys: set[str] = set()
+        if (
+            base_key
+            and base_key not in _DEFAULT_ZOD_SCHEMA_ALIAS_STOP_WORDS
+            and len(base_key) >= 3
+        ):
+            keys.add(base_key)
+        keys.update(self._alias_tokens(base_name))
+        if not keys or base_key in _DEFAULT_ZOD_SCHEMA_ALIAS_STOP_WORDS:
+            keys.update(self._alias_tokens(file_path.stem))
+        return keys
+
+    def _normalize_alias_key(self, name: str) -> str:
+        value = name.strip().lower()
+        if value.endswith("schema"):
+            value = value[: -len("schema")]
+        if value.endswith("ies") and len(value) > 3:
+            return f"{value[:-3]}y"
+        if value.endswith("s") and len(value) > 3:
+            return value[:-1]
+        return value
 
     def _index_openapi_specs(self) -> int:
         if not self._symbol_index:
