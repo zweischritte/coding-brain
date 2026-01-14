@@ -463,7 +463,7 @@ const schema = z
             firstname: z.string(),
             lastname: z.string(),
           }),
-        ),
+        ).min(1),
       })
       .superRefine(() => {}),
   })

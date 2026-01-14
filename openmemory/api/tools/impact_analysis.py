@@ -302,9 +302,19 @@ class ImpactAnalysisTool:
         if traversal_state["used_inferred_edges"]:
             meta.degraded_mode = True
             meta.missing_sources.append("inferred_call_edges")
-        # meta.warnings.append(
-        #     "Mandatory: If this is your first impact_analysis in this session, run it again with a different input type/surface (e.g., changed_files on a contract/schema file or a schema symbol), not just name-resolution of the same field. For the second run, pivot to a different symbol surfaced by the first run (prefer highest-confidence, non-heuristic affected files; avoid String path reference hits). Ensure the second run targets a concrete in-repo symbol/file, not just a conceptual restatement, and confirm key findings via direct file reads or literal search."
-        # )
+        if any(
+            (
+                af.reason
+                and (
+                    "Writes changed field" in af.reason
+                    or "Schema alias match" in af.reason
+                )
+            )
+            for af in affected_files
+        ):
+            meta.warnings.append(
+                "Mandatory: Read all affected files with reason \"Writes changed field\" or \"Schema alias match\"; if you do not read them, explicitly mark them as unverified. Only implement code changes if you were asked to explicitly."
+            )
 
         return ImpactOutput(affected_files=affected_files, meta=meta)
 
