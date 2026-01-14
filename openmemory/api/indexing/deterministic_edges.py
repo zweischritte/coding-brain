@@ -1456,10 +1456,19 @@ class DeterministicEdgeExtractor:
             if node.type == "variable_declarator":
                 name_node = node.child_by_field_name("name")
                 value_node = node.child_by_field_name("value")
-                if name_node and value_node and self._is_zod_object_call(value_node, source, zod_aliases):
+                base_node = (
+                    self._unwrap_zod_call(value_node, source, zod_aliases)
+                    if value_node
+                    else None
+                )
+                if name_node and base_node and self._is_zod_object_call(
+                    base_node,
+                    source,
+                    zod_aliases,
+                ):
                     schema_name = self._node_text(source, name_node)
                     schema_base = self._schema_base_name(schema_name)
-                    shape_node = self._extract_zod_shape_node(value_node)
+                    shape_node = self._extract_zod_shape_node(base_node)
                     if shape_node:
                         for field_name, pair, value_node in collect_zod_fields(shape_node):
                             field_type, nullable = self._zod_field_metadata(
@@ -1934,10 +1943,15 @@ class DeterministicEdgeExtractor:
             if node.type == "variable_declarator":
                 name_node = node.child_by_field_name("name")
                 value_node = node.child_by_field_name("value")
+                base_node = (
+                    self._unwrap_zod_call(value_node, source, aliases)
+                    if value_node
+                    else None
+                )
                 if (
                     name_node
-                    and value_node
-                    and self._is_zod_object_call(value_node, source, aliases)
+                    and base_node
+                    and self._is_zod_object_call(base_node, source, aliases)
                 ):
                     schema_name = self._node_text(source, name_node)
                     if schema_name:
@@ -2022,7 +2036,21 @@ class DeterministicEdgeExtractor:
             obj_node = fn_node.child_by_field_name("object")
             prop_node = fn_node.child_by_field_name("property")
             prop_name = self._node_text(source, prop_node) if prop_node else ""
-            if prop_name in ("optional", "nullable", "nullish", "default"):
+            if prop_name in (
+                "optional",
+                "nullable",
+                "nullish",
+                "default",
+                "refine",
+                "superRefine",
+                "transform",
+                "pipe",
+                "describe",
+                "catch",
+                "brand",
+                "readonly",
+                "openapi",
+            ):
                 current = obj_node
                 continue
             break

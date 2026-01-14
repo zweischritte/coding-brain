@@ -454,16 +454,20 @@ def test_nested_zod_schema_fields(indexer):
     code = """
 import { z } from 'zod';
 
-const schema = z.object({
-  movie: z.object({
-    producers: z.array(
-      z.object({
-        firstname: z.string(),
-        lastname: z.string(),
-      }),
-    ),
-  }),
-});
+const schema = z
+  .object({
+    movie: z
+      .object({
+        producers: z.array(
+          z.object({
+            firstname: z.string(),
+            lastname: z.string(),
+          }),
+        ),
+      })
+      .superRefine(() => {}),
+  })
+  .superRefine(() => {});
 """
     file_path = src / "nested.ts"
     file_path.write_text(code)
