@@ -96,6 +96,18 @@ class TestTriHybridConfig:
         assert "CALLS" in config.graph_edge_types
         assert "IMPORTS" in config.graph_edge_types
         assert "CONTAINS" in config.graph_edge_types
+        assert "READS" in config.graph_edge_types
+        assert "WRITES" in config.graph_edge_types
+        assert "SCHEMA_EXPOSES" in config.graph_edge_types
+        assert "SCHEMA_ALIASES" in config.graph_edge_types
+        assert "PATH_READS" in config.graph_edge_types
+
+    def test_graph_seed_defaults(self):
+        """Graph seed defaults should be set."""
+        from openmemory.api.retrieval.trihybrid import TriHybridConfig
+
+        config = TriHybridConfig()
+        assert config.graph_seed_top_n == 5
 
 
 # =============================================================================
@@ -633,6 +645,48 @@ class TestTriHybridRetriever:
 
         # Should have called graph with seed symbols
         mock_graph.get_outgoing_edges.assert_called()
+
+    def test_retrieve_auto_seeds_from_lexical(self):
+        """Retriever should seed graph expansion from lexical hits when none provided."""
+        from openmemory.api.retrieval.trihybrid import (
+            TriHybridRetriever,
+            TriHybridConfig,
+            TriHybridQuery,
+        )
+
+        mock_opensearch = MagicMock()
+        mock_opensearch.lexical_search.return_value = MagicMock(
+            hits=[
+                MagicMock(
+                    id="file::repo:/repo/src/main.py",
+                    score=0.9,
+                    source={"symbol_type": "file", "file_path": "/repo/src/main.py"},
+                ),
+            ],
+            total=1,
+            took_ms=1,
+        )
+        mock_opensearch.vector_search.return_value = MagicMock(
+            hits=[], total=0, took_ms=1
+        )
+
+        mock_graph = MagicMock()
+        mock_graph.get_outgoing_edges.return_value = []
+
+        retriever = TriHybridRetriever(
+            opensearch_client=mock_opensearch,
+            graph_driver=mock_graph,
+            config=TriHybridConfig(graph_seed_top_n=1),
+        )
+
+        query = TriHybridQuery(
+            query_text="test",
+            embedding=[0.1] * 768,
+        )
+
+        retriever.retrieve(query, index_name="test")
+
+        mock_graph.get_outgoing_edges.assert_any_call("/repo/src/main.py")
 
     def test_fallback_when_graph_unavailable(self):
         """Should gracefully degrade when graph is unavailable."""

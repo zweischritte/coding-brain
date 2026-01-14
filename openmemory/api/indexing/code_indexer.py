@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import logging
 import re
@@ -16,9 +17,11 @@ from openmemory.api.indexing.ast_parser import ASTParser, Language, Symbol, Symb
 from openmemory.api.indexing.deterministic_edges import (
     DeterministicEdgeExtractor,
     RepoSymbolIndex,
+    SchemaFieldDefinition,
 )
 from openmemory.api.indexing.fallback_symbols import extract_python_symbols
 from openmemory.api.indexing.graph_projection import CodeEdgeType, CodeNodeType, GraphProjection
+from openmemory.api.indexing.graphql_parser import GraphQLSchemaIndex, extract_graphql_field_refs
 from openmemory.api.indexing.openapi_parser import OpenAPISpecExtractor
 from openmemory.api.indexing.scip_symbols import SCIPSymbolExtractor
 from openmemory.api.retrieval.opensearch import Document, IndexConfig, IndexManager
@@ -38,7 +41,25 @@ _INDEX_TYPES = {
     SymbolType.FIELD,
     SymbolType.PROPERTY,
 }
+
+_DEFAULT_ZOD_SCHEMA_ALIAS_CANONICAL_PATTERNS = [
+    "packages/**",
+    "src/**/entities/**",
+]
+_DEFAULT_ZOD_SCHEMA_ALIAS_LOCAL_PATTERNS = [
+    "apps/**",
+    "routes/**",
+    "forms/**",
+]
+_DEFAULT_ZOD_SCHEMA_ALIAS_MIN_FIELDS = 3
+_DEFAULT_ZOD_SCHEMA_ALIAS_OVERLAP = 0.8
 _FILE_DOC_MAX_CHARS = 8000
+_GENERATED_PATH_HINTS = ("dist", "build", "out", "generated", "__generated__")
+_VENDOR_PATH_HINTS = ("node_modules", "vendor")
+_GENERATED_EXTENSION_HINTS = (".d.ts", ".min.js", ".map")
+_GENERATED_HEADER_HINTS = ("@generated", "do not edit", "codegen", "generated")
+_GENERATED_HEADER_LINES = 20
+_FIELD_PATH_EMBED_MAX_CHARS = 200
 
 
 @dataclass
@@ -94,6 +115,12 @@ class CodeIndexingService:
         include_api_boundaries: bool = True,
         extensions: Optional[list[str]] = None,
         ignore_patterns: Optional[list[str]] = None,
+        allow_patterns: Optional[list[str]] = None,
+        enable_zod_schema_aliases: bool = True,
+        zod_schema_alias_min_fields: int = _DEFAULT_ZOD_SCHEMA_ALIAS_MIN_FIELDS,
+        zod_schema_alias_overlap: float = _DEFAULT_ZOD_SCHEMA_ALIAS_OVERLAP,
+        zod_schema_alias_canonical_patterns: Optional[list[str]] = None,
+        zod_schema_alias_local_patterns: Optional[list[str]] = None,
     ):
         self.root_path = Path(root_path)
         self.repo_id = repo_id
@@ -106,9 +133,25 @@ class CodeIndexingService:
             "__pycache__",
             "node_modules",
             ".git",
+            "dist",
+            "build",
+            ".next",
+            "coverage",
             "venv",
             ".venv",
         ]
+        self.allow_patterns = allow_patterns or []
+        self.enable_zod_schema_aliases = enable_zod_schema_aliases
+        self.zod_schema_alias_min_fields = zod_schema_alias_min_fields
+        self.zod_schema_alias_overlap = zod_schema_alias_overlap
+        self.zod_schema_alias_canonical_patterns = (
+            zod_schema_alias_canonical_patterns
+            or _DEFAULT_ZOD_SCHEMA_ALIAS_CANONICAL_PATTERNS
+        )
+        self.zod_schema_alias_local_patterns = (
+            zod_schema_alias_local_patterns
+            or _DEFAULT_ZOD_SCHEMA_ALIAS_LOCAL_PATTERNS
+        )
 
         self._parser = ASTParser()
         self._extractor = SCIPSymbolExtractor(self.root_path)
@@ -163,7 +206,7 @@ class CodeIndexingService:
             if path.suffix not in self.extensions:
                 continue
             path_str = str(path)
-            if any(pattern in path_str for pattern in self.ignore_patterns):
+            if self._is_ignored(path_str):
                 continue
             files.append(path)
             if max_files is not None and len(files) >= max_files:
@@ -178,13 +221,76 @@ class CodeIndexingService:
             if path.suffix.lower() not in (".yaml", ".yml", ".json"):
                 continue
             path_str = str(path)
-            if any(pattern in path_str for pattern in self.ignore_patterns):
+            if self._is_ignored(path_str):
                 continue
             name = path.name.lower()
             if "openapi" not in name and "swagger" not in name:
                 continue
             files.append(path)
         return files
+
+    def _iter_graphql_files(self) -> list[Path]:
+        files: list[Path] = []
+        for path in self.root_path.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in (".graphql", ".gql"):
+                continue
+            path_str = str(path)
+            if self._is_ignored(path_str):
+                continue
+            files.append(path)
+        return files
+
+    def _iter_graphql_schema_files(self) -> list[Path]:
+        schema_files: list[Path] = []
+        for path in self.root_path.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in (".graphql", ".gql"):
+                continue
+            path_str = str(path)
+            if self._is_ignored(path_str):
+                continue
+            if ("node_modules" in path_str or ".git" in path_str) and not self._is_allowlisted(path_str):
+                continue
+            name = path.name.lower()
+            if "schema" in name or "graphql-schema" in path_str:
+                schema_files.append(path)
+        return schema_files
+
+    def _is_allowlisted(self, path_str: str) -> bool:
+        return any(pattern in path_str for pattern in self.allow_patterns)
+
+    def _is_ignored(self, path_str: str) -> bool:
+        if self._is_allowlisted(path_str):
+            return False
+        return any(pattern in path_str for pattern in self.ignore_patterns)
+
+    def _classify_source_tier(
+        self,
+        file_path: Path,
+        lines: list[str],
+    ) -> tuple[bool, Optional[str], str]:
+        path_parts = {part.lower() for part in file_path.parts}
+        for hint in _VENDOR_PATH_HINTS:
+            if hint in path_parts:
+                return True, f"path:{hint}", "vendor"
+        for hint in _GENERATED_PATH_HINTS:
+            if hint in path_parts:
+                return True, f"path:{hint}", "generated"
+
+        file_name = file_path.name.lower()
+        for ext in _GENERATED_EXTENSION_HINTS:
+            if file_name.endswith(ext):
+                return True, f"extension:{ext}", "generated"
+
+        header = "\n".join(lines[:_GENERATED_HEADER_LINES]).lower()
+        for marker in _GENERATED_HEADER_HINTS:
+            if marker in header:
+                return True, f"header:{marker}", "generated"
+
+        return False, None, "source"
 
     def _build_symbol_index(
         self,
@@ -317,6 +423,7 @@ class CodeIndexingService:
             progress_callback=progress_callback,
         )
         self._index_openapi_specs()
+        summary.call_edges_indexed += self._index_graphql_documents()
 
         if self.opensearch_client:
             try:
@@ -535,11 +642,18 @@ class CodeIndexingService:
         language: Language,
     ) -> int:
         indexable = [(symbol, symbol_id) for symbol, symbol_id in symbols if symbol.symbol_type in _INDEX_TYPES]
+        is_generated, generated_reason, source_tier = self._classify_source_tier(
+            file_path,
+            lines,
+        )
         file_doc_count = self._index_file_document(
             file_path=file_path,
             content=content,
             language=language,
             lines=lines,
+            is_generated=is_generated,
+            generated_reason=generated_reason,
+            source_tier=source_tier,
         )
         if not indexable:
             return file_doc_count
@@ -567,7 +681,11 @@ class CodeIndexingService:
                 "chunk_hash": hashlib.sha1(content.encode("utf-8")).hexdigest(),
                 "last_modified": last_modified,
                 "symbol_id": symbol_id,
+                "is_generated": is_generated,
+                "source_tier": source_tier,
             }
+            if generated_reason:
+                metadata["generated_reason"] = generated_reason
             if symbol.signature:
                 metadata["signature"] = symbol.signature
             if symbol.docstring:
@@ -600,6 +718,9 @@ class CodeIndexingService:
         content: str,
         language: Language,
         lines: list[str],
+        is_generated: bool,
+        generated_reason: Optional[str],
+        source_tier: str,
     ) -> int:
         snippet = content[:_FILE_DOC_MAX_CHARS]
         embeddings = self._embed_contents([snippet])
@@ -619,7 +740,11 @@ class CodeIndexingService:
             "chunk_hash": hashlib.sha1(snippet.encode("utf-8")).hexdigest(),
             "last_modified": last_modified,
             "symbol_id": doc_id,
+            "is_generated": is_generated,
+            "source_tier": source_tier,
         }
+        if generated_reason:
+            metadata["generated_reason"] = generated_reason
         document = Document(
             id=doc_id,
             content=snippet,
@@ -685,6 +810,9 @@ class CodeIndexingService:
 
         edges_added = 0
         created_schema_ids: set[str] = set()
+        created_path_ids: set[str] = set()
+        path_doc_payloads: list[dict[str, Any]] = []
+        schema_field_catalog: list[SchemaFieldDefinition] = []
 
         for file_path in source_files:
             cache_entry = parse_cache.get(file_path)
@@ -704,10 +832,16 @@ class CodeIndexingService:
                 continue
 
             lines = content.splitlines()
+            is_generated, generated_reason, source_tier = self._classify_source_tier(
+                file_path,
+                lines,
+            )
             if cache_entry.symbol_pairs:
                 edges_added += self._index_call_edges(cache_entry.symbol_pairs, lines)
 
             edges = self._edge_extractor.extract_edges(file_path, cache_entry.language, content)
+            if edges.schema_fields:
+                schema_field_catalog.extend(edges.schema_fields)
             for source_id, target_id in edges.call_edges:
                 self._projection.create_edge(
                     edge_type=CodeEdgeType.CALLS,
@@ -749,6 +883,13 @@ class CodeIndexingService:
                     line_end=schema_field.line_end,
                     repo_id=self.repo_id,
                 )
+                if schema_field.file_path:
+                    self._projection.create_edge(
+                        edge_type=CodeEdgeType.CONTAINS,
+                        source_id=str(schema_field.file_path),
+                        target_id=schema_field.schema_id,
+                        properties={"repo_id": self.repo_id, "edge_kind": "schema"},
+                    )
 
             for source_id, target_id in edges.schema_expose_edges:
                 self._projection.create_edge(
@@ -757,6 +898,49 @@ class CodeIndexingService:
                     target_id=target_id,
                     properties={"resolution": "ast", "edge_kind": "schema"},
                 )
+
+            for path_literal in edges.path_literals:
+                path_id = self._path_literal_node_id(path_literal)
+                if path_id in created_path_ids:
+                    continue
+                created_path_ids.add(path_id)
+                self._projection.create_field_path_node(
+                    path_id=path_id,
+                    path=path_literal.path,
+                    normalized_path=path_literal.normalized_path,
+                    segments=path_literal.segments,
+                    leaf=path_literal.leaf,
+                    file_path=path_literal.file_path,
+                    line_start=path_literal.line_start,
+                    line_end=path_literal.line_end,
+                    confidence=path_literal.confidence,
+                    repo_id=self.repo_id,
+                )
+                if self.opensearch_client:
+                    payload = self._field_path_doc_payload(
+                        path_literal=path_literal,
+                        path_id=path_id,
+                        is_generated=is_generated,
+                        generated_reason=generated_reason,
+                        source_tier=source_tier,
+                    )
+                    if payload:
+                        path_doc_payloads.append(payload)
+                if path_literal.file_path:
+                    self._projection.create_edge(
+                        edge_type=CodeEdgeType.CONTAINS,
+                        source_id=str(path_literal.file_path),
+                        target_id=path_id,
+                        properties={"repo_id": self.repo_id, "edge_kind": "path"},
+                    )
+                field_id = self._resolve_path_literal_field(path_literal)
+                if field_id:
+                    self._projection.create_edge(
+                        edge_type=CodeEdgeType.PATH_READS,
+                        source_id=path_id,
+                        target_id=field_id,
+                        properties={"resolution": "path", "edge_kind": "path"},
+                    )
 
             for target in {t for t in edges.import_targets if t}:
                 if not target.exists() or not target.is_file():
@@ -772,7 +956,269 @@ class CodeIndexingService:
                     properties={"resolution": "path"},
                 )
 
+        if self.enable_zod_schema_aliases and schema_field_catalog:
+            self._index_zod_schema_alias_edges(
+                schema_field_catalog,
+                created_schema_ids,
+            )
+
+        if self.opensearch_client and path_doc_payloads:
+            documents = self._build_field_path_documents(path_doc_payloads)
+            if documents:
+                try:
+                    self.opensearch_client.bulk_index(
+                        index_name=self.index_name,
+                        documents=documents,
+                    )
+                except Exception as exc:
+                    logger.warning(f"OpenSearch indexing failed for field paths: {exc}")
+
         return edges_added
+
+    def _path_literal_node_id(self, path_literal: Any) -> str:
+        if getattr(path_literal, "start_byte", None) is not None:
+            return (
+                f"path::{path_literal.file_path}:"
+                f"{path_literal.start_byte}:{path_literal.end_byte}"
+            )
+        return (
+            f"path::{path_literal.file_path}:"
+            f"{path_literal.line_start}:{path_literal.line_end}:{path_literal.normalized_path}"
+        )
+
+    def _resolve_path_literal_field(self, path_literal: Any) -> Optional[str]:
+        if not self._symbol_index:
+            return None
+
+        leaf = getattr(path_literal, "leaf", None)
+        if not leaf:
+            return None
+
+        segments = list(getattr(path_literal, "segments", []) or [])
+        if len(segments) < 2:
+            return None
+
+        candidate_segments: list[str] = []
+        for segment in reversed(segments[:-1]):
+            segment = str(segment)
+            if not segment or segment in ("*", "$") or segment.isdigit():
+                continue
+            candidate_segments.append(segment)
+
+        for segment in candidate_segments:
+            for type_name in self._path_type_candidates(segment):
+                field_id = self._symbol_index.resolve_field_global(type_name, leaf)
+                if field_id:
+                    return field_id
+        return None
+
+    def _path_type_candidates(self, segment: str) -> list[str]:
+        segment = segment.strip()
+        if not segment:
+            return []
+        singular = self._singularize_path_segment(segment)
+        candidates: list[str] = []
+        for value in (singular, segment):
+            name = self._path_segment_to_pascal(value)
+            if name and name not in candidates:
+                candidates.append(name)
+        return candidates
+
+    def _singularize_path_segment(self, value: str) -> str:
+        lowered = value.lower()
+        if lowered.endswith("ies") and len(value) > 3:
+            return value[:-3] + "y"
+        if lowered.endswith("ses") and len(value) > 3:
+            return value[:-2]
+        if lowered.endswith("s") and not lowered.endswith("ss") and len(value) > 2:
+            return value[:-1]
+        return value
+
+    def _path_segment_to_pascal(self, value: str) -> str:
+        spaced = re.sub(r"([a-z0-9])([A-Z])", r"\\1 \\2", value)
+        spaced = re.sub(r"[^A-Za-z0-9]+", " ", spaced)
+        parts = [part for part in spaced.split() if part]
+        return "".join(part[:1].upper() + part[1:] for part in parts)
+
+    def _field_path_doc_payload(
+        self,
+        path_literal: Any,
+        path_id: str,
+        is_generated: bool,
+        generated_reason: Optional[str],
+        source_tier: str,
+    ) -> Optional[dict[str, Any]]:
+        content = path_literal.normalized_path or path_literal.path
+        if not content:
+            return None
+        embed_content = content[:_FIELD_PATH_EMBED_MAX_CHARS]
+        language = Language.from_path(path_literal.file_path)
+        try:
+            last_modified = datetime.fromtimestamp(
+                path_literal.file_path.stat().st_mtime, tz=timezone.utc
+            ).isoformat()
+        except Exception:
+            last_modified = datetime.now(timezone.utc).isoformat()
+
+        metadata = {
+            "file_path": str(path_literal.file_path),
+            "symbol_name": path_literal.leaf,
+            "symbol_type": "field_path",
+            "line_start": path_literal.line_start,
+            "line_end": path_literal.line_end,
+            "repo_id": self.repo_id,
+            "chunk_hash": hashlib.sha1(content.encode("utf-8")).hexdigest(),
+            "last_modified": last_modified,
+            "symbol_id": path_id,
+            "is_generated": is_generated,
+            "source_tier": source_tier,
+        }
+        if language:
+            metadata["language"] = language.value
+        if path_literal.confidence:
+            metadata["confidence"] = path_literal.confidence
+        if generated_reason:
+            metadata["generated_reason"] = generated_reason
+
+        return {
+            "id": path_id,
+            "content": content,
+            "embed_content": embed_content,
+            "metadata": metadata,
+        }
+
+    def _build_field_path_documents(
+        self,
+        payloads: list[dict[str, Any]],
+    ) -> list[Document]:
+        embed_inputs = [payload["embed_content"] for payload in payloads]
+        embeddings = self._embed_contents(embed_inputs)
+        documents: list[Document] = []
+        for payload, embedding in zip(payloads, embeddings):
+            embedding_value = self._normalize_embedding(embedding)
+            documents.append(
+                Document(
+                    id=payload["id"],
+                    content=payload["content"],
+                    embedding=embedding_value,
+                    metadata=payload["metadata"],
+                )
+            )
+        return documents
+
+    def _index_zod_schema_alias_edges(
+        self,
+        schema_fields: list[SchemaFieldDefinition],
+        created_schema_ids: set[str],
+    ) -> None:
+        schemas: dict[tuple[str, Path], dict[str, Any]] = {}
+        for field in schema_fields:
+            if field.schema_type != "zod":
+                continue
+            if not field.schema_name or not field.file_path:
+                continue
+            key = (field.schema_name, Path(field.file_path))
+            entry = schemas.setdefault(
+                key,
+                {
+                    "schema_name": field.schema_name,
+                    "file_path": Path(field.file_path),
+                    "fields": set(),
+                    "field_ids": {},
+                },
+            )
+            entry["fields"].add(field.name)
+            entry["field_ids"][field.name] = field.schema_id
+
+        if not schemas:
+            return
+
+        canonical_by_base: dict[str, list[dict[str, Any]]] = {}
+        local_by_base: dict[str, list[dict[str, Any]]] = {}
+        for entry in schemas.values():
+            rel_path = self._relative_path_for_match(entry["file_path"])
+            base_name = self._schema_base_name(entry["schema_name"])
+            if self._path_matches(rel_path, self.zod_schema_alias_canonical_patterns):
+                canonical_by_base.setdefault(base_name, []).append(entry)
+            if self._path_matches(rel_path, self.zod_schema_alias_local_patterns):
+                local_by_base.setdefault(base_name, []).append(entry)
+
+        seen_edges: set[tuple[str, str]] = set()
+        for base_name, locals_list in local_by_base.items():
+            canonicals = canonical_by_base.get(base_name, [])
+            if not canonicals:
+                continue
+            for local_schema in locals_list:
+                for canonical_schema in canonicals:
+                    if local_schema["file_path"] == canonical_schema["file_path"]:
+                        continue
+                    local_fields = local_schema["fields"]
+                    canonical_fields = canonical_schema["fields"]
+                    if (
+                        len(local_fields) < self.zod_schema_alias_min_fields
+                        or len(canonical_fields) < self.zod_schema_alias_min_fields
+                    ):
+                        continue
+                    union = local_fields | canonical_fields
+                    if not union:
+                        continue
+                    overlap_ratio = len(local_fields & canonical_fields) / len(union)
+                    if overlap_ratio < self.zod_schema_alias_overlap:
+                        continue
+                    shared_fields = local_fields & canonical_fields
+                    for field_name in shared_fields:
+                        local_id = local_schema["field_ids"].get(field_name)
+                        canonical_id = canonical_schema["field_ids"].get(field_name)
+                        if not local_id or not canonical_id:
+                            continue
+                        if local_id not in created_schema_ids or canonical_id not in created_schema_ids:
+                            continue
+                        if (local_id, canonical_id) not in seen_edges:
+                            self._projection.create_edge(
+                                edge_type=CodeEdgeType.SCHEMA_ALIASES,
+                                source_id=local_id,
+                                target_id=canonical_id,
+                                properties={
+                                    "resolution": "heuristic",
+                                    "edge_kind": "schema",
+                                    "confidence": overlap_ratio,
+                                    "overlap_ratio": overlap_ratio,
+                                    "match_strategy": "name+overlap",
+                                },
+                            )
+                            seen_edges.add((local_id, canonical_id))
+                        if (canonical_id, local_id) not in seen_edges:
+                            self._projection.create_edge(
+                                edge_type=CodeEdgeType.SCHEMA_ALIASES,
+                                source_id=canonical_id,
+                                target_id=local_id,
+                                properties={
+                                    "resolution": "heuristic",
+                                    "edge_kind": "schema",
+                                    "confidence": overlap_ratio,
+                                    "overlap_ratio": overlap_ratio,
+                                    "match_strategy": "name+overlap",
+                                },
+                            )
+                            seen_edges.add((canonical_id, local_id))
+
+    def _relative_path_for_match(self, file_path: Path) -> str:
+        try:
+            rel_path = file_path.relative_to(self.root_path)
+        except ValueError:
+            rel_path = file_path
+        return rel_path.as_posix()
+
+    def _path_matches(self, rel_path: str, patterns: list[str]) -> bool:
+        if not rel_path:
+            return False
+        return any(fnmatch.fnmatch(rel_path, pattern) for pattern in patterns)
+
+    def _schema_base_name(self, schema_name: str) -> str:
+        suffix = "Schema"
+        if schema_name.endswith(suffix) and len(schema_name) > len(suffix):
+            return schema_name[: -len(suffix)]
+        return schema_name
 
     def _index_openapi_specs(self) -> int:
         if not self._symbol_index:
@@ -816,6 +1262,13 @@ class CodeIndexingService:
                     line_end=schema_field.line_end,
                     repo_id=self.repo_id,
                 )
+                if schema_field.file_path:
+                    self._projection.create_edge(
+                        edge_type=CodeEdgeType.CONTAINS,
+                        source_id=str(schema_field.file_path),
+                        target_id=schema_field.schema_id,
+                        properties={"repo_id": self.repo_id, "edge_kind": "schema"},
+                    )
 
             for source_id, target_id in extraction.schema_expose_edges:
                 self._projection.create_edge(
@@ -823,6 +1276,61 @@ class CodeIndexingService:
                     source_id=source_id,
                     target_id=target_id,
                     properties={"resolution": "openapi", "edge_kind": "schema"},
+                )
+                edges_added += 1
+
+        return edges_added
+
+    def _index_graphql_documents(self) -> int:
+        if not self._symbol_index:
+            return 0
+
+        schema_files = self._iter_graphql_schema_files()
+        schema_index = GraphQLSchemaIndex.from_files(schema_files)
+
+        edges_added = 0
+        doc_files = [
+            path for path in self._iter_graphql_files() if path not in schema_files
+        ]
+        seen_edges: set[tuple[str, str]] = set()
+
+        for file_path in doc_files:
+            try:
+                content = file_path.read_text(errors="ignore")
+            except Exception as exc:
+                logger.debug(f"Failed to read {file_path} for GraphQL docs: {exc}")
+                continue
+
+            refs = extract_graphql_field_refs(content, schema_index)
+            if not refs:
+                continue
+
+            content_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
+            file_size = file_path.stat().st_size
+            self._projection.create_file_node(
+                path=file_path,
+                language=Language.GRAPHQL,
+                size=file_size,
+                content_hash=content_hash,
+                repo_id=self.repo_id,
+            )
+
+            for ref in refs:
+                field_id = self._symbol_index.resolve_field_global(
+                    ref.parent_type,
+                    ref.field_name,
+                )
+                if not field_id:
+                    continue
+                edge_key = (str(file_path), field_id)
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                self._projection.create_edge(
+                    edge_type=CodeEdgeType.READS,
+                    source_id=str(file_path),
+                    target_id=field_id,
+                    properties={"resolution": "graphql", "edge_kind": "graphql_doc"},
                 )
                 edges_added += 1
 

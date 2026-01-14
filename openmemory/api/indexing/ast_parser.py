@@ -55,6 +55,7 @@ class Language(Enum):
     TSX = "tsx"
     JAVA = "java"
     GO = "go"
+    GRAPHQL = "graphql"
 
     @classmethod
     def from_extension(cls, ext: str) -> Optional["Language"]:
@@ -65,6 +66,8 @@ class Language(Enum):
             ".tsx": cls.TSX,
             ".java": cls.JAVA,
             ".go": cls.GO,
+            ".graphql": cls.GRAPHQL,
+            ".gql": cls.GRAPHQL,
         }
         return ext_map.get(ext.lower())
 

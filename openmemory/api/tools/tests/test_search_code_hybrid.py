@@ -40,6 +40,8 @@ def mock_retriever():
         "line_start": 10,
         "line_end": 20,
         "content": "def func1(x: int) -> int:\n    return x * 2",
+        "is_generated": False,
+        "source_tier": "source",
     }
     mock_hit1.sources = {"lexical": 0.8, "vector": 0.9, "graph": 0.7}
 
@@ -54,6 +56,8 @@ def mock_retriever():
         "line_start": 25,
         "line_end": 30,
         "content": "def func2(y: str) -> str:\n    return y.upper()",
+        "is_generated": False,
+        "source_tier": "source",
     }
     mock_hit2.sources = {"lexical": 0.7, "vector": 0.85, "graph": 0.6}
 
@@ -104,6 +108,7 @@ class TestSearchCodeHybridConfig:
         assert config.limit == 10
         assert config.offset == 0
         assert config.include_snippet is True
+        assert config.snippet_max_chars == 400
         assert config.include_source_breakdown is True
         assert config.embed_query is True
 
@@ -116,6 +121,7 @@ class TestSearchCodeHybridConfig:
             limit=20,
             offset=5,
             include_snippet=False,
+            snippet_max_chars=120,
             include_source_breakdown=False,
             embed_query=False,
         )
@@ -124,6 +130,7 @@ class TestSearchCodeHybridConfig:
         assert config.limit == 20
         assert config.offset == 5
         assert config.include_snippet is False
+        assert config.snippet_max_chars == 120
         assert config.include_source_breakdown is False
         assert config.embed_query is False
 
@@ -152,10 +159,16 @@ class TestSearchCodeHybridInput:
             query="test query",
             repo_id="myrepo",
             language="python",
+            include_snippet=False,
+            snippet_max_chars=200,
+            include_generated=True,
         )
 
         assert input_data.repo_id == "myrepo"
         assert input_data.language == "python"
+        assert input_data.include_snippet is False
+        assert input_data.snippet_max_chars == 200
+        assert input_data.include_generated is True
 
     def test_pagination_fields(self):
         """Test pagination fields."""
@@ -200,6 +213,8 @@ class TestCodeHit:
             snippet="def func():\n    pass",
             source="hybrid",
             source_scores={"lexical": 0.8, "vector": 0.9, "graph": 0.7},
+            is_generated=False,
+            source_tier="source",
         )
 
         assert hit.symbol.symbol_name == "func"
@@ -207,6 +222,8 @@ class TestCodeHit:
         assert hit.snippet is not None
         assert hit.source == "hybrid"
         assert "lexical" in hit.source_scores
+        assert hit.is_generated is False
+        assert hit.source_tier == "source"
 
 
 # =============================================================================
@@ -315,6 +332,7 @@ class TestSearchCodeHybridTool:
                 query="test query",
                 repo_id="myrepo",
                 language="python",
+                include_generated=True,
             )
         )
 
@@ -323,6 +341,113 @@ class TestSearchCodeHybridTool:
         call_args = mock_retriever.retrieve.call_args
         query = call_args[0][0]  # First positional arg is the query
         assert "repo_id" in query.filters or query.filters == {} or True  # Flexible
+
+    def test_search_prefers_source_by_default(self):
+        """Prefer source hits when generated and source are mixed."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        hit_generated = MagicMock()
+        hit_generated.id = "scip-js repo dist/gen."
+        hit_generated.score = 0.95
+        hit_generated.source = {
+            "symbol_name": "gen",
+            "symbol_type": "function",
+            "file_path": "/dist/gen.js",
+            "content": "function gen() {}",
+            "is_generated": True,
+            "source_tier": "generated",
+        }
+        hit_generated.sources = {}
+
+        hit_source = MagicMock()
+        hit_source.id = "scip-js repo src/source."
+        hit_source.score = 0.85
+        hit_source.source = {
+            "symbol_name": "source",
+            "symbol_type": "function",
+            "file_path": "/src/source.js",
+            "content": "function source() {}",
+            "is_generated": False,
+            "source_tier": "source",
+        }
+        hit_source.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [hit_generated, hit_source]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        mock_retriever.retrieve.return_value = mock_result
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=None,
+        )
+
+        result = tool.search(SearchCodeHybridInput(query="test"))
+
+        assert result.results[0].symbol.symbol_name == "source"
+        assert result.results[0].source_tier == "source"
+
+    def test_search_include_generated_keeps_order(self):
+        """Including generated hits should preserve original ordering."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        hit_generated = MagicMock()
+        hit_generated.id = "scip-js repo dist/gen."
+        hit_generated.score = 0.95
+        hit_generated.source = {
+            "symbol_name": "gen",
+            "symbol_type": "function",
+            "file_path": "/dist/gen.js",
+            "content": "function gen() {}",
+            "is_generated": True,
+            "source_tier": "generated",
+        }
+        hit_generated.sources = {}
+
+        hit_source = MagicMock()
+        hit_source.id = "scip-js repo src/source."
+        hit_source.score = 0.85
+        hit_source.source = {
+            "symbol_name": "source",
+            "symbol_type": "function",
+            "file_path": "/src/source.js",
+            "content": "function source() {}",
+            "is_generated": False,
+            "source_tier": "source",
+        }
+        hit_source.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [hit_generated, hit_source]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        mock_retriever.retrieve.return_value = mock_result
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=None,
+        )
+
+        result = tool.search(
+            SearchCodeHybridInput(query="test", include_generated=True)
+        )
+
+        assert result.results[0].symbol.symbol_name == "gen"
 
     def test_search_with_pagination(self, mock_retriever, mock_embedding_service):
         """Test search with pagination."""
@@ -389,6 +514,141 @@ class TestSearchCodeHybridTool:
         result = tool.search(SearchCodeHybridInput(query="test"))
 
         assert result.results[0].snippet is not None
+
+    def test_search_hydrates_graph_hits(self, mock_embedding_service):
+        """Graph-only hits should hydrate from the graph when metadata is missing."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        hit = MagicMock()
+        hit.id = "node-1"
+        hit.score = 0.9
+        hit.source = {}
+        hit.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [hit]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        node = MagicMock()
+        node.properties = {
+            "name": "User",
+            "kind": "class",
+            "file_path": "/path/to/user.ts",
+            "line_start": 1,
+            "line_end": 2,
+        }
+
+        graph_driver = MagicMock()
+        graph_driver.get_node.return_value = node
+
+        mock_retriever.retrieve.return_value = mock_result
+        mock_retriever.graph_driver = graph_driver
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=mock_embedding_service,
+        )
+
+        result = tool.search(SearchCodeHybridInput(query="User"))
+
+        assert result.results[0].symbol.symbol_name == "User"
+        assert result.results[0].symbol.symbol_type == "class"
+        assert result.results[0].symbol.file_path == "/path/to/user.ts"
+
+    def test_search_result_snippet_truncated_by_default(self):
+        """Test snippets are truncated to the default max length."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        mock_hit = MagicMock()
+        mock_hit.id = "scip-python myapp module/func."
+        mock_hit.score = 0.9
+        mock_hit.source = {
+            "symbol_name": "func",
+            "symbol_type": "function",
+            "file_path": "/path/to/module.py",
+            "line_start": 1,
+            "line_end": 2,
+            "content": "a" * 500,
+        }
+        mock_hit.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [mock_hit]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        mock_retriever.retrieve.return_value = mock_result
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=None,
+        )
+
+        result = tool.search(SearchCodeHybridInput(query="test"))
+
+        assert result.results[0].snippet is not None
+        assert result.results[0].snippet.endswith("...")
+        assert len(result.results[0].snippet) == 403
+
+    def test_search_result_snippet_override(self):
+        """Test per-call snippet overrides."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        mock_hit = MagicMock()
+        mock_hit.id = "scip-python myapp module/func."
+        mock_hit.score = 0.9
+        mock_hit.source = {
+            "symbol_name": "func",
+            "symbol_type": "function",
+            "file_path": "/path/to/module.py",
+            "line_start": 1,
+            "line_end": 2,
+            "content": "b" * 100,
+        }
+        mock_hit.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [mock_hit]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        mock_retriever.retrieve.return_value = mock_result
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=None,
+        )
+
+        result = tool.search(
+            SearchCodeHybridInput(query="test", include_snippet=False)
+        )
+        assert result.results[0].snippet is None
+
+        result = tool.search(
+            SearchCodeHybridInput(query="test", snippet_max_chars=10)
+        )
+        assert result.results[0].snippet is not None
+        assert result.results[0].snippet.endswith("...")
+        assert len(result.results[0].snippet) == 13
 
     def test_search_result_includes_source_breakdown(
         self, mock_retriever, mock_embedding_service

@@ -21,7 +21,7 @@ import datetime
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, Optional
 from pathlib import Path
 
 from app.database import SessionLocal
@@ -4025,6 +4025,140 @@ def _create_code_meta(request_id: str = None, degraded: bool = False, missing: l
     }
 
 
+def _create_graph_meta(
+    request_id: str | None = None,
+    degraded: bool = False,
+    missing: list | None = None,
+    error: str | None = None,
+) -> dict:
+    """Create metadata dict for graph query tool responses."""
+    return {
+        "request_id": request_id or str(uuid.uuid4()),
+        "degraded_mode": degraded,
+        "missing_sources": missing or [],
+        "error": error,
+    }
+
+
+@mcp.tool(description="""Run a read-only Neo4j query against graph data.
+
+Scopes:
+- code: CODE_* graph (requires repo_id filter)
+- memory: OM_* graph (requires accessEntity filter)
+- mem0: __Entity__ graph (requires user_id filter)
+
+Required parameters:
+- scope: code | memory | mem0
+- query: Read-only Cypher (single-statement; must start with MATCH/OPTIONAL MATCH/WITH and include RETURN)
+
+Optional parameters:
+- params: Dict of Cypher parameters
+- repo_id: Required when scope=code
+- access_entity: Required when scope=memory
+- user_id: Optional when scope=mem0 (defaults to current user)
+- limit: Max rows (default: 50, max: 200)
+
+Rules enforced:
+- Single-statement only (no semicolons)
+- Must include explicit labels (CODE_*, OM_*, or __Entity__ depending on scope)
+- Must include required filter (repo_id/accessEntity/user_id) using parameters
+- If LIMIT is used as a parameter, it must be $limit (max 200 enforced)
+- Only read-only Cypher allowed (no CREATE/MERGE/SET/DELETE/DETACH/REMOVE/DROP/CALL/LOAD/FOREACH/APOC/DBMS/SHOW/PROFILE/EXPLAIN/COMMIT/ROLLBACK/TRANSACTION/CONSTRAINT/INDEX)
+
+Returns:
+- rows[]: List of result records with nodes/relationships serialized
+- meta: Response metadata
+""")
+async def graph_query(
+    scope: str,
+    query: str,
+    params: dict | None = None,
+    repo_id: str | None = None,
+    access_entity: str | None = None,
+    user_id: str | None = None,
+    limit: int = 50,
+) -> str:
+    """Run a read-only graph query with scope-aware safeguards."""
+    scope_error = _check_tool_scope("graph:read")
+    if scope_error:
+        return scope_error
+
+    principal = principal_var.get(None)
+    if not principal:
+        return json.dumps({
+            "error": "Authentication required",
+            "code": "MISSING_AUTH",
+        })
+
+    try:
+        from tools.graph_query import GraphQueryInput, GraphQueryError, prepare_graph_query, serialize_record
+    except Exception as exc:
+        return json.dumps({
+            "rows": [],
+            "meta": _create_graph_meta(
+                degraded=True,
+                missing=["graph_query"],
+                error=str(exc),
+            ),
+        })
+
+    try:
+        prepared = prepare_graph_query(
+            GraphQueryInput(
+                scope=scope,
+                query=query,
+                params=params or {},
+                repo_id=repo_id,
+                access_entity=access_entity,
+                user_id=user_id,
+                limit=limit,
+            ),
+            principal,
+        )
+    except GraphQueryError as exc:
+        return json.dumps({
+            "rows": [],
+            "error": str(exc),
+            "code": exc.code,
+            "meta": _create_graph_meta(error=str(exc)),
+        })
+
+    try:
+        from app.graph.neo4j_client import is_neo4j_configured, is_neo4j_healthy, get_neo4j_session
+
+        if not is_neo4j_configured() or not is_neo4j_healthy():
+            return json.dumps({
+                "rows": [],
+                "meta": _create_graph_meta(
+                    degraded=True,
+                    missing=["neo4j"],
+                    error="Graph backend unavailable",
+                ),
+            })
+
+        rows = []
+        with get_neo4j_session() as session:
+            result = session.run(prepared.query, prepared.params)
+            for idx, record in enumerate(result):
+                if idx >= prepared.limit:
+                    break
+                rows.append(serialize_record(record))
+
+        return json.dumps({
+            "rows": rows,
+            "meta": _create_graph_meta(),
+        }, default=str)
+    except Exception as exc:
+        logging.exception(f"Error in graph_query: {exc}")
+        return json.dumps({
+            "rows": [],
+            "meta": _create_graph_meta(
+                degraded=True,
+                error=str(exc),
+            ),
+        })
+
+
 @mcp.tool(description="""Index a local codebase into the CODE_* graph and search index.
 
 Required parameters:
@@ -4036,6 +4170,9 @@ Optional parameters:
 - reset: Clear existing repo data before indexing (default: false)
 - max_files: Maximum number of files to index
 - include_api_boundaries: Enable API boundary detection (default: true)
+- enable_zod_schema_aliases: Add SCHEMA_ALIASES edges between local and canonical Zod schemas (default: true)
+- ignore_patterns: List of substrings to skip (e.g., ["dist", "build"])
+- allow_patterns: List of substrings to always include, even if ignored
 - async_mode: Run indexing in the background and return a job_id (default: false)
 
 Returns:
@@ -4044,9 +4181,14 @@ Returns:
 - files_failed: Files that failed indexing
 - symbols_indexed: Symbols added to the graph
 - documents_indexed: Documents added to OpenSearch
-- call_edges_indexed: CALLS edges inferred
+- call_edges_indexed: Inferred traversal edges (CALLS + GraphQL READS; historical name)
 - duration_ms: Total indexing time
 - meta: Response metadata
+
+Notes:
+- Also ingests OpenAPI JSON/YAML specs (openapi*.json/yml/yaml) into CODE_OPENAPI_DEF and CODE_SCHEMA_FIELD nodes.
+- Parses GraphQL documents (*.graphql/*.gql) to add READS edges to schema fields.
+- Extracts string path literals into CODE_FIELD_PATH nodes and CONTAINS edges.
 """)
 async def index_codebase(
     repo_id: str,
@@ -4055,6 +4197,9 @@ async def index_codebase(
     reset: bool = False,
     max_files: int = None,
     include_api_boundaries: bool = True,
+    enable_zod_schema_aliases: bool = True,
+    ignore_patterns: list[str] | None = None,
+    allow_patterns: list[str] | None = None,
     async_mode: bool = False,
 ) -> str:
     """Index a local repository for code intelligence."""
@@ -4110,6 +4255,9 @@ async def index_codebase(
             embedding_service=toolkit.embedding_service if toolkit.is_available("embedding") else None,
             index_name=index_name or "code",
             include_api_boundaries=include_api_boundaries,
+            enable_zod_schema_aliases=enable_zod_schema_aliases,
+            ignore_patterns=ignore_patterns,
+            allow_patterns=allow_patterns,
         )
 
         if async_mode:
@@ -4149,6 +4297,9 @@ async def index_codebase(
                             "max_files": max_files,
                             "reset": reset,
                             "include_api_boundaries": include_api_boundaries,
+                            "enable_zod_schema_aliases": enable_zod_schema_aliases,
+                            "ignore_patterns": ignore_patterns,
+                            "allow_patterns": allow_patterns,
                         },
                         meta=meta,
                     )
@@ -4315,12 +4466,21 @@ Parameters:
 - repo_id: Filter by repository
 - language: Filter by language (python, typescript, etc.)
 - limit: Max results (default: 10, max: 100)
+- include_snippet: Include code snippets in results (default: true)
+- snippet_max_chars: Max characters for snippets (default: 400, set null for full)
+- include_generated: Include generated results without source preference (default: false)
 
-Returns: results[] with symbol info, file paths, line numbers, and code snippets.
+Returns: results[] with symbol info, file paths, line numbers, code snippets, and
+generated-source metadata (is_generated, source_tier).
 
 IMPORTANT: Results are snippets only. Use Read tool to see full file context before answering.
 Note: Snippets may include class fields/properties, but those are not indexed as symbols. Use the
 returned class/file symbol_id for downstream tools.
+Note: Snippets are truncated by default to keep results compact; set include_snippet=false or
+snippet_max_chars=null to disable truncation.
+Note: Results prefer source files by default. Generated/compiled/vendor files (dist/, build/, .d.ts,
+codegen output, node_modules) are downranked when source matches exist. Set include_generated to
+include them without preference.
 
 Example:
 - search_code_hybrid(query="authentication middleware", language="python")
@@ -4332,6 +4492,9 @@ async def search_code_hybrid(
     repo_id: str = None,
     language: str = None,
     limit: int = 10,
+    include_snippet: Optional[bool] = None,
+    snippet_max_chars: Optional[int] = None,
+    include_generated: Optional[bool] = None,
 ) -> str:
     """Search code using tri-hybrid retrieval."""
     # Check scope
@@ -4371,6 +4534,9 @@ async def search_code_hybrid(
             repo_id=repo_id,
             language=language,
             limit=min(max(1, limit or 10), 100),
+            include_snippet=include_snippet,
+            snippet_max_chars=snippet_max_chars,
+            include_generated=include_generated,
         )
 
         result = toolkit.search_tool.search(input_data)
@@ -4697,31 +4863,45 @@ Required parameters:
 
 Optional parameters:
 - changed_files: List of changed file paths
-- symbol_id: The SCIP symbol ID (e.g., `scip-typescript npm pkg method.`) retrieved from `search_code_hybrid`. Required for symbol analysis; plain names like "myFunction" will not work.
+- symbol_id: The SCIP symbol ID (e.g., `scip-typescript npm pkg method.`) retrieved from `search_code_hybrid`.
+- symbol_name: Symbol name to resolve when symbol_id is unknown (e.g., `firstname`)
+- parent_name: Parent type name for disambiguation (e.g., `Producer`)
+- symbol_kind: Filter by kind (field|method|class|function|interface|enum|type_alias|property)
+- file_path: File path to scope symbol lookup (supports suffix match)
 - max_depth: Maximum traversal depth (default: 10, max: 10)
 - include_cross_language: Include cross-language dependencies (default: false)
 - include_inferred_edges: Override inferred-edge usage (defaults to server config)
-- include_field_edges: Include READS/WRITES/HAS_FIELD edges for fields/properties (default: false)
-- include_schema_edges: Include SCHEMA_EXPOSES edges for schema surfaces (default: false)
+- include_field_edges: Include READS/WRITES/HAS_FIELD edges for fields/properties (default: true)
+- include_schema_edges: Include SCHEMA_EXPOSES and SCHEMA_ALIASES edges for schema surfaces (default: true)
+- include_path_edges: Include CODE_FIELD_PATH string path references (heuristic; may include false positives) (default: true)
 
 Returns:
 - affected_files[]: List of affected files with impact scores
 - meta: Response metadata
 
+Note: Results are graph-derived candidates; read any file you cite to confirm behavior.
+
 Examples:
 - impact_analysis(repo_id="repo-123", changed_files=["src/utils.py"])
 - impact_analysis(repo_id="repo-123", symbol_id="scip-typescript npm my-pkg 1.0.0 src/`utils.ts`/processData().", max_depth=5)
 - impact_analysis(repo_id="repo-123", symbol_id="scip-typescript npm my-pkg 1.0.0 src/`models.ts`/User#field:email.", include_field_edges=true, include_schema_edges=true)
+- impact_analysis(repo_id="repo-123", symbol_name="email", parent_name="User", symbol_kind="field", file_path="src/models.ts", include_field_edges=true, include_schema_edges=true)
+- impact_analysis(repo_id="repo-123", symbol_name="email", parent_name="User", symbol_kind="field", file_path="src/models.ts", include_path_edges=true)
 """)
 async def impact_analysis(
     repo_id: str,
     changed_files: list = None,
     symbol_id: str = None,
+    symbol_name: str = None,
+    parent_name: str = None,
+    symbol_kind: str = None,
+    file_path: str = None,
     max_depth: int = 10,
     include_cross_language: bool = False,
     include_inferred_edges: bool | None = None,
-    include_field_edges: bool = False,
-    include_schema_edges: bool = False,
+    include_field_edges: bool = True,
+    include_schema_edges: bool = True,
+    include_path_edges: bool = True,
 ) -> str:
     """Analyze the impact of code changes."""
     # Check scope
@@ -4759,11 +4939,16 @@ async def impact_analysis(
             repo_id=repo_id,
             changed_files=changed_files or [],
             symbol_id=symbol_id,
+            symbol_name=symbol_name,
+            parent_name=parent_name,
+            symbol_kind=symbol_kind,
+            file_path=file_path,
             include_cross_language=include_cross_language,
             max_depth=min(max(1, max_depth or 10), 10),
             include_inferred_edges=include_inferred_edges,
             include_field_edges=include_field_edges,
             include_schema_edges=include_schema_edges,
+            include_path_edges=include_path_edges,
         )
 
         result = toolkit.impact_tool.analyze(input_data)
@@ -5076,25 +5261,26 @@ async def pr_analysis(
 # =============================================================================
 
 
-@concept_mcp.tool(description="""Extract business concepts from a memory or text.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
-
-Parameters:
-- memory_id: UUID of the memory to extract from (required if content not provided)
-- content: Text content to extract from (required if memory_id not provided)
-- category: Optional category for concept scoping
-- store: Whether to store extracted concepts in graph (default: true)
-- access_entity: Access control scope for stored concepts (defaults to memory scope or user)
-
-Returns:
-- entities: Extracted business entities with types and importance
-- concepts: Extracted business concepts with types and confidence
-- summary: Brief summary of main topics
-- language: Detected language (en, de, mixed)
-- stored_entities: Count of entities stored (if store=true)
-- stored_concepts: Count of concepts stored (if store=true)
-""")
+# DISABLED: Business Concepts tools not exposed to LLM
+# @concept_mcp.tool(description="""Extract business concepts from a memory or text.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
+#
+# Parameters:
+# - memory_id: UUID of the memory to extract from (required if content not provided)
+# - content: Text content to extract from (required if memory_id not provided)
+# - category: Optional category for concept scoping
+# - store: Whether to store extracted concepts in graph (default: true)
+# - access_entity: Access control scope for stored concepts (defaults to memory scope or user)
+#
+# Returns:
+# - entities: Extracted business entities with types and importance
+# - concepts: Extracted business concepts with types and confidence
+# - summary: Brief summary of main topics
+# - language: Detected language (en, de, mixed)
+# - stored_entities: Count of entities stored (if store=true)
+# - stored_concepts: Count of concepts stored (if store=true)
+# """)
 async def extract_business_concepts(
     memory_id: str = None,
     content: str = None,
@@ -5167,21 +5353,21 @@ async def extract_business_concepts(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""List business concepts with optional filters.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
-
-Parameters:
-- category: Filter by category
-- concept_type: Filter by type (causal, pattern, comparison, trend, contradiction, hypothesis, fact)
-- min_confidence: Minimum confidence threshold (0.0-1.0)
-- limit: Maximum results (default: 50)
-- offset: Pagination offset
-
-Returns:
-- concepts[]: List of concepts with name, type, confidence, category, etc.
-- count: Number of concepts returned
-""")
+# @concept_mcp.tool(description="""List business concepts with optional filters.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
+#
+# Parameters:
+# - category: Filter by category
+# - concept_type: Filter by type (causal, pattern, comparison, trend, contradiction, hypothesis, fact)
+# - min_confidence: Minimum confidence threshold (0.0-1.0)
+# - limit: Maximum results (default: 50)
+# - offset: Pagination offset
+#
+# Returns:
+# - concepts[]: List of concepts with name, type, confidence, category, etc.
+# - count: Number of concepts returned
+# """)
 async def list_business_concepts(
     category: str = None,
     concept_type: str = None,
@@ -5231,16 +5417,16 @@ async def list_business_concepts(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Get a specific business concept by name.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
-
-Parameters:
-- name: Name of the concept (required)
-
-Returns:
-- Concept details including name, type, confidence, evidence, etc.
-""")
+# @concept_mcp.tool(description="""Get a specific business concept by name.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
+#
+# Parameters:
+# - name: Name of the concept (required)
+#
+# Returns:
+# - Concept details including name, type, confidence, evidence, etc.
+# """)
 async def get_business_concept(
     name: str,
 ) -> str:
@@ -5282,24 +5468,24 @@ async def get_business_concept(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Search business concepts by text query.
-
-Uses semantic (vector) search when embeddings are enabled, falling back to
-full-text search otherwise. Semantic search understands meaning, not just keywords.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
-
-Parameters:
-- query: Search query (required)
-- limit: Maximum results (default: 20)
-- use_semantic: Use semantic search if available (default: true)
-- min_score: Minimum similarity score 0-1 for semantic search (default: 0.5)
-
-Returns:
-- concepts[]: Matching concepts with search/similarity scores
-- count: Number of results
-- search_type: "semantic" or "fulltext"
-""")
+# @concept_mcp.tool(description="""Search business concepts by text query.
+#
+# Uses semantic (vector) search when embeddings are enabled, falling back to
+# full-text search otherwise. Semantic search understands meaning, not just keywords.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
+#
+# Parameters:
+# - query: Search query (required)
+# - limit: Maximum results (default: 20)
+# - use_semantic: Use semantic search if available (default: true)
+# - min_score: Minimum similarity score 0-1 for semantic search (default: 0.5)
+#
+# Returns:
+# - concepts[]: Matching concepts with search/similarity scores
+# - count: Number of results
+# - search_type: "semantic" or "fulltext"
+# """)
 async def search_business_concepts(
     query: str,
     limit: int = 20,
@@ -5365,26 +5551,26 @@ async def search_business_concepts(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Find concepts semantically similar to a given concept.
-
-Uses vector embeddings to find concepts that are semantically related,
-even if they don't share exact keywords. Useful for:
-- Discovering related concepts
-- Finding potential duplicates
-- Building concept clusters
-
-Requires BUSINESS_CONCEPTS_ENABLED=true and BUSINESS_CONCEPTS_EMBEDDING_ENABLED=true.
-
-Parameters:
-- concept_name: Name of the seed concept (required)
-- top_k: Number of similar concepts to return (default: 5)
-- find_duplicates: If true, uses higher threshold to find potential duplicates (default: false)
-
-Returns:
-- similar_concepts[]: List of similar concepts with similarity scores
-- count: Number of results
-- seed_concept: The concept used as seed
-""")
+# @concept_mcp.tool(description="""Find concepts semantically similar to a given concept.
+#
+# Uses vector embeddings to find concepts that are semantically related,
+# even if they don't share exact keywords. Useful for:
+# - Discovering related concepts
+# - Finding potential duplicates
+# - Building concept clusters
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true and BUSINESS_CONCEPTS_EMBEDDING_ENABLED=true.
+#
+# Parameters:
+# - concept_name: Name of the seed concept (required)
+# - top_k: Number of similar concepts to return (default: 5)
+# - find_duplicates: If true, uses higher threshold to find potential duplicates (default: false)
+#
+# Returns:
+# - similar_concepts[]: List of similar concepts with similarity scores
+# - count: Number of results
+# - seed_concept: The concept used as seed
+# """)
 async def find_similar_business_concepts(
     concept_name: str,
     top_k: int = 5,
@@ -5449,19 +5635,19 @@ async def find_similar_business_concepts(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""List business entities (companies, people, products, etc.)
-
-Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
-
-Parameters:
-- entity_type: Filter by type (company, person, product, market, metric, business_model, technology, strategy)
-- min_importance: Minimum importance threshold (0.0-1.0)
-- limit: Maximum results (default: 50)
-
-Returns:
-- entities[]: List of business entities
-- count: Number of entities returned
-""")
+# @concept_mcp.tool(description="""List business entities (companies, people, products, etc.)
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
+#
+# Parameters:
+# - entity_type: Filter by type (company, person, product, market, metric, business_model, technology, strategy)
+# - min_importance: Minimum importance threshold (0.0-1.0)
+# - limit: Maximum results (default: 50)
+#
+# Returns:
+# - entities[]: List of business entities
+# - count: Number of entities returned
+# """)
 async def list_business_entities(
     entity_type: str = None,
     min_importance: float = None,
@@ -5506,19 +5692,19 @@ async def list_business_entities(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Get the business concept network graph for visualization.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
-
-Parameters:
-- concept_name: Optional seed concept (if omitted, returns full network)
-- depth: Traversal depth 1-3 (default: 2)
-- limit: Maximum nodes (default: 50)
-
-Returns:
-- nodes[]: Concept and entity nodes with properties
-- edges[]: Relationships between nodes
-""")
+# @concept_mcp.tool(description="""Get the business concept network graph for visualization.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true environment variable.
+#
+# Parameters:
+# - concept_name: Optional seed concept (if omitted, returns full network)
+# - depth: Traversal depth 1-3 (default: 2)
+# - limit: Maximum nodes (default: 50)
+#
+# Returns:
+# - nodes[]: Concept and entity nodes with properties
+# - edges[]: Relationships between nodes
+# """)
 async def get_concept_network(
     concept_name: str = None,
     depth: int = 2,
@@ -5560,19 +5746,19 @@ async def get_concept_network(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Find contradictions between business concepts.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true and BUSINESS_CONCEPTS_CONTRADICTION_DETECTION=true.
-
-Parameters:
-- concept_name: Optional concept to analyze (if omitted, finds all contradictions)
-- category: Optional category filter
-- min_severity: Minimum severity threshold 0.0-1.0 (default: 0.5)
-
-Returns:
-- contradictions[]: List of detected contradictions with severity and evidence
-- count: Number of contradictions found
-""")
+# @concept_mcp.tool(description="""Find contradictions between business concepts.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true and BUSINESS_CONCEPTS_CONTRADICTION_DETECTION=true.
+#
+# Parameters:
+# - concept_name: Optional concept to analyze (if omitted, finds all contradictions)
+# - category: Optional category filter
+# - min_severity: Minimum severity threshold 0.0-1.0 (default: 0.5)
+#
+# Returns:
+# - contradictions[]: List of detected contradictions with severity and evidence
+# - count: Number of contradictions found
+# """)
 async def find_concept_contradictions(
     concept_name: str = None,
     category: str = None,
@@ -5629,25 +5815,25 @@ async def find_concept_contradictions(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Analyze convergence of evidence for a concept.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true.
-
-Analyzes whether a concept has strong convergent evidence from multiple
-independent sources across time and domains.
-
-Parameters:
-- concept_name: Name of the concept to analyze (required)
-- min_evidence: Minimum supporting memories required (default: 3)
-
-Returns:
-- convergence_score: Overall convergence score 0.0-1.0
-- is_strong: Whether meets strong convergence threshold
-- temporal_spread_days: Days between first and last evidence
-- category_diversity: Diversity of evidence sources
-- recommended_confidence: Suggested confidence boost
-- evidence_count: Number of supporting memories
-""")
+# @concept_mcp.tool(description="""Analyze convergence of evidence for a concept.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true.
+#
+# Analyzes whether a concept has strong convergent evidence from multiple
+# independent sources across time and domains.
+#
+# Parameters:
+# - concept_name: Name of the concept to analyze (required)
+# - min_evidence: Minimum supporting memories required (default: 3)
+#
+# Returns:
+# - convergence_score: Overall convergence score 0.0-1.0
+# - is_strong: Whether meets strong convergence threshold
+# - temporal_spread_days: Days between first and last evidence
+# - category_diversity: Diversity of evidence sources
+# - recommended_confidence: Suggested confidence boost
+# - evidence_count: Number of supporting memories
+# """)
 async def analyze_concept_convergence(
     concept_name: str,
     min_evidence: int = 3,
@@ -5695,17 +5881,17 @@ async def analyze_concept_convergence(
         return json.dumps({"error": str(e)})
 
 
-@concept_mcp.tool(description="""Delete a business concept.
-
-Requires BUSINESS_CONCEPTS_ENABLED=true.
-
-Parameters:
-- name: Name of the concept to delete (required)
-- access_entity: Access control scope to target (defaults to `user:<user_id>` if omitted)
-
-Returns:
-- deleted: Whether the concept was deleted
-""")
+# @concept_mcp.tool(description="""Delete a business concept.
+#
+# Requires BUSINESS_CONCEPTS_ENABLED=true.
+#
+# Parameters:
+# - name: Name of the concept to delete (required)
+# - access_entity: Access control scope to target (defaults to `user:<user_id>` if omitted)
+#
+# Returns:
+# - deleted: Whether the concept was deleted
+# """)
 async def delete_business_concept(
     name: str,
     access_entity: str = None,

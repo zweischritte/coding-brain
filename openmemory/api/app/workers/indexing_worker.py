@@ -139,6 +139,9 @@ class IndexingWorker:
                 repo_id,
                 index_name=job_dict.get("index_name") or "code",
                 include_api_boundaries=request.get("include_api_boundaries", True),
+                enable_zod_schema_aliases=request.get("enable_zod_schema_aliases", True),
+                ignore_patterns=request.get("ignore_patterns"),
+                allow_patterns=request.get("allow_patterns"),
             )
 
             # Create progress callback that sends heartbeats
@@ -296,6 +299,9 @@ def create_indexer_factory():
         repo_id: str,
         index_name: str = "code",
         include_api_boundaries: bool = True,
+        enable_zod_schema_aliases: bool = True,
+        ignore_patterns: Optional[list[str]] = None,
+        allow_patterns: Optional[list[str]] = None,
     ) -> CodeIndexingService:
         return CodeIndexingService(
             root_path=root_path,
@@ -305,6 +311,9 @@ def create_indexer_factory():
             embedding_service=toolkit.embedding_service if toolkit.is_available("embedding") else None,
             index_name=index_name,
             include_api_boundaries=include_api_boundaries,
+            enable_zod_schema_aliases=enable_zod_schema_aliases,
+            ignore_patterns=ignore_patterns,
+            allow_patterns=allow_patterns,
         )
 
     return factory

@@ -67,8 +67,20 @@ class TriHybridConfig:
 
     graph_depth: int = 2
     graph_edge_types: list[str] = field(
-        default_factory=lambda: ["CALLS", "IMPORTS", "CONTAINS", "DEFINES"]
+        default_factory=lambda: [
+            "CALLS",
+            "IMPORTS",
+            "CONTAINS",
+            "DEFINES",
+            "READS",
+            "WRITES",
+            "SCHEMA_EXPOSES",
+            "SCHEMA_ALIASES",
+            "PATH_READS",
+        ]
     )
+    graph_seed_top_n: int = 5
+    graph_seed_top_n: int = 5
 
     @property
     def total_weight(self) -> float:
@@ -584,11 +596,14 @@ class TriHybridRetriever:
 
         # Graph context fetch
         graph_available = self.graph_driver is not None
-        if self._graph_fetcher and query.seed_symbols:
+        seed_symbols = query.seed_symbols
+        if not seed_symbols:
+            seed_symbols = self._seed_symbols_from_lexical(lexical_results)
+        if self._graph_fetcher and seed_symbols:
             graph_start = time.perf_counter()
             try:
                 graph_context = self._graph_fetcher.fetch_context(
-                    symbol_ids=query.seed_symbols,
+                    symbol_ids=seed_symbols,
                     depth=self.config.graph_depth,
                     edge_types=self.config.graph_edge_types,
                 )
@@ -664,6 +679,28 @@ class TriHybridRetriever:
             lexical_error=lexical_error,
             vector_error=vector_error,
         )
+
+    def _seed_symbols_from_lexical(
+        self,
+        lexical_results: list[RankedResult],
+    ) -> list[str]:
+        if self.config.graph_seed_top_n <= 0 or not lexical_results:
+            return []
+
+        seeds: list[str] = []
+        seen: set[str] = set()
+        for result in lexical_results[: self.config.graph_seed_top_n]:
+            source = result.source or {}
+            symbol_type = source.get("symbol_type")
+            if symbol_type == "file":
+                seed_id = source.get("file_path") or result.id
+            else:
+                seed_id = result.id
+            if not seed_id or seed_id in seen:
+                continue
+            seen.add(seed_id)
+            seeds.append(seed_id)
+        return seeds
 
     def _lexical_search(
         self,

@@ -86,6 +86,10 @@ class CodeResponseMeta(BaseModel):
         default_factory=list,
         description="List of unavailable data sources"
     )
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings for interpreting results"
+    )
     error: Optional[str] = Field(
         default=None,
         description="Error message if operation partially failed"
@@ -132,6 +136,7 @@ class CodeSearchRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
     seed_symbols: Optional[List[str]] = None
+    include_generated: Optional[bool] = None
 
 
 class CodeHit(BaseModel):
@@ -143,6 +148,8 @@ class CodeHit(BaseModel):
     snippet: Optional[str] = None
     repo_id: Optional[str] = None
     source_scores: Dict[str, float] = Field(default_factory=dict)
+    is_generated: Optional[bool] = None
+    source_tier: Optional[str] = None
 
 
 class CodeSearchResponse(BaseModel):
@@ -224,10 +231,15 @@ class ImpactAnalysisRequest(BaseModel):
     repo_id: str
     changed_files: Optional[List[str]] = None
     symbol_id: Optional[str] = None
+    symbol_name: Optional[str] = None
+    parent_name: Optional[str] = None
+    symbol_kind: Optional[str] = None
+    file_path: Optional[str] = None
     include_cross_language: bool = False
     include_inferred_edges: Optional[bool] = None
-    include_field_edges: bool = False
-    include_schema_edges: bool = False
+    include_field_edges: bool = True
+    include_schema_edges: bool = True
+    include_path_edges: bool = True
     max_depth: int = Field(default=10, ge=1, le=10)
     confidence_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
 
@@ -351,8 +363,11 @@ class CodeIndexRequest(BaseModel):
     reset: bool = False
     max_files: Optional[int] = None
     include_api_boundaries: bool = True
+    enable_zod_schema_aliases: bool = True
     async_mode: bool = False
     force: bool = False
+    ignore_patterns: Optional[List[str]] = None
+    allow_patterns: Optional[List[str]] = None
 
 
 class PRRisk(BaseModel):

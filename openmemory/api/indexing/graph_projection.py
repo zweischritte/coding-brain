@@ -1,8 +1,8 @@
 """CODE_* Graph Projection for Neo4j.
 
 This module provides graph projection for code indexing:
-- Node types: CODE_FILE, CODE_SYMBOL, CODE_PACKAGE, CODE_SCHEMA_FIELD, CODE_OPENAPI_DEF
-- Edge types: CONTAINS, DEFINES, IMPORTS, CALLS, READS, WRITES, DATA_FLOWS_TO, HAS_FIELD, SCHEMA_EXPOSES
+- Node types: CODE_FILE, CODE_SYMBOL, CODE_PACKAGE, CODE_SCHEMA_FIELD, CODE_OPENAPI_DEF, CODE_FIELD_PATH
+- Edge types: CONTAINS, DEFINES, IMPORTS, CALLS, READS, WRITES, DATA_FLOWS_TO, HAS_FIELD, SCHEMA_EXPOSES, SCHEMA_ALIASES
 - Incremental updates (add/modify/delete)
 - Transaction support (atomic operations)
 - Batch operations for performance
@@ -61,6 +61,7 @@ class CodeNodeType(Enum):
     PACKAGE = "CODE_PACKAGE"
     SCHEMA_FIELD = "CODE_SCHEMA_FIELD"
     OPENAPI_DEF = "CODE_OPENAPI_DEF"
+    FIELD_PATH = "CODE_FIELD_PATH"
 
     @property
     def label(self) -> str:
@@ -77,9 +78,11 @@ class CodeEdgeType(Enum):
     CALLS = "CALLS"  # Symbol calls another symbol
     READS = "READS"  # Symbol reads a variable
     WRITES = "WRITES"  # Symbol writes a variable
+    PATH_READS = "PATH_READS"  # CODE_FIELD_PATH references a field/property
     DATA_FLOWS_TO = "DATA_FLOWS_TO"  # Data flows from source to sink
     HAS_FIELD = "HAS_FIELD"  # Type owns field/property symbol
     SCHEMA_EXPOSES = "SCHEMA_EXPOSES"  # Field exposed via schema surface
+    SCHEMA_ALIASES = "SCHEMA_ALIASES"  # Schema field aliases (heuristic duplicates)
     TRIGGERS_EVENT = "TRIGGERS_EVENT"  # Event emitter triggers event handler (@OnEvent)
 
 
@@ -462,6 +465,109 @@ class SchemaFieldNodeBuilder:
         )
 
 
+class FieldPathNodeBuilder:
+    """Builder for CODE_FIELD_PATH nodes."""
+
+    def __init__(self):
+        self._path_id: Optional[str] = None
+        self._path: Optional[str] = None
+        self._normalized_path: Optional[str] = None
+        self._segments: Optional[list[str]] = None
+        self._leaf: Optional[str] = None
+        self._confidence: Optional[str] = None
+        self._file_path: Optional[Path] = None
+        self._line_start: Optional[int] = None
+        self._line_end: Optional[int] = None
+        self._repo_id: Optional[str] = None
+
+    def path_id(self, path_id: str) -> "FieldPathNodeBuilder":
+        """Set path literal node ID."""
+        self._path_id = path_id
+        return self
+
+    def path(self, path: str) -> "FieldPathNodeBuilder":
+        """Set raw path literal."""
+        self._path = path
+        return self
+
+    def normalized_path(self, normalized_path: str) -> "FieldPathNodeBuilder":
+        """Set normalized path literal."""
+        self._normalized_path = normalized_path
+        return self
+
+    def segments(self, segments: list[str]) -> "FieldPathNodeBuilder":
+        """Set path segments."""
+        self._segments = segments
+        return self
+
+    def leaf(self, leaf: str) -> "FieldPathNodeBuilder":
+        """Set leaf segment."""
+        self._leaf = leaf
+        return self
+
+    def confidence(self, confidence: str) -> "FieldPathNodeBuilder":
+        """Set path confidence (high|medium|low)."""
+        self._confidence = confidence
+        return self
+
+    def file_path(self, path: Path) -> "FieldPathNodeBuilder":
+        """Set source file path."""
+        self._file_path = path
+        return self
+
+    def line_start(self, line_start: int) -> "FieldPathNodeBuilder":
+        """Set start line number."""
+        self._line_start = line_start
+        return self
+
+    def line_end(self, line_end: int) -> "FieldPathNodeBuilder":
+        """Set end line number."""
+        self._line_end = line_end
+        return self
+
+    def repo_id(self, repo_id: str) -> "FieldPathNodeBuilder":
+        """Set repository ID."""
+        self._repo_id = repo_id
+        return self
+
+    def build(self) -> CodeNode:
+        """Build field path node."""
+        if self._path_id is None:
+            raise ValueError("path_id is required")
+        if self._path is None:
+            raise ValueError("path is required")
+        if self._normalized_path is None:
+            raise ValueError("normalized_path is required")
+        if self._segments is None:
+            raise ValueError("segments are required")
+        if self._leaf is None:
+            raise ValueError("leaf is required")
+
+        properties: dict[str, Any] = {
+            "path": self._path,
+            "normalized_path": self._normalized_path,
+            "segments": self._segments,
+            "leaf": self._leaf,
+        }
+
+        if self._confidence:
+            properties["confidence"] = self._confidence
+        if self._file_path:
+            properties["file_path"] = str(self._file_path)
+        if self._line_start is not None:
+            properties["line_start"] = self._line_start
+        if self._line_end is not None:
+            properties["line_end"] = self._line_end
+        if self._repo_id:
+            properties["repo_id"] = self._repo_id
+
+        return CodeNode(
+            node_type=CodeNodeType.FIELD_PATH,
+            id=self._path_id,
+            properties=properties,
+        )
+
+
 class OpenAPIDefNodeBuilder:
     """Builder for CODE_OPENAPI_DEF nodes."""
 
@@ -823,6 +929,33 @@ class MemoryGraphStore(Neo4jDriver):
             if key[0] == node_id
         ]
 
+    def find_symbol_id_by_name(
+        self,
+        name: str,
+        repo_id: Optional[str] = None,
+        parent_name: Optional[str] = None,
+        kind: Optional[str] = None,
+        file_path: Optional[str] = None,
+    ) -> Optional[str]:
+        """Find a CODE_SYMBOL id by name with optional filters."""
+        for node in self._nodes.values():
+            if node.node_type != CodeNodeType.SYMBOL:
+                continue
+            if node.properties.get("name") != name:
+                continue
+            if repo_id and node.properties.get("repo_id") != repo_id:
+                continue
+            if parent_name and node.properties.get("parent_name") != parent_name:
+                continue
+            if kind and node.properties.get("kind") != kind:
+                continue
+            if file_path:
+                node_path = node.properties.get("file_path", "")
+                if node_path and not node_path.endswith(file_path):
+                    continue
+            return node.id
+        return None
+
     def query_nodes_by_type(self, node_type: CodeNodeType) -> list[CodeNode]:
         """Query nodes by type."""
         return [
@@ -1029,6 +1162,48 @@ class GraphProjection:
             builder.line_start(line_start)
         if line_end is not None:
             builder.line_end(line_end)
+        if repo_id:
+            builder.repo_id(repo_id)
+
+        node = builder.build()
+        self.driver.add_node(node)
+        return node
+
+    def create_field_path_node(
+        self,
+        path: str,
+        normalized_path: str,
+        segments: list[str],
+        leaf: str,
+        file_path: Optional[Path] = None,
+        line_start: Optional[int] = None,
+        line_end: Optional[int] = None,
+        confidence: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        path_id: Optional[str] = None,
+    ) -> CodeNode:
+        """Create a CODE_FIELD_PATH node."""
+        if not path_id:
+            base = f"{file_path}:{line_start}:{line_end}:{normalized_path}"
+            path_id = f"path::{base}"
+
+        builder = (
+            FieldPathNodeBuilder()
+            .path_id(path_id)
+            .path(path)
+            .normalized_path(normalized_path)
+            .segments(segments)
+            .leaf(leaf)
+        )
+
+        if file_path:
+            builder.file_path(file_path)
+        if line_start is not None:
+            builder.line_start(line_start)
+        if line_end is not None:
+            builder.line_end(line_end)
+        if confidence:
+            builder.confidence(confidence)
         if repo_id:
             builder.repo_id(repo_id)
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ class SearchCodeHybridConfig:
         limit: Maximum results to return (default 10)
         offset: Pagination offset
         include_snippet: Include code snippets in results
+        snippet_max_chars: Maximum characters to return for snippet (None for no truncation)
         include_source_breakdown: Include per-source scores
         embed_query: Whether to embed the query for vector search
     """
@@ -61,6 +62,7 @@ class SearchCodeHybridConfig:
     limit: int = 10
     offset: int = 0
     include_snippet: bool = True
+    snippet_max_chars: Optional[int] = 400
     include_source_breakdown: bool = True
     embed_query: bool = True
 
@@ -81,6 +83,9 @@ class SearchCodeHybridInput:
         limit: Maximum results
         offset: Pagination offset
         seed_symbols: Optional seed symbols for graph expansion
+        include_snippet: Override snippet inclusion for this call
+        snippet_max_chars: Override snippet length limit for this call
+        include_generated: Include generated results without source preference
     """
 
     query: str
@@ -89,6 +94,9 @@ class SearchCodeHybridInput:
     limit: int = 10
     offset: int = 0
     seed_symbols: list[str] = field(default_factory=list)
+    include_snippet: Optional[bool] = None
+    snippet_max_chars: Optional[int] = None
+    include_generated: Optional[bool] = None
 
 
 # =============================================================================
@@ -126,6 +134,8 @@ class CodeHit:
     snippet: Optional[str] = None
     repo_id: Optional[str] = None
     source_scores: dict[str, float] = field(default_factory=dict)
+    is_generated: Optional[bool] = None
+    source_tier: Optional[str] = None
 
 
 @dataclass
@@ -183,6 +193,87 @@ class SearchCodeHybridTool:
         self.embedding_service = embedding_service
         self.config = config or SearchCodeHybridConfig()
 
+    def _source_tier_for_hit(self, source_data: dict[str, Any]) -> str:
+        tier = source_data.get("source_tier")
+        if tier:
+            return str(tier)
+        if source_data.get("is_generated") is True:
+            return "generated"
+        return "source"
+
+    def _prefer_source_hits(
+        self,
+        hits: list[Any],
+        include_generated: bool,
+    ) -> list[Any]:
+        if include_generated or not hits:
+            return hits
+        tiers = [self._source_tier_for_hit(hit.source or {}) for hit in hits]
+        if not any(tier == "source" for tier in tiers):
+            return hits
+        priority = {"source": 0, "generated": 1, "vendor": 2}
+        indexed = list(enumerate(hits))
+        indexed.sort(
+            key=lambda item: (priority.get(tiers[item[0]], 1), item[0])
+        )
+        return [hit for _, hit in indexed]
+
+    def _hydrate_graph_source(self, hit: Any) -> dict[str, Any]:
+        source_data = hit.source or {}
+        if source_data.get("symbol_name") or source_data.get("file_path"):
+            return source_data
+
+        graph_driver = getattr(self.retriever, "graph_driver", None)
+        if not graph_driver or not hasattr(graph_driver, "get_node"):
+            return source_data
+
+        try:
+            node = graph_driver.get_node(hit.id)
+        except Exception as exc:
+            logger.debug(f"Graph hydration failed for {hit.id}: {exc}")
+            return source_data
+
+        if not node:
+            return source_data
+
+        props = getattr(node, "properties", {}) or {}
+        node_type = getattr(node, "node_type", None)
+        node_type_value = getattr(node_type, "value", None) if node_type else None
+
+        hydrated = dict(source_data)
+        symbol_type = hydrated.get("symbol_type") or props.get("kind")
+        if not symbol_type and node_type_value:
+            symbol_type = str(node_type_value).lower().replace("code_", "")
+        if not symbol_type:
+            symbol_type = props.get("schema_type")
+        if symbol_type:
+            hydrated["symbol_type"] = symbol_type
+
+        symbol_name = hydrated.get("symbol_name") or props.get("name") or props.get("leaf")
+        if not symbol_name:
+            path_value = props.get("file_path") or props.get("path")
+            if path_value:
+                symbol_name = str(path_value).split("/")[-1]
+        if symbol_name:
+            hydrated["symbol_name"] = symbol_name
+
+        file_path = hydrated.get("file_path") or props.get("file_path") or props.get("path")
+        if file_path:
+            hydrated["file_path"] = file_path
+
+        if "line_start" not in hydrated and props.get("line_start") is not None:
+            hydrated["line_start"] = props.get("line_start")
+        if "line_end" not in hydrated and props.get("line_end") is not None:
+            hydrated["line_end"] = props.get("line_end")
+        if "language" not in hydrated and props.get("language"):
+            hydrated["language"] = props.get("language")
+        if "signature" not in hydrated and props.get("signature"):
+            hydrated["signature"] = props.get("signature")
+        if "repo_id" not in hydrated and props.get("repo_id"):
+            hydrated["repo_id"] = props.get("repo_id")
+
+        return hydrated
+
     def search(
         self,
         input_data: SearchCodeHybridInput,
@@ -202,6 +293,20 @@ class SearchCodeHybridTool:
             SearchCodeHybridError: If search fails
         """
         cfg = config or self.config
+        if input_data.include_snippet is not None or input_data.snippet_max_chars is not None:
+            cfg = replace(
+                cfg,
+                include_snippet=(
+                    input_data.include_snippet
+                    if input_data.include_snippet is not None
+                    else cfg.include_snippet
+                ),
+                snippet_max_chars=(
+                    input_data.snippet_max_chars
+                    if input_data.snippet_max_chars is not None
+                    else cfg.snippet_max_chars
+                ),
+            )
         request_id = str(uuid.uuid4())
 
         # Validate query
@@ -254,10 +359,19 @@ class SearchCodeHybridTool:
             logger.error(f"Retrieval failed: {e}")
             raise SearchCodeHybridError(f"Search failed: {e}") from e
 
+        include_generated = input_data.include_generated is True
+        hits_for_output = self._prefer_source_hits(
+            result.hits,
+            include_generated=include_generated,
+        )
+
         # Convert to MCP schema format
         hits = []
-        for hit in result.hits:
-            source_data = hit.source or {}
+        for hit in hits_for_output:
+            source_data = self._hydrate_graph_source(hit)
+
+            if not source_data.get("symbol_name") and not source_data.get("file_path"):
+                continue
 
             symbol = CodeSymbol(
                 symbol_id=hit.id,
@@ -275,11 +389,20 @@ class SearchCodeHybridTool:
                 score=hit.score,
                 source="hybrid",
                 repo_id=source_data.get("repo_id"),
+                is_generated=source_data.get("is_generated"),
+                source_tier=source_data.get("source_tier"),
             )
 
             # Include snippet if configured
             if cfg.include_snippet:
-                code_hit.snippet = source_data.get("content")
+                snippet = source_data.get("content")
+                if snippet is not None and cfg.snippet_max_chars is not None:
+                    max_chars = max(0, cfg.snippet_max_chars)
+                    if len(snippet) > max_chars:
+                        snippet = snippet[:max_chars]
+                        if max_chars > 0:
+                            snippet += "..."
+                code_hit.snippet = snippet
 
             # Include source breakdown if configured
             if cfg.include_source_breakdown and hasattr(hit, "sources"):

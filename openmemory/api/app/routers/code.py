@@ -194,6 +194,7 @@ async def search_code(
             limit=request.limit,
             offset=request.offset,
             seed_symbols=request.seed_symbols or [],
+            include_generated=request.include_generated,
         )
 
         result = toolkit.search_tool.search(input_data)
@@ -349,6 +350,7 @@ async def find_callers(
                 request_id=result_dict.get("meta", {}).get("request_id", str(uuid.uuid4())),
                 degraded_mode=result_dict.get("meta", {}).get("degraded_mode", False),
                 missing_sources=result_dict.get("meta", {}).get("missing_sources", []),
+                warnings=result_dict.get("meta", {}).get("warnings", []),
             ),
             next_cursor=result_dict.get("next_cursor"),
         )
@@ -487,12 +489,17 @@ async def impact_analysis(
             repo_id=request.repo_id,
             changed_files=request.changed_files or [],
             symbol_id=request.symbol_id,
+            symbol_name=request.symbol_name,
+            parent_name=request.parent_name,
+            symbol_kind=request.symbol_kind,
+            file_path=request.file_path,
             include_cross_language=request.include_cross_language,
             max_depth=request.max_depth,
             confidence_threshold=str(request.confidence_threshold),
             include_inferred_edges=request.include_inferred_edges,
             include_field_edges=request.include_field_edges,
             include_schema_edges=request.include_schema_edges,
+            include_path_edges=request.include_path_edges,
         )
 
         result = toolkit.impact_tool.analyze(input_data)
@@ -504,6 +511,7 @@ async def impact_analysis(
                 request_id=result_dict.get("meta", {}).get("request_id", str(uuid.uuid4())),
                 degraded_mode=result_dict.get("meta", {}).get("degraded_mode", False),
                 missing_sources=result_dict.get("meta", {}).get("missing_sources", []),
+                warnings=result_dict.get("meta", {}).get("warnings", []),
             ),
         )
 
@@ -860,6 +868,9 @@ async def index_codebase(
         embedding_service=toolkit.embedding_service if toolkit.is_available("embedding") else None,
         index_name=request.index_name or "code",
         include_api_boundaries=request.include_api_boundaries,
+        enable_zod_schema_aliases=request.enable_zod_schema_aliases,
+        ignore_patterns=request.ignore_patterns,
+        allow_patterns=request.allow_patterns,
     )
 
     if request.async_mode:
@@ -875,6 +886,9 @@ async def index_codebase(
                     "max_files": request.max_files,
                     "reset": request.reset,
                     "include_api_boundaries": request.include_api_boundaries,
+                    "enable_zod_schema_aliases": request.enable_zod_schema_aliases,
+                    "ignore_patterns": request.ignore_patterns,
+                    "allow_patterns": request.allow_patterns,
                     "async_mode": True,
                 },
                 meta=_meta_to_dict(meta),

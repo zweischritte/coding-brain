@@ -207,6 +207,10 @@ class IndexConfig:
                 "repo_id": {"type": "keyword"},
                 "chunk_hash": {"type": "keyword"},
                 "last_modified": {"type": "date"},
+                "is_generated": {"type": "boolean"},
+                "generated_reason": {"type": "keyword"},
+                "source_tier": {"type": "keyword"},
+                "confidence": {"type": "keyword"},
             }
         }
 

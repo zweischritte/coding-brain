@@ -93,6 +93,7 @@ from openmemory.api.indexing.graph_projection import (
     SymbolNodeBuilder,
     PackageNodeBuilder,
     SchemaFieldNodeBuilder,
+    FieldPathNodeBuilder,
     OpenAPIDefNodeBuilder,
     EdgeBuilder,
     # Batch operations

@@ -253,6 +253,34 @@ class CodeGraphDriver(Neo4jDriver):
             return records[0]["id"]
         return None
 
+    def find_symbol_id_by_name(
+        self,
+        symbol_name: str,
+        repo_id: Optional[str] = None,
+        parent_name: Optional[str] = None,
+        kind: Optional[str] = None,
+        file_path: Optional[str] = None,
+    ) -> Optional[str]:
+        query = "MATCH (n:CODE_SYMBOL) WHERE n.name = $name"
+        params: dict[str, Any] = {"name": symbol_name}
+        if repo_id:
+            query += " AND n.repo_id = $repo_id"
+            params["repo_id"] = repo_id
+        if parent_name:
+            query += " AND n.parent_name = $parent_name"
+            params["parent_name"] = parent_name
+        if kind:
+            query += " AND n.kind = $kind"
+            params["kind"] = kind
+        if file_path:
+            query += " AND n.file_path ENDS WITH $file_path"
+            params["file_path"] = file_path
+        query += " RETURN n.id AS id ORDER BY n.file_path, n.line_start LIMIT 1"
+        records = self._run(query, params)
+        if records:
+            return records[0]["id"]
+        return None
+
     def find_file_id(self, file_path: str, repo_id: Optional[str] = None) -> Optional[str]:
         query = "MATCH (n:CODE_FILE) WHERE n.path ENDS WITH $path"
         params: dict[str, Any] = {"path": file_path}

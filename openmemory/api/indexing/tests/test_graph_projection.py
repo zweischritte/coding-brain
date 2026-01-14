@@ -36,6 +36,7 @@ from openmemory.api.indexing.graph_projection import (
     SymbolNodeBuilder,
     PackageNodeBuilder,
     SchemaFieldNodeBuilder,
+    FieldPathNodeBuilder,
     OpenAPIDefNodeBuilder,
     EdgeBuilder,
     # Batch operations
@@ -124,6 +125,11 @@ class TestCodeNodeType:
         """Test CODE_SCHEMA_FIELD node type."""
         assert CodeNodeType.SCHEMA_FIELD.value == "CODE_SCHEMA_FIELD"
         assert CodeNodeType.SCHEMA_FIELD.label == "CODE_SCHEMA_FIELD"
+
+    def test_field_path_type(self):
+        """Test CODE_FIELD_PATH node type."""
+        assert CodeNodeType.FIELD_PATH.value == "CODE_FIELD_PATH"
+        assert CodeNodeType.FIELD_PATH.label == "CODE_FIELD_PATH"
 
     def test_openapi_def_type(self):
         """Test CODE_OPENAPI_DEF node type."""
@@ -260,6 +266,14 @@ class TestCodeEdgeType:
     def test_schema_exposes_edge(self):
         """Test SCHEMA_EXPOSES edge type."""
         assert CodeEdgeType.SCHEMA_EXPOSES.value == "SCHEMA_EXPOSES"
+
+    def test_schema_aliases_edge(self):
+        """Test SCHEMA_ALIASES edge type."""
+        assert CodeEdgeType.SCHEMA_ALIASES.value == "SCHEMA_ALIASES"
+
+    def test_path_reads_edge(self):
+        """Test PATH_READS edge type."""
+        assert CodeEdgeType.PATH_READS.value == "PATH_READS"
 
 
 class TestCodeEdge:
@@ -424,6 +438,39 @@ class TestSchemaFieldNodeBuilder:
         """Test that schema_id is required."""
         builder = SchemaFieldNodeBuilder().name("name").schema_type("graphql")
         with pytest.raises(ValueError, match="schema_id is required"):
+            builder.build()
+
+
+class TestFieldPathNodeBuilder:
+    """Tests for FieldPathNodeBuilder."""
+
+    def test_build_field_path_node(self):
+        """Test building a field path node."""
+        builder = FieldPathNodeBuilder()
+        node = (
+            builder.path_id("path::/path/to/file.ts:10:20")
+            .path("user.address.city")
+            .normalized_path("user.address.city")
+            .segments(["user", "address", "city"])
+            .leaf("city")
+            .confidence("high")
+            .file_path(Path("/path/to/file.ts"))
+            .line_start(10)
+            .line_end(10)
+            .build()
+        )
+
+        assert node.node_type == CodeNodeType.FIELD_PATH
+        assert node.id == "path::/path/to/file.ts:10:20"
+        assert node.properties["path"] == "user.address.city"
+        assert node.properties["normalized_path"] == "user.address.city"
+        assert node.properties["leaf"] == "city"
+        assert node.properties["confidence"] == "high"
+
+    def test_field_path_requires_id(self):
+        """Test that path_id is required."""
+        builder = FieldPathNodeBuilder().path("user.address")
+        with pytest.raises(ValueError, match="path_id is required"):
             builder.build()
 
 

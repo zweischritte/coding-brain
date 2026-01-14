@@ -74,6 +74,8 @@ class TestLanguageEnum:
         assert Language.from_extension(".tsx") == Language.TSX
         assert Language.from_extension(".java") == Language.JAVA
         assert Language.from_extension(".go") == Language.GO
+        assert Language.from_extension(".graphql") == Language.GRAPHQL
+        assert Language.from_extension(".gql") == Language.GRAPHQL
         assert Language.from_extension(".js") is None
         assert Language.from_extension(".unknown") is None
 

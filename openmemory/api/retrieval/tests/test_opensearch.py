@@ -187,6 +187,10 @@ class TestIndexConfig:
         assert "file_path" in config.mappings["properties"]
         assert "symbol_name" in config.mappings["properties"]
         assert "symbol_type" in config.mappings["properties"]
+        assert "is_generated" in config.mappings["properties"]
+        assert "generated_reason" in config.mappings["properties"]
+        assert "source_tier" in config.mappings["properties"]
+        assert "confidence" in config.mappings["properties"]
         assert config.settings.get("index.knn") is True
 
     def test_index_config_for_memory(self):

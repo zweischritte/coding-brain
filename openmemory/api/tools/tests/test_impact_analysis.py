@@ -196,8 +196,9 @@ class TestImpactAnalysisConfig:
         assert config.include_cross_language is False
         assert config.max_affected_files == 100
         assert config.include_inferred_edges is True
-        assert config.include_field_edges is False
-        assert config.include_schema_edges is False
+        assert config.include_field_edges is True
+        assert config.include_schema_edges is True
+        assert config.include_path_edges is True
 
     def test_custom_values(self):
         """Test custom configuration values."""
@@ -211,6 +212,7 @@ class TestImpactAnalysisConfig:
             include_inferred_edges=False,
             include_field_edges=True,
             include_schema_edges=True,
+            include_path_edges=True,
         )
 
         assert config.max_depth == 5
@@ -220,6 +222,7 @@ class TestImpactAnalysisConfig:
         assert config.include_inferred_edges is False
         assert config.include_field_edges is True
         assert config.include_schema_edges is True
+        assert config.include_path_edges is True
 
 
 # =============================================================================
@@ -253,6 +256,23 @@ class TestImpactInput:
 
         assert input_data.symbol_id == "scip-python myapp module/func."
 
+    def test_symbol_name_input(self):
+        """Test input with symbol_name."""
+        from openmemory.api.tools.impact_analysis import ImpactInput
+
+        input_data = ImpactInput(
+            repo_id="myrepo",
+            symbol_name="my_field",
+            parent_name="MyType",
+            symbol_kind="field",
+            file_path="/path/to/module.py",
+        )
+
+        assert input_data.symbol_name == "my_field"
+        assert input_data.parent_name == "MyType"
+        assert input_data.symbol_kind == "field"
+        assert input_data.file_path == "/path/to/module.py"
+
     def test_depth_override(self):
         """Test depth override in input."""
         from openmemory.api.tools.impact_analysis import ImpactInput
@@ -274,10 +294,12 @@ class TestImpactInput:
             symbol_id="scip-python myapp module/func.",
             include_field_edges=True,
             include_schema_edges=True,
+            include_path_edges=True,
         )
 
         assert input_data.include_field_edges is True
         assert input_data.include_schema_edges is True
+        assert input_data.include_path_edges is True
 
 
 # =============================================================================
@@ -385,6 +407,51 @@ class TestImpactAnalysisTool:
 
         assert result is not None
 
+    def test_analyze_file_changes_uses_resolved_file_id(self):
+        """Use resolved file id for CONTAINS lookup when file path is relative."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        driver = MagicMock()
+        file_path = "relative/path/module.py"
+        file_id = "/abs/path/module.py"
+
+        file_node = MagicMock()
+        file_node.id = file_id
+        file_node.properties = {"path": file_id}
+
+        contains_edge = MagicMock()
+        contains_edge.edge_type = CodeEdgeType.CONTAINS
+        contains_edge.target_id = "scip-python myapp module/my_func."
+
+        def get_node_side_effect(node_id):
+            if node_id == file_id:
+                return file_node
+            return None
+
+        def get_outgoing_edges_side_effect(node_id):
+            if node_id == file_id:
+                return [contains_edge]
+            return []
+
+        driver.get_node.side_effect = get_node_side_effect
+        driver.find_file_id.return_value = file_id
+        driver.get_outgoing_edges.side_effect = get_outgoing_edges_side_effect
+        driver.get_incoming_edges.return_value = []
+
+        tool = ImpactAnalysisTool(graph_driver=driver)
+        result = tool.analyze(
+            ImpactInput(repo_id="myrepo", changed_files=[file_path])
+        )
+
+        assert result is not None
+        assert any(
+            call.args and call.args[0] == file_id
+            for call in driver.get_outgoing_edges.call_args_list
+        )
+
     def test_analyze_with_depth_limit(
         self, mock_graph_driver_with_dependencies, sample_scip_id
     ):
@@ -406,6 +473,59 @@ class TestImpactAnalysisTool:
         )
 
         assert result is not None
+
+    def test_analyze_resolves_symbol_name_in_file(self):
+        """Test resolving symbol_id from symbol_name and file_path."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        driver = MagicMock()
+        file_id = "/path/to/module.py"
+        symbol_id = "scip-python myapp module/MyClass#field:value."
+
+        file_node = MagicMock()
+        file_node.id = file_id
+        file_node.properties = {"path": file_id}
+
+        symbol_node = MagicMock()
+        symbol_node.id = symbol_id
+        symbol_node.properties = {
+            "name": "value",
+            "kind": "field",
+            "parent_name": "MyClass",
+            "file_path": file_id,
+        }
+
+        contains_edge = MagicMock()
+        contains_edge.edge_type = CodeEdgeType.CONTAINS
+        contains_edge.target_id = symbol_id
+
+        def get_node_side_effect(node_id):
+            if node_id == file_id:
+                return file_node
+            if node_id == symbol_id:
+                return symbol_node
+            return None
+
+        driver.get_node.side_effect = get_node_side_effect
+        driver.get_outgoing_edges.return_value = [contains_edge]
+        driver.get_incoming_edges.return_value = []
+
+        tool = ImpactAnalysisTool(graph_driver=driver)
+        result = tool.analyze(
+            ImpactInput(
+                repo_id="myrepo",
+                symbol_name="value",
+                parent_name="MyClass",
+                symbol_kind="field",
+                file_path=file_id,
+            )
+        )
+
+        file_paths = {af.file_path for af in result.affected_files}
+        assert file_id in file_paths
 
     def test_analyze_returns_confidence(
         self, mock_graph_driver_with_dependencies, sample_scip_id
@@ -491,6 +611,121 @@ class TestImpactAnalysisTool:
 
         file_paths = {af.file_path for af in result.affected_files}
         assert "/path/to/schema.ts" in file_paths
+
+    def test_analyze_schema_node_resolves_to_code(self):
+        """Test schema node analysis follows SCHEMA_EXPOSES back to code."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        driver = MagicMock()
+
+        field_id = "scip-typescript mypkg module/Producer#field:firstname."
+        schema_id = "schema::graphql:/path/to/schema.ts:Producer:firstname"
+
+        schema_node = MagicMock()
+        schema_node.properties = {
+            "name": "firstname",
+            "schema_type": "graphql",
+            "file_path": "/path/to/schema.ts",
+        }
+
+        field_node = MagicMock()
+        field_node.properties = {
+            "scip_id": field_id,
+            "name": "firstname",
+            "kind": "field",
+            "file_path": "/path/to/producer.ts",
+            "parent_name": "Producer",
+        }
+
+        schema_edge = MagicMock()
+        schema_edge.source_id = field_id
+        schema_edge.target_id = schema_id
+        schema_edge.edge_type = CodeEdgeType.SCHEMA_EXPOSES
+        schema_edge.properties = {}
+
+        def get_node_side_effect(node_id):
+            if node_id == schema_id:
+                return schema_node
+            if node_id == field_id:
+                return field_node
+            return None
+
+        driver.get_node.side_effect = get_node_side_effect
+        driver.get_incoming_edges.return_value = [schema_edge]
+        driver.get_outgoing_edges.return_value = []
+
+        tool = ImpactAnalysisTool(graph_driver=driver)
+        result = tool.analyze(
+            ImpactInput(
+                repo_id="myrepo",
+                symbol_id=schema_id,
+                include_schema_edges=True,
+            )
+        )
+
+        file_paths = {af.file_path for af in result.affected_files}
+        assert "/path/to/producer.ts" in file_paths
+
+    def test_analyze_includes_path_edges(self):
+        """Test path literal matches are included when enabled."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        driver = MagicMock()
+        field_id = "scip-typescript mypkg module/Producer#field:firstname."
+
+        field_node = MagicMock()
+        field_node.properties = {
+            "scip_id": field_id,
+            "name": "firstname",
+            "kind": "field",
+            "parent_name": "Producer",
+            "file_path": "/path/to/producer.ts",
+        }
+
+        path_node = MagicMock()
+        path_node.properties = {
+            "path": "movie.producers.firstname",
+            "normalized_path": "movie.producers.firstname",
+            "segments": ["movie", "producers", "firstname"],
+            "leaf": "firstname",
+            "file_path": "/path/to/form.ts",
+            "confidence": "medium",
+            "repo_id": "myrepo",
+        }
+
+        def get_node_side_effect(node_id):
+            if node_id == field_id:
+                return field_node
+            return None
+
+        def query_nodes_by_type(node_type):
+            node_value = node_type.value if hasattr(node_type, "value") else str(node_type)
+            if node_value == "CODE_FIELD_PATH":
+                return [path_node]
+            return []
+
+        driver.get_node.side_effect = get_node_side_effect
+        driver.get_incoming_edges.return_value = []
+        driver.get_outgoing_edges.return_value = []
+        driver.query_nodes_by_type.side_effect = query_nodes_by_type
+
+        tool = ImpactAnalysisTool(graph_driver=driver)
+        result = tool.analyze(
+            ImpactInput(
+                repo_id="myrepo",
+                symbol_id=field_id,
+                include_path_edges=True,
+            )
+        )
+
+        file_paths = {af.file_path for af in result.affected_files}
+        assert "/path/to/form.ts" in file_paths
 
 
 # =============================================================================
