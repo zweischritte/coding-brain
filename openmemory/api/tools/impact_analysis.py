@@ -175,6 +175,17 @@ class CoverageSummary:
 
 
 @dataclass
+class ResolvedSymbolCandidate:
+    """Candidate symbol match for impact analysis."""
+
+    symbol_id: str
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    parent_name: Optional[str] = None
+    file_path: Optional[str] = None
+
+
+@dataclass
 class ImpactOutput:
     """Result from impact_analysis.
 
@@ -188,6 +199,12 @@ class ImpactOutput:
     coverage_low: bool = False
     action_required: Optional[str] = None
     action_message: Optional[str] = None
+    resolved_symbol_id: Optional[str] = None
+    resolved_symbol_name: Optional[str] = None
+    resolved_symbol_kind: Optional[str] = None
+    resolved_symbol_file_path: Optional[str] = None
+    resolved_symbol_parent_name: Optional[str] = None
+    symbol_candidates: list[ResolvedSymbolCandidate] = field(default_factory=list)
 
 
 # =============================================================================
@@ -268,10 +285,40 @@ class ImpactAnalysisTool:
         # Collect affected files
         affected_map: dict[str, AffectedFile] = {}
         traversal_state = {"used_inferred_edges": False}
+        symbol_candidates = self._symbol_candidates(input_data, limit=20)
+
+        if (
+            input_data.symbol_name
+            and not input_data.symbol_id
+            and len(symbol_candidates) > 1
+            and not input_data.parent_name
+            and not input_data.file_path
+        ):
+            meta = ResponseMeta(request_id=request_id)
+            action_required = "DISAMBIGUATE_SYMBOL"
+            action_message = self._format_symbol_candidates(
+                input_data.symbol_name,
+                symbol_candidates,
+            )
+            meta.warnings.append(action_message)
+            return ImpactOutput(
+                affected_files=[],
+                meta=meta,
+                required_files=[],
+                coverage_summary=CoverageSummary(),
+                coverage_low=True,
+                action_required=action_required,
+                action_message=action_message,
+                symbol_candidates=symbol_candidates,
+            )
+
+        resolved_symbol_id: Optional[str] = None
+        resolved_symbol_info: dict[str, Optional[str]] = {}
 
         try:
             resolved_symbol_id = self._resolve_symbol_id(input_data)
             if resolved_symbol_id:
+                resolved_symbol_info = self._resolve_symbol_info(resolved_symbol_id)
                 # Analyze single symbol impact
                 self._analyze_symbol_impact(
                     symbol_id=resolved_symbol_id,
@@ -374,6 +421,12 @@ class ImpactAnalysisTool:
             coverage_low=coverage_low,
             action_required=action_required,
             action_message=action_message,
+            resolved_symbol_id=resolved_symbol_info.get("resolved_symbol_id"),
+            resolved_symbol_name=resolved_symbol_info.get("resolved_symbol_name"),
+            resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),
+            resolved_symbol_file_path=resolved_symbol_info.get("resolved_symbol_file_path"),
+            resolved_symbol_parent_name=resolved_symbol_info.get("resolved_symbol_parent_name"),
+            symbol_candidates=symbol_candidates,
         )
 
     def _validate_input(self, input_data: ImpactInput) -> None:
@@ -460,6 +513,97 @@ class ImpactAnalysisTool:
                 f"Symbol not found: {input_data.symbol_name}"
             )
         return symbol_id
+
+    def _resolve_symbol_info(self, symbol_id: str) -> dict[str, Optional[str]]:
+        if not symbol_id or not hasattr(self.graph_driver, "get_node"):
+            return {}
+
+        node = self.graph_driver.get_node(symbol_id)
+        if not node:
+            return {}
+
+        props = getattr(node, "properties", {}) or {}
+        return {
+            "resolved_symbol_id": symbol_id,
+            "resolved_symbol_name": props.get("name"),
+            "resolved_symbol_kind": props.get("kind"),
+            "resolved_symbol_file_path": props.get("file_path") or props.get("path"),
+            "resolved_symbol_parent_name": props.get("parent_name"),
+        }
+
+    def _symbol_candidates(
+        self,
+        input_data: ImpactInput,
+        limit: int = 20,
+    ) -> list[ResolvedSymbolCandidate]:
+        if not input_data.symbol_name:
+            return []
+
+        if hasattr(self.graph_driver, "find_symbol_candidates_by_name"):
+            candidates = self.graph_driver.find_symbol_candidates_by_name(
+                input_data.symbol_name,
+                repo_id=input_data.repo_id,
+                parent_name=input_data.parent_name,
+                kind=input_data.symbol_kind,
+                file_path=input_data.file_path,
+                limit=limit,
+            )
+            resolved: list[ResolvedSymbolCandidate] = []
+            for candidate in candidates or []:
+                resolved.append(
+                    ResolvedSymbolCandidate(
+                        symbol_id=candidate.get("symbol_id") or candidate.get("id"),
+                        name=candidate.get("name"),
+                        kind=candidate.get("kind"),
+                        parent_name=candidate.get("parent_name"),
+                        file_path=candidate.get("file_path"),
+                    )
+                )
+            return [item for item in resolved if item.symbol_id]
+
+        if hasattr(self.graph_driver, "find_symbol_id_by_name"):
+            symbol_id = self.graph_driver.find_symbol_id_by_name(
+                input_data.symbol_name,
+                repo_id=input_data.repo_id,
+                parent_name=input_data.parent_name,
+                kind=input_data.symbol_kind,
+                file_path=input_data.file_path,
+            )
+            if symbol_id:
+                info = self._resolve_symbol_info(symbol_id)
+                return [
+                    ResolvedSymbolCandidate(
+                        symbol_id=symbol_id,
+                        name=info.get("resolved_symbol_name") or input_data.symbol_name,
+                        kind=info.get("resolved_symbol_kind"),
+                        parent_name=info.get("resolved_symbol_parent_name"),
+                        file_path=info.get("resolved_symbol_file_path"),
+                    )
+                ]
+
+        return []
+
+    def _format_symbol_candidates(
+        self,
+        symbol_name: str,
+        candidates: list[ResolvedSymbolCandidate],
+    ) -> str:
+        max_listed = 10
+        listed = candidates[:max_listed]
+        remaining = len(candidates) - len(listed)
+        suffix = f"\n(+{remaining} more)" if remaining > 0 else ""
+        lines = []
+        for candidate in listed:
+            parent = candidate.parent_name or "<unknown>"
+            kind = candidate.kind or "symbol"
+            path = candidate.file_path or "<unknown file>"
+            lines.append(f"- {parent}.{symbol_name} ({kind}) {path}")
+        return (
+            "STOP. Multiple symbols match the requested name. "
+            "Provide parent_name or file_path to disambiguate before finalizing.\n"
+            "Candidates:\n"
+            f"{chr(10).join(lines)}{suffix}"
+        )
 
     def _find_symbol_in_edges(
         self,

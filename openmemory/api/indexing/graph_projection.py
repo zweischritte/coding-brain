@@ -964,6 +964,46 @@ class MemoryGraphStore(Neo4jDriver):
             if node.node_type == node_type
         ]
 
+    def find_symbol_candidates_by_name(
+        self,
+        symbol_name: str,
+        repo_id: Optional[str] = None,
+        parent_name: Optional[str] = None,
+        kind: Optional[str] = None,
+        file_path: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for node in self._nodes.values():
+            if node.node_type != CodeNodeType.SYMBOL:
+                continue
+            props = node.properties
+            if props.get("name") != symbol_name:
+                continue
+            if repo_id and props.get("repo_id") != repo_id:
+                continue
+            if parent_name and props.get("parent_name") != parent_name:
+                continue
+            if kind and props.get("kind") != kind:
+                continue
+            if file_path:
+                node_path = props.get("file_path", "")
+                if node_path and not node_path.endswith(file_path):
+                    continue
+            candidates.append(
+                {
+                    "symbol_id": node.id,
+                    "name": props.get("name"),
+                    "kind": props.get("kind"),
+                    "parent_name": props.get("parent_name"),
+                    "file_path": props.get("file_path"),
+                    "line_start": props.get("line_start"),
+                }
+            )
+
+        candidates.sort(key=lambda item: (item.get("file_path") or "", item.get("line_start") or 0))
+        return candidates[: max(1, limit)]
+
     def create_constraint(
         self,
         name: str,

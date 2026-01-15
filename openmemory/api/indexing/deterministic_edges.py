@@ -325,6 +325,8 @@ class DeterministicEdgeExtractor:
         call_edges: list[tuple[str, str]] = []
         field_reads: list[tuple[str, str]] = []
         field_writes: list[tuple[str, str]] = []
+        property_paths: list[PathLiteralDefinition] = []
+        property_path_nodes: set[tuple[int, int]] = set()
         type_scopes: list[dict[str, TypeHint]] = [{}]
         return_type_scopes: list[Optional[TypeHint]] = [None]
         zod_aliases = self._collect_ts_zod_aliases(source, root)
@@ -404,6 +406,37 @@ class DeterministicEdgeExtractor:
             source_id = source_for_access(current_class, current_caller)
             if field_id and source_id:
                 access_list.append((source_id, field_id))
+
+        def record_member_expression_path(node: Node) -> None:
+            if node.type not in ("member_expression", "optional_member_expression"):
+                return
+            parent = getattr(node, "parent", None)
+            if parent and parent.type in ("member_expression", "optional_member_expression"):
+                parent_obj = parent.child_by_field_name("object")
+                if parent_obj == node:
+                    return
+            segments = self._member_expression_segments(source, node)
+            if not segments:
+                return
+            key = (node.start_byte, node.end_byte)
+            if key in property_path_nodes:
+                return
+            property_path_nodes.add(key)
+            raw_path = ".".join(segments)
+            property_paths.append(
+                PathLiteralDefinition(
+                    path=raw_path,
+                    normalized_path=raw_path,
+                    segments=segments,
+                    leaf=segments[-1],
+                    file_path=file_path,
+                    line_start=node.start_point[0] + 1,
+                    line_end=node.end_point[0] + 1,
+                    confidence="medium",
+                    start_byte=node.start_byte,
+                    end_byte=node.end_byte,
+                )
+            )
 
         def property_key_text(pair_node: Node) -> Optional[str]:
             key_node = pair_node.child_by_field_name("key") or pair_node.child_by_field_name(
@@ -617,11 +650,13 @@ class DeterministicEdgeExtractor:
             if node.type == "assignment_expression":
                 left_node = node.child_by_field_name("left")
                 right_node = node.child_by_field_name("right")
-                if left_node and left_node.type == "member_expression":
+                if left_node and left_node.type in ("member_expression", "optional_member_expression"):
                     field_id = self._resolve_ts_field_access(
                         file_path, source, left_node, current_class, type_scopes
                     )
                     record_field_access(field_writes, field_id, current_class, current_caller)
+                    if not field_id:
+                        record_member_expression_path(left_node)
                 if (
                     left_node
                     and left_node.type == "identifier"
@@ -748,7 +783,11 @@ class DeterministicEdgeExtractor:
 
             if node.type == "update_expression":
                 member_node = next(
-                    (child for child in node.children if child.type == "member_expression"),
+                    (
+                        child
+                        for child in node.children
+                        if child.type in ("member_expression", "optional_member_expression")
+                    ),
                     None,
                 )
                 if member_node:
@@ -757,6 +796,8 @@ class DeterministicEdgeExtractor:
                     )
                     record_field_access(field_reads, field_id, current_class, current_caller)
                     record_field_access(field_writes, field_id, current_class, current_caller)
+                    if not field_id:
+                        record_member_expression_path(member_node)
                 return
 
             if node.type == "call_expression" and current_caller:
@@ -784,11 +825,13 @@ class DeterministicEdgeExtractor:
                         visit(child, current_class, current_caller)
                 return
 
-            if node.type == "member_expression":
+            if node.type in ("member_expression", "optional_member_expression"):
                 field_id = self._resolve_ts_field_access(
                     file_path, source, node, current_class, type_scopes
                 )
                 record_field_access(field_reads, field_id, current_class, current_caller)
+                if not field_id:
+                    record_member_expression_path(node)
                 return
 
             for child in node.children:
@@ -805,6 +848,8 @@ class DeterministicEdgeExtractor:
             source,
             root,
         )
+        if property_paths:
+            path_literals = [*property_paths, *path_literals]
         return DeterministicEdges(
             call_edges=call_edges,
             import_targets=import_targets,
@@ -965,7 +1010,7 @@ class DeterministicEdgeExtractor:
         current_class: Optional[str],
         type_scopes: list[dict[str, TypeHint]],
     ) -> Optional[str]:
-        if node.type != "member_expression":
+        if node.type not in ("member_expression", "optional_member_expression"):
             return None
 
         obj = node.child_by_field_name("object")
@@ -1605,6 +1650,66 @@ class DeterministicEdgeExtractor:
         visit(root)
         visit_low(root)
         return path_literals
+
+    def _member_expression_segments(
+        self,
+        source: bytes,
+        node: Node,
+    ) -> Optional[list[str]]:
+        if node.type not in ("member_expression", "optional_member_expression"):
+            return None
+
+        segments: list[str] = []
+        current: Optional[Node] = node
+
+        while current:
+            if current.type in ("member_expression", "optional_member_expression"):
+                obj = current.child_by_field_name("object")
+                prop = current.child_by_field_name("property")
+                if not obj or not prop:
+                    return None
+                prop_name = self._node_text(source, prop)
+                if not prop_name:
+                    return None
+                segments.insert(0, prop_name)
+                current = obj
+                continue
+
+            if current.type in ("subscript_expression", "optional_subscript_expression"):
+                obj = current.child_by_field_name("object")
+                index = current.child_by_field_name("index")
+                if not obj or not index:
+                    return None
+                index_value: Optional[str] = None
+                if index.type in ("string", "template_string"):
+                    literal_values = self._path_literal_values(source, index)
+                    if literal_values:
+                        index_value = literal_values[1]
+                elif index.type in ("identifier", "property_identifier", "number"):
+                    index_value = self._node_text(source, index)
+                if not index_value or "." in index_value or "[" in index_value or "]" in index_value:
+                    return None
+                segments.insert(0, index_value)
+                current = obj
+                continue
+
+            if current.type in ("identifier", "this", "super"):
+                base_name = self._node_text(source, current)
+                if not base_name:
+                    return None
+                segments.insert(0, base_name)
+                break
+
+            return None
+
+        if len(segments) < 2:
+            return None
+
+        for segment in segments:
+            if not re.match(r"^[A-Za-z0-9_*$-]+$", segment):
+                return None
+
+        return segments
 
     def _path_literal_values(
         self,

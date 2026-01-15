@@ -343,6 +343,7 @@ class TestImpactOutput:
         assert output.coverage_low is False
         assert output.action_required is None
         assert output.action_message is None
+        assert output.symbol_candidates == []
         assert output.meta.request_id == "req-123"
 
     def test_output_with_multiple_files(self):
@@ -374,6 +375,7 @@ class TestImpactOutput:
         assert output.coverage_low is False
         assert output.action_required is None
         assert output.action_message is None
+        assert output.symbol_candidates == []
 
 
 # =============================================================================

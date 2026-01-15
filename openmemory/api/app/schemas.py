@@ -264,6 +264,16 @@ class ImpactCoverageSummary(BaseModel):
     contains: int = 0
 
 
+class ImpactSymbolCandidate(BaseModel):
+    """Candidate symbol match for impact analysis."""
+
+    symbol_id: str
+    name: Optional[str] = None
+    kind: Optional[str] = None
+    parent_name: Optional[str] = None
+    file_path: Optional[str] = None
+
+
 class ImpactAnalysisResponse(BaseModel):
     """Response body for impact analysis endpoint."""
 
@@ -275,6 +285,12 @@ class ImpactAnalysisResponse(BaseModel):
     coverage_low: bool = False
     action_required: Optional[str] = None
     action_message: Optional[str] = None
+    resolved_symbol_id: Optional[str] = None
+    resolved_symbol_name: Optional[str] = None
+    resolved_symbol_kind: Optional[str] = None
+    resolved_symbol_file_path: Optional[str] = None
+    resolved_symbol_parent_name: Optional[str] = None
+    symbol_candidates: List[ImpactSymbolCandidate] = Field(default_factory=list)
     meta: CodeResponseMeta
 
 

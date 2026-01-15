@@ -281,6 +281,48 @@ class CodeGraphDriver(Neo4jDriver):
             return records[0]["id"]
         return None
 
+    def find_symbol_candidates_by_name(
+        self,
+        symbol_name: str,
+        repo_id: Optional[str] = None,
+        parent_name: Optional[str] = None,
+        kind: Optional[str] = None,
+        file_path: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        query = "MATCH (n:CODE_SYMBOL) WHERE n.name = $name"
+        params: dict[str, Any] = {"name": symbol_name, "limit": max(1, limit)}
+        if repo_id:
+            query += " AND n.repo_id = $repo_id"
+            params["repo_id"] = repo_id
+        if parent_name:
+            query += " AND n.parent_name = $parent_name"
+            params["parent_name"] = parent_name
+        if kind:
+            query += " AND n.kind = $kind"
+            params["kind"] = kind
+        if file_path:
+            query += " AND n.file_path ENDS WITH $file_path"
+            params["file_path"] = file_path
+        query += (
+            " RETURN n.id AS id, n.name AS name, n.kind AS kind, "
+            "n.parent_name AS parent_name, n.file_path AS file_path, n.line_start AS line_start "
+            "ORDER BY n.file_path, n.line_start LIMIT $limit"
+        )
+        records = self._run(query, params)
+        return [
+            {
+                "symbol_id": record.get("id"),
+                "name": record.get("name"),
+                "kind": record.get("kind"),
+                "parent_name": record.get("parent_name"),
+                "file_path": record.get("file_path"),
+                "line_start": record.get("line_start"),
+            }
+            for record in (records or [])
+            if record.get("id")
+        ]
+
     def find_file_id(self, file_path: str, repo_id: Optional[str] = None) -> Optional[str]:
         query = "MATCH (n:CODE_FILE) WHERE n.path ENDS WITH $path"
         params: dict[str, Any] = {"path": file_path}

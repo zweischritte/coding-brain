@@ -883,6 +883,30 @@ const data = obj["account.settings.theme"];
     assert low_node.properties.get("confidence") == "low"
 
 
+def test_member_expression_path_literals(indexer):
+    indexer, store, src = indexer
+
+    code = """
+const data = { channelId: "x" };
+const id = data.channelId;
+const nested = item.meldung.senderId;
+"""
+    file_path = src / "member-paths.ts"
+    file_path.write_text(code)
+
+    indexer.index_repository()
+
+    path_nodes = store.query_nodes_by_type(CodeNodeType.FIELD_PATH)
+
+    data_node = _find_path_node(path_nodes, "data.channelId")
+    assert data_node is not None
+    assert data_node.properties.get("confidence") == "medium"
+
+    nested_node = _find_path_node(path_nodes, "item.meldung.senderId")
+    assert nested_node is not None
+    assert nested_node.properties.get("confidence") == "medium"
+
+
 def test_path_literal_edges(indexer):
     indexer, store, src = indexer
 

@@ -4882,6 +4882,8 @@ Returns:
 - coverage_low: True when no reads/writes/schema hits were found
 - action_required: Required follow-up action when coverage is shallow
 - action_message: Short imperative message for the required action
+- resolved_symbol_id/name/kind/file_path/parent_name: Resolved symbol info when symbol_id/name lookup succeeds
+- symbol_candidates[]: Candidate symbols when the name is ambiguous
 - meta: Response metadata
 
 Note: Results are graph-derived candidates; read any file you cite to confirm behavior.
