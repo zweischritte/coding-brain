@@ -561,6 +561,44 @@ class TestImpactAnalysisTool:
         assert error.action_required == "DISAMBIGUATE_SYMBOL"
         assert "Candidates:" in str(error)
 
+    def test_rerun_on_internal_field_hardblock(self):
+        """Hardblock when coverage is shallow for a field/property change."""
+        from openmemory.api.tools.impact_analysis import (
+            HardBlockError,
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        graph_driver = MagicMock()
+        symbol_id = "scip-typescript myapp module/User#field:channelId."
+        graph_driver.find_symbol_id_by_name.return_value = symbol_id
+        graph_driver.get_outgoing_edges.return_value = []
+        graph_driver.get_incoming_edges.return_value = []
+
+        symbol_node = MagicMock()
+        symbol_node.properties = {
+            "name": "channelId",
+            "kind": "field",
+            "file_path": "/path/to/model.ts",
+        }
+
+        graph_driver.get_node.return_value = symbol_node
+
+        tool = ImpactAnalysisTool(graph_driver=graph_driver)
+
+        with pytest.raises(HardBlockError) as exc_info:
+            tool.analyze(
+                ImpactInput(
+                    repo_id="myrepo",
+                    symbol_name="channelId",
+                    symbol_kind="field",
+                )
+            )
+
+        error = exc_info.value
+        assert error.action_required == "RERUN_ON_INTERNAL_FIELD"
+        assert "Coverage is shallow" in str(error)
+
     def test_analyze_file_changes_uses_resolved_file_id(self):
         """Use resolved file id for CONTAINS lookup when file path is relative."""
         from openmemory.api.tools.impact_analysis import (

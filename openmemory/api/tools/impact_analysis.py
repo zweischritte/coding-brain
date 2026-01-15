@@ -78,9 +78,13 @@ PATH_CONFIDENCE_SCORES = {
 }
 PATH_MATCH_LIMIT = 50
 PARENT_HINT_BOOST = 0.05
-HARD_BLOCK_ACTIONS = {"DISAMBIGUATE_SYMBOL", "RESOLUTION_MISMATCH"}
-MINIMAL_BLOCK_ACTIONS = {"READ_REQUIRED_FILES", "RERUN_ON_INTERNAL_FIELD"}
-RERUN_ACTIONS = HARD_BLOCK_ACTIONS | {"RERUN_ON_INTERNAL_FIELD"}
+HARD_BLOCK_ACTIONS = {
+    "DISAMBIGUATE_SYMBOL",
+    "RESOLUTION_MISMATCH",
+    "RERUN_ON_INTERNAL_FIELD",
+}
+MINIMAL_BLOCK_ACTIONS = {"READ_REQUIRED_FILES"}
+RERUN_ACTIONS = HARD_BLOCK_ACTIONS
 
 
 @dataclass
@@ -446,10 +450,15 @@ class ImpactAnalysisTool:
             )
 
         coverage_summary = self._summarize_coverage(affected_files)
-        coverage_low = (
+        raw_coverage_low = (
             (coverage_summary.reads + coverage_summary.writes + coverage_summary.schema) == 0
             and bool(affected_files)
         )
+        should_rerun = self._should_rerun_on_internal_field(
+            input_data=input_data,
+            resolved_symbol_info=resolved_symbol_info,
+        )
+        coverage_low = raw_coverage_low if should_rerun else False
         action_required = None
         action_message = None
         if required_files:
@@ -482,6 +491,14 @@ class ImpactAnalysisTool:
                     next_tool=next_tool,
                 )
 
+        if action_required in HARD_BLOCK_ACTIONS:
+            raise HardBlockError(
+                action_required=action_required,
+                message=action_message or "",
+                symbol_candidates=symbol_candidates,
+                resolved_symbol_info=resolved_symbol_info,
+            )
+
         if action_required in MINIMAL_BLOCK_ACTIONS:
             return ImpactOutput(
                 affected_files=[],
@@ -499,8 +516,8 @@ class ImpactAnalysisTool:
                 resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),
                 resolved_symbol_file_path=resolved_symbol_info.get("resolved_symbol_file_path"),
                 resolved_symbol_parent_name=resolved_symbol_info.get("resolved_symbol_parent_name"),
-                symbol_candidates=symbol_candidates,
-            )
+            symbol_candidates=symbol_candidates,
+        )
 
         return ImpactOutput(
             affected_files=affected_files,
@@ -520,6 +537,20 @@ class ImpactAnalysisTool:
             resolved_symbol_parent_name=resolved_symbol_info.get("resolved_symbol_parent_name"),
             symbol_candidates=symbol_candidates,
         )
+
+    def _should_rerun_on_internal_field(
+        self,
+        input_data: ImpactInput,
+        resolved_symbol_info: dict[str, Optional[str]],
+    ) -> bool:
+        symbol_kind = (input_data.symbol_kind or "").lower()
+        if symbol_kind in ("field", "property"):
+            return True
+        resolved_kind = (resolved_symbol_info.get("resolved_symbol_kind") or "").lower()
+        if resolved_kind in ("field", "property", "schema_field"):
+            return True
+        resolved_id = (resolved_symbol_info.get("resolved_symbol_id") or "").lower()
+        return resolved_id.startswith("schema::")
 
     def _validate_input(self, input_data: ImpactInput) -> None:
         """Validate input parameters."""
