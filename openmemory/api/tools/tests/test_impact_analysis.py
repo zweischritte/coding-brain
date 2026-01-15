@@ -343,6 +343,9 @@ class TestImpactOutput:
         assert output.coverage_low is False
         assert output.action_required is None
         assert output.action_message is None
+        assert output.status == "ok"
+        assert output.do_not_finalize is False
+        assert output.required_action is None
         assert output.symbol_candidates == []
         assert output.meta.request_id == "req-123"
 
@@ -375,6 +378,9 @@ class TestImpactOutput:
         assert output.coverage_low is False
         assert output.action_required is None
         assert output.action_message is None
+        assert output.status == "ok"
+        assert output.do_not_finalize is False
+        assert output.required_action is None
         assert output.symbol_candidates == []
 
 
@@ -460,8 +466,67 @@ class TestImpactAnalysisTool:
         assert result.action_required == "RESOLUTION_MISMATCH"
         assert result.coverage_low is True
         assert result.affected_files == []
+        assert result.status == "blocked"
+        assert result.do_not_finalize is True
+        assert result.required_action is not None
+        assert result.required_action.kind == "RESOLUTION_MISMATCH"
 
         assert result is not None
+
+    def test_required_files_block_finalize(self):
+        """Block finalize when required_files are present."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        graph_driver = MagicMock()
+        symbol_id = "scip-typescript myapp module/User#field:channelId."
+        graph_driver.find_symbol_id_by_name.return_value = symbol_id
+
+        symbol_node = MagicMock()
+        symbol_node.properties = {
+            "name": "channelId",
+            "kind": "field",
+            "file_path": "/path/to/source.ts",
+        }
+
+        caller_node = MagicMock()
+        caller_node.properties = {"file_path": "/path/to/consumer.ts"}
+
+        write_edge = MagicMock()
+        write_edge.edge_type = CodeEdgeType.WRITES
+        write_edge.source_id = "caller"
+        write_edge.target_id = symbol_id
+        write_edge.properties = {}
+
+        def get_node_side_effect(node_id):
+            if node_id == symbol_id:
+                return symbol_node
+            if node_id == "caller":
+                return caller_node
+            return None
+
+        def get_incoming_edges_side_effect(node_id):
+            if node_id == symbol_id:
+                return [write_edge]
+            return []
+
+        graph_driver.get_node.side_effect = get_node_side_effect
+        graph_driver.get_incoming_edges.side_effect = get_incoming_edges_side_effect
+        graph_driver.get_outgoing_edges.return_value = []
+
+        tool = ImpactAnalysisTool(graph_driver=graph_driver)
+        result = tool.analyze(
+            ImpactInput(repo_id="myrepo", symbol_name="channelId")
+        )
+
+        assert "/path/to/consumer.ts" in result.required_files
+        assert result.action_required == "READ_REQUIRED_FILES"
+        assert result.status == "blocked"
+        assert result.do_not_finalize is True
+        assert result.required_action is not None
+        assert result.required_action.kind == "READ_REQUIRED_FILES"
 
     def test_analyze_file_changes_uses_resolved_file_id(self):
         """Use resolved file id for CONTAINS lookup when file path is relative."""

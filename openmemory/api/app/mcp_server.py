@@ -4882,12 +4882,16 @@ Returns:
 - coverage_low: True when no reads/writes/schema hits were found
 - action_required: Required follow-up action when coverage is shallow
 - action_message: Short imperative message for the required action
+- status: "ok" or "blocked" (blocked means do_not_finalize=true)
+- do_not_finalize: True when the response is unsafe to finalize
+- required_action: Structured follow-up action (kind/message/next_tool/next_args)
 - resolved_symbol_id/name/kind/file_path/parent_name: Resolved symbol info when symbol_id/name lookup succeeds
 - symbol_candidates[]: Candidate symbols when the name is ambiguous
 - meta: Response metadata
 
 Note: Results are graph-derived candidates; read any file you cite to confirm behavior.
-If coverage_low is true or action_required is set, do not finalize. Find the internal field name (schema/state or mapping code) and rerun impact_analysis.
+If status is "blocked" or do_not_finalize is true, do not finalize. Follow required_action first.
+If coverage_low is true or action_required is set, find the internal field name (schema/state or mapping code) and rerun impact_analysis.
 If you pass file_path and the resolved_symbol_file_path does not match, do not use the results; rerun with the correct file_path or parent_name.
 
 Examples:

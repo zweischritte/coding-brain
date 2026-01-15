@@ -186,6 +186,16 @@ class ResolvedSymbolCandidate:
 
 
 @dataclass
+class RequiredAction:
+    """Required follow-up action for blocked responses."""
+
+    kind: str
+    message: str
+    next_tool: Optional[str] = None
+    next_args: Optional[dict[str, Any]] = None
+
+
+@dataclass
 class ImpactOutput:
     """Result from impact_analysis.
 
@@ -199,6 +209,9 @@ class ImpactOutput:
     coverage_low: bool = False
     action_required: Optional[str] = None
     action_message: Optional[str] = None
+    status: str = "ok"
+    do_not_finalize: bool = False
+    required_action: Optional[RequiredAction] = None
     resolved_symbol_id: Optional[str] = None
     resolved_symbol_name: Optional[str] = None
     resolved_symbol_kind: Optional[str] = None
@@ -309,6 +322,13 @@ class ImpactAnalysisTool:
                 coverage_low=True,
                 action_required=action_required,
                 action_message=action_message,
+                status="blocked",
+                do_not_finalize=True,
+                required_action=RequiredAction(
+                    kind=action_required,
+                    message=action_message,
+                    next_tool="impact_analysis",
+                ),
                 symbol_candidates=symbol_candidates,
             )
 
@@ -342,6 +362,13 @@ class ImpactAnalysisTool:
                         coverage_low=True,
                         action_required=action_required,
                         action_message=action_message,
+                        status="blocked",
+                        do_not_finalize=True,
+                        required_action=RequiredAction(
+                            kind=action_required,
+                            message=action_message,
+                            next_tool="impact_analysis",
+                        ),
                         resolved_symbol_id=resolved_symbol_info.get("resolved_symbol_id"),
                         resolved_symbol_name=resolved_symbol_info.get("resolved_symbol_name"),
                         resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),
@@ -438,6 +465,9 @@ class ImpactAnalysisTool:
         )
         action_required = None
         action_message = None
+        if required_files:
+            action_required = "READ_REQUIRED_FILES"
+            action_message = "STOP. Read required files before finalizing."
         if coverage_low:
             action_required = "RERUN_ON_INTERNAL_FIELD"
             action_message = (
@@ -447,6 +477,25 @@ class ImpactAnalysisTool:
             )
             meta.warnings.append(action_message)
 
+        status = "ok"
+        do_not_finalize = False
+        required_action = None
+        if action_required or required_files:
+            status = "blocked"
+            do_not_finalize = True
+            if action_required and action_message:
+                next_tool = (
+                    "impact_analysis"
+                    if action_required
+                    in ("DISAMBIGUATE_SYMBOL", "RESOLUTION_MISMATCH", "RERUN_ON_INTERNAL_FIELD")
+                    else None
+                )
+                required_action = RequiredAction(
+                    kind=action_required,
+                    message=action_message,
+                    next_tool=next_tool,
+                )
+
         return ImpactOutput(
             affected_files=affected_files,
             required_files=required_files,
@@ -455,6 +504,9 @@ class ImpactAnalysisTool:
             coverage_low=coverage_low,
             action_required=action_required,
             action_message=action_message,
+            status=status,
+            do_not_finalize=do_not_finalize,
+            required_action=required_action,
             resolved_symbol_id=resolved_symbol_info.get("resolved_symbol_id"),
             resolved_symbol_name=resolved_symbol_info.get("resolved_symbol_name"),
             resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),

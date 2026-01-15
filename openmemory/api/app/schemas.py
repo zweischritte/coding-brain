@@ -274,6 +274,15 @@ class ImpactSymbolCandidate(BaseModel):
     file_path: Optional[str] = None
 
 
+class ImpactRequiredAction(BaseModel):
+    """Required follow-up action for blocked impact analysis responses."""
+
+    kind: str
+    message: str
+    next_tool: Optional[str] = None
+    next_args: Optional[Dict[str, Any]] = None
+
+
 class ImpactAnalysisResponse(BaseModel):
     """Response body for impact analysis endpoint."""
 
@@ -285,6 +294,9 @@ class ImpactAnalysisResponse(BaseModel):
     coverage_low: bool = False
     action_required: Optional[str] = None
     action_message: Optional[str] = None
+    status: str = "ok"
+    do_not_finalize: bool = False
+    required_action: Optional[ImpactRequiredAction] = None
     resolved_symbol_id: Optional[str] = None
     resolved_symbol_name: Optional[str] = None
     resolved_symbol_kind: Optional[str] = None
