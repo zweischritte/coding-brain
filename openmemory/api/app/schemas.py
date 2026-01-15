@@ -257,6 +257,7 @@ class ImpactAnalysisResponse(BaseModel):
     """Response body for impact analysis endpoint."""
 
     affected_files: List[AffectedFile] = Field(default_factory=list)
+    required_files: List[str] = Field(default_factory=list)
     meta: CodeResponseMeta
 
 

@@ -4877,6 +4877,7 @@ Optional parameters:
 
 Returns:
 - affected_files[]: List of affected files with impact scores
+- required_files[]: Files that must be read before finalizing an answer (write or schema-alias matches)
 - meta: Response metadata
 
 Note: Results are graph-derived candidates; read any file you cite to confirm behavior.

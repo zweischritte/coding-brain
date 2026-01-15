@@ -333,6 +333,7 @@ class TestImpactOutput:
 
         assert len(output.affected_files) == 1
         assert output.affected_files[0].file_path == "/path/to/file.py"
+        assert output.required_files == []
         assert output.meta.request_id == "req-123"
 
     def test_output_with_multiple_files(self):
@@ -360,6 +361,7 @@ class TestImpactOutput:
         )
 
         assert len(output.affected_files) == 2
+        assert output.required_files == []
 
 
 # =============================================================================

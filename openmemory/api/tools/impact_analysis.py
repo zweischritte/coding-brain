@@ -171,6 +171,7 @@ class ImpactOutput:
 
     affected_files: list[AffectedFile]
     meta: ResponseMeta
+    required_files: list[str] = field(default_factory=list)
 
 
 # =============================================================================
@@ -333,7 +334,11 @@ class ImpactAnalysisTool:
                 "Only implement code changes if you were asked to explicitly."
             )
 
-        return ImpactOutput(affected_files=affected_files, meta=meta)
+        return ImpactOutput(
+            affected_files=affected_files,
+            required_files=required_files,
+            meta=meta,
+        )
 
     def _validate_input(self, input_data: ImpactInput) -> None:
         """Validate input parameters."""
