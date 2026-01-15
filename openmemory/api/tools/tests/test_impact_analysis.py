@@ -421,6 +421,46 @@ class TestImpactAnalysisTool:
             )
         )
 
+    def test_resolution_mismatch_requires_rerun(self):
+        """Return action_required when resolved symbol does not match file_path."""
+        from openmemory.api.tools.impact_analysis import (
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        graph_driver = MagicMock()
+        symbol_id = "scip-typescript myapp module/User#field:channelId."
+        graph_driver.find_symbol_id_by_name.return_value = symbol_id
+        graph_driver.get_outgoing_edges.return_value = []
+        graph_driver.get_incoming_edges.return_value = []
+
+        symbol_node = MagicMock()
+        symbol_node.properties = {
+            "name": "channelId",
+            "kind": "field",
+            "file_path": "/path/to/other.ts",
+        }
+
+        def get_node_side_effect(node_id):
+            if node_id == symbol_id:
+                return symbol_node
+            return None
+
+        graph_driver.get_node.side_effect = get_node_side_effect
+
+        tool = ImpactAnalysisTool(graph_driver=graph_driver)
+        result = tool.analyze(
+            ImpactInput(
+                repo_id="myrepo",
+                symbol_name="channelId",
+                file_path="/path/to/expected.ts",
+            )
+        )
+
+        assert result.action_required == "RESOLUTION_MISMATCH"
+        assert result.coverage_low is True
+        assert result.affected_files == []
+
         assert result is not None
 
     def test_analyze_file_changes_uses_resolved_file_id(self):

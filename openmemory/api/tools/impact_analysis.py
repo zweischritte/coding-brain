@@ -319,6 +319,40 @@ class ImpactAnalysisTool:
             resolved_symbol_id = self._resolve_symbol_id(input_data)
             if resolved_symbol_id:
                 resolved_symbol_info = self._resolve_symbol_info(resolved_symbol_id)
+                if input_data.file_path and not self._path_matches(
+                    input_data.file_path,
+                    resolved_symbol_info.get("resolved_symbol_file_path"),
+                ):
+                    action_required = "RESOLUTION_MISMATCH"
+                    action_message = (
+                        "STOP. Resolved symbol does not match the requested file_path. "
+                        "Rerun impact_analysis with the correct file_path or parent_name."
+                    )
+                    meta = ResponseMeta(request_id=request_id)
+                    meta.warnings.append(
+                        f"{action_message}\n"
+                        f"Requested: {input_data.file_path}\n"
+                        f"Resolved: {resolved_symbol_info.get('resolved_symbol_file_path')}"
+                    )
+                    return ImpactOutput(
+                        affected_files=[],
+                        required_files=[],
+                        meta=meta,
+                        coverage_summary=CoverageSummary(),
+                        coverage_low=True,
+                        action_required=action_required,
+                        action_message=action_message,
+                        resolved_symbol_id=resolved_symbol_info.get("resolved_symbol_id"),
+                        resolved_symbol_name=resolved_symbol_info.get("resolved_symbol_name"),
+                        resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),
+                        resolved_symbol_file_path=resolved_symbol_info.get(
+                            "resolved_symbol_file_path"
+                        ),
+                        resolved_symbol_parent_name=resolved_symbol_info.get(
+                            "resolved_symbol_parent_name"
+                        ),
+                        symbol_candidates=symbol_candidates,
+                    )
                 # Analyze single symbol impact
                 self._analyze_symbol_impact(
                     symbol_id=resolved_symbol_id,
@@ -530,6 +564,13 @@ class ImpactAnalysisTool:
             "resolved_symbol_file_path": props.get("file_path") or props.get("path"),
             "resolved_symbol_parent_name": props.get("parent_name"),
         }
+
+    def _path_matches(self, requested: Optional[str], resolved: Optional[str]) -> bool:
+        if not requested or not resolved:
+            return False
+        requested_path = str(requested).strip()
+        resolved_path = str(resolved).strip()
+        return resolved_path.endswith(requested_path) or requested_path.endswith(resolved_path)
 
     def _symbol_candidates(
         self,

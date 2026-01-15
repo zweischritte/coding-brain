@@ -4888,6 +4888,7 @@ Returns:
 
 Note: Results are graph-derived candidates; read any file you cite to confirm behavior.
 If coverage_low is true or action_required is set, do not finalize. Find the internal field name (schema/state or mapping code) and rerun impact_analysis.
+If you pass file_path and the resolved_symbol_file_path does not match, do not use the results; rerun with the correct file_path or parent_name.
 
 Examples:
 - impact_analysis(repo_id="repo-123", changed_files=["src/utils.py"])
