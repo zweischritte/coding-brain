@@ -163,6 +163,18 @@ class ResponseMeta:
 
 
 @dataclass
+class CoverageSummary:
+    """Coverage summary for impact analysis results."""
+
+    reads: int = 0
+    writes: int = 0
+    schema: int = 0
+    path_matches: int = 0
+    calls: int = 0
+    contains: int = 0
+
+
+@dataclass
 class ImpactOutput:
     """Result from impact_analysis.
 
@@ -172,6 +184,10 @@ class ImpactOutput:
     affected_files: list[AffectedFile]
     meta: ResponseMeta
     required_files: list[str] = field(default_factory=list)
+    coverage_summary: CoverageSummary = field(default_factory=CoverageSummary)
+    coverage_low: bool = False
+    action_required: Optional[str] = None
+    action_message: Optional[str] = None
 
 
 # =============================================================================
@@ -334,10 +350,30 @@ class ImpactAnalysisTool:
                 "Only implement code changes if you were asked to explicitly."
             )
 
+        coverage_summary = self._summarize_coverage(affected_files)
+        coverage_low = (
+            (coverage_summary.reads + coverage_summary.writes + coverage_summary.schema) == 0
+            and bool(affected_files)
+        )
+        action_required = None
+        action_message = None
+        if coverage_low:
+            action_required = "RERUN_ON_INTERNAL_FIELD"
+            action_message = (
+                "STOP. Coverage is shallow (no reads/writes/schema hits). "
+                "Find the internal field name in schema/state or mapping code, "
+                "then rerun impact_analysis. Do not finalize yet."
+            )
+            meta.warnings.append(action_message)
+
         return ImpactOutput(
             affected_files=affected_files,
             required_files=required_files,
             meta=meta,
+            coverage_summary=coverage_summary,
+            coverage_low=coverage_low,
+            action_required=action_required,
+            action_message=action_message,
         )
 
     def _validate_input(self, input_data: ImpactInput) -> None:
@@ -353,6 +389,29 @@ class ImpactAnalysisTool:
             raise InvalidInputError(
                 "Either changed_files, symbol_id, or symbol_name is required"
             )
+
+    def _summarize_coverage(
+        self,
+        affected_files: list[AffectedFile],
+    ) -> CoverageSummary:
+        summary = CoverageSummary()
+        for af in affected_files:
+            reason = (af.reason or "").strip()
+            if reason.startswith("Reads changed field"):
+                summary.reads += 1
+            elif reason.startswith("Writes changed field"):
+                summary.writes += 1
+            elif reason.startswith("Schema alias match") or reason.startswith(
+                "Exposes schema field"
+            ) or reason.startswith("Exposed via schema field"):
+                summary.schema += 1
+            elif reason.startswith("String path reference"):
+                summary.path_matches += 1
+            elif reason.startswith("Calls changed symbol"):
+                summary.calls += 1
+            elif reason.startswith("Contains changed"):
+                summary.contains += 1
+        return summary
 
     def _resolve_symbol_id(self, input_data: ImpactInput) -> Optional[str]:
         if input_data.symbol_id:

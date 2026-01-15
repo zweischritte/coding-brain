@@ -4878,9 +4878,14 @@ Optional parameters:
 Returns:
 - affected_files[]: List of affected files with impact scores
 - required_files[]: Files that must be read before finalizing an answer (write or schema-alias matches)
+- coverage_summary: Counts by evidence type (reads/writes/schema/path/calls/contains)
+- coverage_low: True when no reads/writes/schema hits were found
+- action_required: Required follow-up action when coverage is shallow
+- action_message: Short imperative message for the required action
 - meta: Response metadata
 
 Note: Results are graph-derived candidates; read any file you cite to confirm behavior.
+If coverage_low is true or action_required is set, do not finalize. Find the internal field name (schema/state or mapping code) and rerun impact_analysis.
 
 Examples:
 - impact_analysis(repo_id="repo-123", changed_files=["src/utils.py"])

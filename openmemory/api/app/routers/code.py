@@ -508,6 +508,10 @@ async def impact_analysis(
         return ImpactAnalysisResponse(
             affected_files=result_dict.get("affected_files", []),
             required_files=result_dict.get("required_files", []),
+            coverage_summary=result_dict.get("coverage_summary", {}),
+            coverage_low=result_dict.get("coverage_low", False),
+            action_required=result_dict.get("action_required"),
+            action_message=result_dict.get("action_message"),
             meta=CodeResponseMeta(
                 request_id=result_dict.get("meta", {}).get("request_id", str(uuid.uuid4())),
                 degraded_mode=result_dict.get("meta", {}).get("degraded_mode", False),

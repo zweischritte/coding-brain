@@ -253,11 +253,28 @@ class AffectedFile(BaseModel):
     reason: str = ""
 
 
+class ImpactCoverageSummary(BaseModel):
+    """Coverage summary for impact analysis results."""
+
+    reads: int = 0
+    writes: int = 0
+    schema: int = 0
+    path_matches: int = 0
+    calls: int = 0
+    contains: int = 0
+
+
 class ImpactAnalysisResponse(BaseModel):
     """Response body for impact analysis endpoint."""
 
     affected_files: List[AffectedFile] = Field(default_factory=list)
     required_files: List[str] = Field(default_factory=list)
+    coverage_summary: ImpactCoverageSummary = Field(
+        default_factory=ImpactCoverageSummary
+    )
+    coverage_low: bool = False
+    action_required: Optional[str] = None
+    action_message: Optional[str] = None
     meta: CodeResponseMeta
 
 
