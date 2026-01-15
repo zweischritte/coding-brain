@@ -449,6 +449,107 @@ class TestSearchCodeHybridTool:
 
         assert result.results[0].symbol.symbol_name == "gen"
 
+    def test_search_dedupe_by_file_with_repo_id(self):
+        """Repo-scoped searches should dedupe hits by file."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        hit_one = MagicMock()
+        hit_one.id = "scip-js repo src/file#one."
+        hit_one.score = 0.9
+        hit_one.source = {
+            "symbol_name": "one",
+            "symbol_type": "function",
+            "file_path": "/repo/src/file.ts",
+            "repo_id": "myrepo",
+        }
+        hit_one.sources = {}
+
+        hit_two = MagicMock()
+        hit_two.id = "scip-js repo src/file#two."
+        hit_two.score = 0.8
+        hit_two.source = {
+            "symbol_name": "two",
+            "symbol_type": "function",
+            "file_path": "/repo/src/file.ts",
+            "repo_id": "myrepo",
+        }
+        hit_two.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [hit_one, hit_two]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        mock_retriever.retrieve.return_value = mock_result
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=None,
+        )
+
+        result = tool.search(
+            SearchCodeHybridInput(query="rename sender field", repo_id="myrepo")
+        )
+
+        assert len(result.results) == 1
+        assert result.results[0].symbol.file_path == "/repo/src/file.ts"
+
+    def test_search_field_bias_prefers_fields(self):
+        """Field-change queries should prefer field-like symbols."""
+        from openmemory.api.tools.search_code_hybrid import (
+            SearchCodeHybridTool,
+            SearchCodeHybridInput,
+        )
+
+        mock_retriever = MagicMock()
+        hit_field = MagicMock()
+        hit_field.id = "scip-js repo src/model#field."
+        hit_field.score = 0.6
+        hit_field.source = {
+            "symbol_name": "channelId",
+            "symbol_type": "field",
+            "file_path": "/repo/src/model.ts",
+            "repo_id": "myrepo",
+        }
+        hit_field.sources = {}
+
+        hit_func = MagicMock()
+        hit_func.id = "scip-js repo src/service#fn."
+        hit_func.score = 0.62
+        hit_func.source = {
+            "symbol_name": "getChannel",
+            "symbol_type": "function",
+            "file_path": "/repo/src/service.ts",
+            "repo_id": "myrepo",
+        }
+        hit_func.sources = {}
+
+        mock_result = MagicMock()
+        mock_result.hits = [hit_func, hit_field]
+        mock_result.graph_available = True
+        mock_result.graph_error = None
+        mock_result.lexical_error = None
+        mock_result.vector_error = None
+
+        mock_retriever.retrieve.return_value = mock_result
+
+        tool = SearchCodeHybridTool(
+            retriever=mock_retriever,
+            embedding_service=None,
+        )
+
+        result = tool.search(
+            SearchCodeHybridInput(query="rename nullable field", repo_id="myrepo")
+        )
+
+        assert result.results[0].symbol.symbol_name == "channelId"
+
     def test_search_with_pagination(self, mock_retriever, mock_embedding_service):
         """Test search with pagination."""
         from openmemory.api.tools.search_code_hybrid import (

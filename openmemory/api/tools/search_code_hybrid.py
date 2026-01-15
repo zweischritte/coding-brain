@@ -21,6 +21,29 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+FIELD_CHANGE_KEYWORDS = (
+    "field",
+    "property",
+    "nullable",
+    "nullability",
+    "rename",
+    "schema",
+    "graphql",
+    "zod",
+    "dto",
+    "entity",
+    "column",
+    "input",
+    "output",
+    "attribute",
+)
+FIELD_SYMBOL_TYPES = {
+    "field",
+    "property",
+    "schema_field",
+    "field_path",
+}
+
 
 # =============================================================================
 # Exceptions
@@ -218,6 +241,58 @@ class SearchCodeHybridTool:
         )
         return [hit for _, hit in indexed]
 
+    def _is_field_change_query(self, query_text: str) -> bool:
+        lowered = query_text.lower()
+        return any(keyword in lowered for keyword in FIELD_CHANGE_KEYWORDS)
+
+    def _is_generated_source(self, source_data: dict[str, Any]) -> bool:
+        if source_data.get("source_tier") == "generated":
+            return True
+        return source_data.get("is_generated") is True
+
+    def _symbol_type_rank(self, source_data: dict[str, Any]) -> int:
+        symbol_type = str(source_data.get("symbol_type") or "").lower()
+        return 0 if symbol_type in FIELD_SYMBOL_TYPES else 1
+
+    def _postprocess_hits(
+        self,
+        hits: list[Any],
+        repo_id: Optional[str],
+        query_text: str,
+        dedupe_by_file: bool,
+        include_generated: bool,
+    ) -> list[tuple[Any, dict[str, Any]]]:
+        seen_files: set[str] = set()
+        processed: list[tuple[int, Any, dict[str, Any]]] = []
+        apply_field_bias = self._is_field_change_query(query_text)
+
+        for index, hit in enumerate(hits):
+            source_data = self._hydrate_graph_source(hit)
+            hit_repo_id = source_data.get("repo_id")
+            if repo_id and hit_repo_id and hit_repo_id != repo_id:
+                continue
+
+            file_path = source_data.get("file_path")
+            if dedupe_by_file and file_path:
+                if file_path in seen_files:
+                    continue
+                seen_files.add(file_path)
+
+            processed.append((index, hit, source_data))
+
+        def sort_key(item: tuple[int, Any, dict[str, Any]]) -> tuple:
+            index, hit, source_data = item
+            score = getattr(hit, "score", 0.0) or 0.0
+            adjusted = score
+            if not include_generated and self._is_generated_source(source_data):
+                adjusted -= 0.15
+            if apply_field_bias and self._symbol_type_rank(source_data) == 0:
+                adjusted += 0.05
+            return (-adjusted, index)
+
+        processed.sort(key=sort_key)
+        return [(hit, source_data) for _, hit, source_data in processed]
+
     def _hydrate_graph_source(self, hit: Any) -> dict[str, Any]:
         source_data = hit.source or {}
         if source_data.get("symbol_name") or source_data.get("file_path"):
@@ -365,10 +440,30 @@ class SearchCodeHybridTool:
             include_generated=include_generated,
         )
 
+        apply_noise_reduction = bool(input_data.repo_id) and not include_generated
+        hits_with_data: list[tuple[Any, dict[str, Any]]]
+        if apply_noise_reduction:
+            hits_with_data = self._postprocess_hits(
+                hits_for_output,
+                repo_id=input_data.repo_id,
+                query_text=input_data.query,
+                dedupe_by_file=True,
+                include_generated=include_generated,
+            )
+            if not hits_with_data:
+                hits_with_data = self._postprocess_hits(
+                    hits_for_output,
+                    repo_id=input_data.repo_id,
+                    query_text=input_data.query,
+                    dedupe_by_file=False,
+                    include_generated=include_generated,
+                )
+        else:
+            hits_with_data = [(hit, self._hydrate_graph_source(hit)) for hit in hits_for_output]
+
         # Convert to MCP schema format
         hits = []
-        for hit in hits_for_output:
-            source_data = self._hydrate_graph_source(hit)
+        for hit, source_data in hits_with_data:
 
             if not source_data.get("symbol_name") and not source_data.get("file_path"):
                 continue
