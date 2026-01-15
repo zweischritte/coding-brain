@@ -302,18 +302,35 @@ class ImpactAnalysisTool:
         if traversal_state["used_inferred_edges"]:
             meta.degraded_mode = True
             meta.missing_sources.append("inferred_call_edges")
-        if any(
-            (
-                af.reason
-                and (
-                    "Writes changed field" in af.reason
-                    or "Schema alias match" in af.reason
-                )
-            )
-            for af in affected_files
-        ):
+        required_files: list[str] = []
+        seen_files: set[str] = set()
+        for af in affected_files:
+            if not af.reason:
+                continue
+            if (
+                "Writes changed field" not in af.reason
+                and "Schema alias match" not in af.reason
+            ):
+                continue
+            if not af.file_path or af.file_path in seen_files:
+                continue
+            seen_files.add(af.file_path)
+            required_files.append(af.file_path)
+
+        if required_files:
+            max_listed = 20
+            listed = required_files[:max_listed]
+            remaining = len(required_files) - len(listed)
+            suffix = f"\n(+{remaining} more)" if remaining > 0 else ""
+            required_block = "\n".join(f"- {path}" for path in listed)
             meta.warnings.append(
-                "Mandatory: Read all affected files with reason \"Writes changed field\" or \"Schema alias match\"; if you do not read them, explicitly mark them as unverified. Only implement code changes if you were asked to explicitly."
+                "STOP: Do not finalize the answer until you have read all required files.\n"
+                "Required files:\n"
+                f"{required_block}{suffix}\n"
+                "If any required file is not read, explicitly mark it UNVERIFIED in the answer."
+            )
+            meta.warnings.append(
+                "Only implement code changes if you were asked to explicitly."
             )
 
         return ImpactOutput(affected_files=affected_files, meta=meta)
