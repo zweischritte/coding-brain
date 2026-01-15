@@ -4890,7 +4890,8 @@ Returns:
 - meta: Response metadata
 
 Note: Results are graph-derived candidates; read any file you cite to confirm behavior.
-If status is "blocked" or do_not_finalize is true, do not finalize. Follow required_action first.
+Hardblock: DISAMBIGUATE_SYMBOL and RESOLUTION_MISMATCH raise a tool error instead of returning results.
+If status is "blocked" or do_not_finalize is true, any answer is invalid until required_action is completed.
 If coverage_low is true or action_required is set, find the internal field name (schema/state or mapping code) and rerun impact_analysis.
 If you pass file_path and the resolved_symbol_file_path does not match, do not use the results; rerun with the correct file_path or parent_name.
 
@@ -4945,7 +4946,7 @@ async def impact_analysis(
         })
 
     try:
-        from tools.impact_analysis import ImpactInput
+        from tools.impact_analysis import HardBlockError, ImpactInput
         import dataclasses
 
         input_data = ImpactInput(
@@ -4967,6 +4968,8 @@ async def impact_analysis(
         result = toolkit.impact_tool.analyze(input_data)
         return json.dumps(dataclasses.asdict(result), default=str)
 
+    except HardBlockError as e:
+        raise e
     except Exception as e:
         logging.exception(f"Error in impact_analysis: {e}")
         return json.dumps({

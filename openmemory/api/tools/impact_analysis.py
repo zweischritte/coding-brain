@@ -42,6 +42,23 @@ class InvalidInputError(ImpactAnalysisError):
     pass
 
 
+class HardBlockError(ImpactAnalysisError):
+    """Raised when impact analysis results must hard-block the caller."""
+
+    def __init__(
+        self,
+        action_required: str,
+        message: str,
+        symbol_candidates: Optional[list["ResolvedSymbolCandidate"]] = None,
+        resolved_symbol_info: Optional[dict[str, Optional[str]]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.action_required = action_required
+        self.message = message
+        self.symbol_candidates = symbol_candidates or []
+        self.resolved_symbol_info = resolved_symbol_info or {}
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -61,6 +78,9 @@ PATH_CONFIDENCE_SCORES = {
 }
 PATH_MATCH_LIMIT = 50
 PARENT_HINT_BOOST = 0.05
+HARD_BLOCK_ACTIONS = {"DISAMBIGUATE_SYMBOL", "RESOLUTION_MISMATCH"}
+MINIMAL_BLOCK_ACTIONS = {"READ_REQUIRED_FILES", "RERUN_ON_INTERNAL_FIELD"}
+RERUN_ACTIONS = HARD_BLOCK_ACTIONS | {"RERUN_ON_INTERNAL_FIELD"}
 
 
 @dataclass
@@ -307,28 +327,14 @@ class ImpactAnalysisTool:
             and not input_data.parent_name
             and not input_data.file_path
         ):
-            meta = ResponseMeta(request_id=request_id)
             action_required = "DISAMBIGUATE_SYMBOL"
             action_message = self._format_symbol_candidates(
                 input_data.symbol_name,
                 symbol_candidates,
             )
-            meta.warnings.append(action_message)
-            return ImpactOutput(
-                affected_files=[],
-                meta=meta,
-                required_files=[],
-                coverage_summary=CoverageSummary(),
-                coverage_low=True,
+            raise HardBlockError(
                 action_required=action_required,
-                action_message=action_message,
-                status="blocked",
-                do_not_finalize=True,
-                required_action=RequiredAction(
-                    kind=action_required,
-                    message=action_message,
-                    next_tool="impact_analysis",
-                ),
+                message=action_message,
                 symbol_candidates=symbol_candidates,
             )
 
@@ -348,37 +354,16 @@ class ImpactAnalysisTool:
                         "STOP. Resolved symbol does not match the requested file_path. "
                         "Rerun impact_analysis with the correct file_path or parent_name."
                     )
-                    meta = ResponseMeta(request_id=request_id)
-                    meta.warnings.append(
+                    hard_message = (
                         f"{action_message}\n"
                         f"Requested: {input_data.file_path}\n"
                         f"Resolved: {resolved_symbol_info.get('resolved_symbol_file_path')}"
                     )
-                    return ImpactOutput(
-                        affected_files=[],
-                        required_files=[],
-                        meta=meta,
-                        coverage_summary=CoverageSummary(),
-                        coverage_low=True,
+                    raise HardBlockError(
                         action_required=action_required,
-                        action_message=action_message,
-                        status="blocked",
-                        do_not_finalize=True,
-                        required_action=RequiredAction(
-                            kind=action_required,
-                            message=action_message,
-                            next_tool="impact_analysis",
-                        ),
-                        resolved_symbol_id=resolved_symbol_info.get("resolved_symbol_id"),
-                        resolved_symbol_name=resolved_symbol_info.get("resolved_symbol_name"),
-                        resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),
-                        resolved_symbol_file_path=resolved_symbol_info.get(
-                            "resolved_symbol_file_path"
-                        ),
-                        resolved_symbol_parent_name=resolved_symbol_info.get(
-                            "resolved_symbol_parent_name"
-                        ),
+                        message=hard_message,
                         symbol_candidates=symbol_candidates,
+                        resolved_symbol_info=resolved_symbol_info,
                     )
                 # Analyze single symbol impact
                 self._analyze_symbol_impact(
@@ -407,6 +392,8 @@ class ImpactAnalysisTool:
                     include_path_edges=include_path_edges,
                     traversal_state=traversal_state,
                 )
+        except HardBlockError:
+            raise
         except Exception as e:
             logger.error(f"Impact analysis failed: {e}")
             raise ImpactAnalysisError(f"Analysis failed: {e}") from e
@@ -486,8 +473,7 @@ class ImpactAnalysisTool:
             if action_required and action_message:
                 next_tool = (
                     "impact_analysis"
-                    if action_required
-                    in ("DISAMBIGUATE_SYMBOL", "RESOLUTION_MISMATCH", "RERUN_ON_INTERNAL_FIELD")
+                    if action_required in RERUN_ACTIONS
                     else None
                 )
                 required_action = RequiredAction(
@@ -495,6 +481,26 @@ class ImpactAnalysisTool:
                     message=action_message,
                     next_tool=next_tool,
                 )
+
+        if action_required in MINIMAL_BLOCK_ACTIONS:
+            return ImpactOutput(
+                affected_files=[],
+                required_files=required_files,
+                meta=meta,
+                coverage_summary=coverage_summary,
+                coverage_low=coverage_low,
+                action_required=action_required,
+                action_message=action_message,
+                status=status,
+                do_not_finalize=do_not_finalize,
+                required_action=required_action,
+                resolved_symbol_id=resolved_symbol_info.get("resolved_symbol_id"),
+                resolved_symbol_name=resolved_symbol_info.get("resolved_symbol_name"),
+                resolved_symbol_kind=resolved_symbol_info.get("resolved_symbol_kind"),
+                resolved_symbol_file_path=resolved_symbol_info.get("resolved_symbol_file_path"),
+                resolved_symbol_parent_name=resolved_symbol_info.get("resolved_symbol_parent_name"),
+                symbol_candidates=symbol_candidates,
+            )
 
         return ImpactOutput(
             affected_files=affected_files,

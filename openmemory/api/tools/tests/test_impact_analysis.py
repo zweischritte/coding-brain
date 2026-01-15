@@ -428,8 +428,9 @@ class TestImpactAnalysisTool:
         )
 
     def test_resolution_mismatch_requires_rerun(self):
-        """Return action_required when resolved symbol does not match file_path."""
+        """Hardblock when resolved symbol does not match file_path."""
         from openmemory.api.tools.impact_analysis import (
+            HardBlockError,
             ImpactAnalysisTool,
             ImpactInput,
         )
@@ -455,23 +456,18 @@ class TestImpactAnalysisTool:
         graph_driver.get_node.side_effect = get_node_side_effect
 
         tool = ImpactAnalysisTool(graph_driver=graph_driver)
-        result = tool.analyze(
-            ImpactInput(
-                repo_id="myrepo",
-                symbol_name="channelId",
-                file_path="/path/to/expected.ts",
+        with pytest.raises(HardBlockError) as exc_info:
+            tool.analyze(
+                ImpactInput(
+                    repo_id="myrepo",
+                    symbol_name="channelId",
+                    file_path="/path/to/expected.ts",
+                )
             )
-        )
 
-        assert result.action_required == "RESOLUTION_MISMATCH"
-        assert result.coverage_low is True
-        assert result.affected_files == []
-        assert result.status == "blocked"
-        assert result.do_not_finalize is True
-        assert result.required_action is not None
-        assert result.required_action.kind == "RESOLUTION_MISMATCH"
-
-        assert result is not None
+        error = exc_info.value
+        assert error.action_required == "RESOLUTION_MISMATCH"
+        assert "Resolved symbol does not match" in str(error)
 
     def test_required_files_block_finalize(self):
         """Block finalize when required_files are present."""
@@ -527,6 +523,43 @@ class TestImpactAnalysisTool:
         assert result.do_not_finalize is True
         assert result.required_action is not None
         assert result.required_action.kind == "READ_REQUIRED_FILES"
+
+    def test_disambiguate_symbol_hardblock(self):
+        """Hardblock when multiple symbols match without disambiguation."""
+        from openmemory.api.tools.impact_analysis import (
+            HardBlockError,
+            ImpactAnalysisTool,
+            ImpactInput,
+        )
+
+        graph_driver = MagicMock()
+        graph_driver.find_symbol_candidates_by_name.return_value = [
+            {
+                "symbol_id": "scip-typescript myapp module/A#field:channelId.",
+                "name": "channelId",
+                "kind": "field",
+                "parent_name": "A",
+                "file_path": "/path/to/a.ts",
+            },
+            {
+                "symbol_id": "scip-typescript myapp module/B#field:channelId.",
+                "name": "channelId",
+                "kind": "field",
+                "parent_name": "B",
+                "file_path": "/path/to/b.ts",
+            },
+        ]
+
+        tool = ImpactAnalysisTool(graph_driver=graph_driver)
+
+        with pytest.raises(HardBlockError) as exc_info:
+            tool.analyze(
+                ImpactInput(repo_id="myrepo", symbol_name="channelId")
+            )
+
+        error = exc_info.value
+        assert error.action_required == "DISAMBIGUATE_SYMBOL"
+        assert "Candidates:" in str(error)
 
     def test_analyze_file_changes_uses_resolved_file_id(self):
         """Use resolved file id for CONTAINS lookup when file path is relative."""

@@ -483,7 +483,7 @@ async def impact_analysis(
         )
 
     try:
-        from tools.impact_analysis import ImpactInput
+        from tools.impact_analysis import HardBlockError, ImpactInput
 
         input_data = ImpactInput(
             repo_id=request.repo_id,
@@ -529,6 +529,49 @@ async def impact_analysis(
             ),
         )
 
+    except HardBlockError as e:
+        action_required = e.action_required
+        action_message = str(e)
+        return ImpactAnalysisResponse(
+            affected_files=[],
+            required_files=[],
+            coverage_low=True,
+            action_required=action_required,
+            action_message=action_message,
+            status="blocked",
+            do_not_finalize=True,
+            required_action={
+                "kind": action_required,
+                "message": action_message,
+                "next_tool": "impact_analysis",
+            },
+            resolved_symbol_id=e.resolved_symbol_info.get("resolved_symbol_id"),
+            resolved_symbol_name=e.resolved_symbol_info.get("resolved_symbol_name"),
+            resolved_symbol_kind=e.resolved_symbol_info.get("resolved_symbol_kind"),
+            resolved_symbol_file_path=e.resolved_symbol_info.get(
+                "resolved_symbol_file_path"
+            ),
+            resolved_symbol_parent_name=e.resolved_symbol_info.get(
+                "resolved_symbol_parent_name"
+            ),
+            symbol_candidates=[
+                {
+                    "symbol_id": candidate.symbol_id,
+                    "name": candidate.name,
+                    "kind": candidate.kind,
+                    "parent_name": candidate.parent_name,
+                    "file_path": candidate.file_path,
+                }
+                for candidate in e.symbol_candidates
+            ],
+            meta=CodeResponseMeta(
+                request_id=str(uuid.uuid4()),
+                degraded_mode=False,
+                missing_sources=[],
+                warnings=[action_message],
+                error=action_message,
+            ),
+        )
     except Exception as e:
         logger.error(f"Impact analysis failed: {e}")
         return ImpactAnalysisResponse(
